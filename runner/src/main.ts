@@ -29,7 +29,7 @@ import { SwiftChanges } from './swift-changes.ts';
 import { commitBefore, commitOnMain, RemoteUpdateFixer, reportedOnDisk, UpdateFixer, type UpdateFailure } from './fix-update.ts';
 import { followOriginOn } from './follow-origin.ts';
 import { bringInSetting, spareWeekOn } from './settings.ts';
-import { SpareWeek, looksByItself } from './spare-week.ts';
+import { SpareWeek, looksByItself, spareWeekBinding } from './spare-week.ts';
 import { MAIL_WATCH, MailWatch } from './mail-watch.ts';
 import { Restarter, restartMethods } from './restart.ts';
 import { AppRestarts } from './app-restarts.ts';
@@ -1145,9 +1145,8 @@ async function main(): Promise<void> {
     accounts: () => runner.safeAccounts(),
     pools: () => runner.pools(),
     history: (since) => usageHistory.rows(since),
-    start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, accountId: r.accountId, startedBy: { kind: 'runner', label: 'Threadbear', why: r.why } }).thread.id,
     open: openThread,
-    send: (threadId, text) => void runner.send(threadId, text, [], { queue: true }),
+    ...spareWeekBinding(runner),
   });
   runner.spareWeek = spareWeek;
   if (!box) spareWeek.start();

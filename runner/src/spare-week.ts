@@ -30,6 +30,7 @@ import type { Clock, TimerHandle } from './clock.ts';
 import type { Logger } from './log.ts';
 import type { Account, Pool, UsageWindow } from './protocol.ts';
 import type { HistoryRow, Sample } from './usage-history.ts';
+import type { Runner } from './runner.ts';
 
 export const LOOKAHEAD_H = 24; // starts saying so this long before a reset
 export const LAST_CALL_H = 8; // a second nudge this close to it
@@ -233,10 +234,17 @@ export type SpareWeekDeps = {
   accounts: () => Account[];
   pools: () => Pool[];
   history: (since: number) => HistoryRow[];
-  start: (r: { text: string; title: string; accountId: string; cwd?: string; why: string }) => string;
+  start: (r: { text: string; title: string; accountId: string; cwd?: string; why: string; origin?: 'runner' }) => string;
   open: (threadId: string) => boolean;
   send: (threadId: string, text: string) => void;
 };
+
+export function spareWeekBinding(runner: Pick<Runner, 'create' | 'send'>): Pick<SpareWeekDeps, 'start' | 'send'> {
+  return {
+    start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, accountId: r.accountId, origin: r.origin, startedBy: { kind: 'runner', label: 'Threadbear', why: r.why } }).thread.id,
+    send: (threadId, text) => void runner.send(threadId, text, [], { queue: true, origin: 'runner' }),
+  };
+}
 
 export class SpareWeek {
   private readonly d: SpareWeekDeps;
@@ -319,7 +327,7 @@ export class SpareWeek {
         this.d.send(open, text);
         this.d.log.info('told the spare week thread again', { accountId, threadId: open, stage });
       } else {
-        s.threads[accountId] = this.d.start({ text, title: title(account), accountId, cwd: this.cwdFor(accountId), why: "a login's week going unused" });
+        s.threads[accountId] = this.d.start({ text, title: title(account), accountId, cwd: this.cwdFor(accountId), why: "a login's week going unused", origin: 'runner' });
         this.d.log.info('started a spare week thread', { accountId, threadId: s.threads[accountId], stage });
       }
       for (const w of windows) {

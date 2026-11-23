@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tmpDir } from '../helpers/fakes.ts';
+import { makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import { FakeClock } from '../../src/clock.ts';
 import { nullLogger } from '../../src/log.ts';
-import { SpareWeek, brief, burnRate, dueWindows, looksByItself, projections, samplesFrom } from '../../src/spare-week.ts';
+import { SpareWeek, brief, burnRate, dueWindows, looksByItself, projections, samplesFrom, spareWeekBinding } from '../../src/spare-week.ts';
 import type { Account, Pool, UsageWindow } from '../../src/protocol.ts';
 import type { HistoryRow } from '../../src/usage-history.ts';
 
@@ -219,6 +219,34 @@ test('off, or on a second runner, the check starts nothing', () => {
   const second = rig([login('claude-1', [week(60, 20)])], { looks: false });
   second.sw.check();
   assert.equal(second.started.length, 0);
+});
+
+test('automatic nudges are runner messages in the event log, while Find work is a user action', async () => {
+  const h = makeHarness();
+  const clock = new FakeClock(NOW);
+  const a = login('claude-3', [week(60, 20)]);
+  const archived = new Set<string>();
+  const sw = new SpareWeek({
+    home: h.home, clock, log: nullLogger,
+    on: () => true, looks: () => true,
+    accounts: () => [a], pools: () => [], history: () => [],
+    open: (id) => !archived.has(id),
+    ...spareWeekBinding(h.runner),
+  });
+  sw.check();
+  const id = h.runner.list()[0]!.id;
+  assert.equal(h.events(id).find((e) => e.type === 'user.message')?.origin, 'runner');
+  h.adapter.last.init();
+  h.adapter.last.result();
+  await tick();
+  clock.advance(14 * H);
+  assert.equal(sw.check()[0]?.stage, 'last-call');
+  await tick();
+  assert.deepEqual(h.events(id).filter((e) => e.type === 'user.message').map((e) => e.origin), ['runner', 'runner']);
+  archived.add(id);
+  const manual = sw.findWork('claude-3');
+  assert.equal(manual.started, true);
+  assert.equal(h.events(manual.threadId).find((e) => e.type === 'user.message')?.origin, undefined);
 });
 
 // THREADBEAR-2H: a runner handing over to a new release kept its half-hourly
