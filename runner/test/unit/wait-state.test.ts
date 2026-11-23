@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import type { Schedule } from '../../src/protocol.ts';
-import { WAIT_MOVES, WAIT_STATES, allowed, autoArchive, countsForMike, sectionOf, urgencyOf, waitStateOf, type WaitInputs, type WaitState } from '../../src/wait-state.ts';
+import { WAIT_MOVES, WAIT_STATES, allowed, countsForMike, sectionOf, urgencyOf, waitStateOf, type WaitInputs, type WaitState } from '../../src/wait-state.ts';
 
 type Case = { name: string; thread: Partial<WaitInputs> & { starredAt?: string }; scheduled?: boolean; state: WaitState; section: string; urgency: number; counted: boolean };
 const file = JSON.parse(fs.readFileSync(new URL('../../../shared/cases/wait-states.json', import.meta.url), 'utf8')) as { now: string; cases: Case[] };
@@ -40,9 +40,8 @@ test('every state can be reached and left', () => {
   }
 });
 
-test('archiving is allowed from anywhere, and the inbox guess archives nothing yet', () => {
+test('archiving is allowed from anywhere', () => {
   for (const s of Object.keys(WAIT_STATES) as WaitState[]) assert.ok(allowed(s, 'archived'));
-  assert.equal(autoArchive('done', { verdict: 'skip' }, false), false);
 });
 
 test('a few moves the table refuses', () => {

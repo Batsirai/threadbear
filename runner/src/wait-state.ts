@@ -42,10 +42,10 @@ export const WAIT_STATES: Record<WaitState, StateInfo> = {
   review: { section: 'inbox', description: 'The turn is over and a design review (show_options) waits on his pick.' },
   needsYou: { section: 'inbox', description: "The last turn asked Mike for something he hasn't done yet, or ended without saying and he hasn't read it, or it's marked unread." },
   limit: { section: 'inbox', description: "Its login ran out of usage; it carries on by itself when the limit resets." },
-  done: { section: 'inbox', description: 'Finished with nothing for Mike (said nothing, or read). Follow-ups and open loose ends keep it here; the inbox guess may one day send it straight to Archived.' },
+  done: { section: 'inbox', description: 'Finished with nothing for Mike (said nothing, or read). Follow-ups and open loose ends keep it here.' },
   scheduled: { section: 'hibernating', description: 'Idle with nothing for Mike, and a schedule will message it.' },
   hibernating: { section: 'hibernating', description: 'Put away until a time, the runner restarting, a release, or something in words, by Mike or by its agent, and not waiting on its own work.' },
-  archived: { section: 'archived', description: 'Archived, by Mike (or one day the inbox guess). Any message brings it back.' },
+  archived: { section: 'archived', description: 'Archived, by Mike or the quiet inbox. Any message brings it back.' },
 };
 
 // Where each move comes from, as the runner or an app sees it happen.
@@ -80,11 +80,10 @@ export const WAIT_MOVES: Move[] = [
   { from: PUT_AWAY, to: 'needsYou', on: 'it wakes by itself (marked unread) or the snooze ends' },
   { from: PUT_AWAY, to: 'done', on: 'Mike wakes it and it has nothing for him' },
   { from: ['onThreads', 'appRestart', 'hibernating'], to: 'card', on: 'a card stays open while it hibernates and then wakes' },
-  // The inbox guess (runner/src/experiments/inboxGuess.md): if Mike lets its
-  // "didn't need to see this" verdict act, a done thread with no follow-ups
-  // and no open loose ends goes straight here. `autoArchive` below is the one
-  // place to change.
-  { from: '*', to: 'archived', on: 'Mike archives it, or the inbox guess does (not yet)' },
+  // The quiet inbox archives too (runner/src/runner/quiet-inbox.ts): a
+  // helper's finished thread, and with quietInboxMine one of Mike's a model
+  // guessed he didn't need to see.
+  { from: '*', to: 'archived', on: 'Mike archives it, or the quiet inbox does' },
   { from: ['archived'], to: 'needsYou', on: 'Mike unarchives it' },
   { from: ['archived'], to: 'done', on: 'Mike unarchives it' },
   { from: ['archived'], to: 'working', on: 'a message unarchives it' },
@@ -153,14 +152,6 @@ function waitingOnMike(t: WaitInputs, busy: boolean): boolean {
 // aren't on main yet. One Mike hibernated himself isn't.
 function waitingToLand(t: WaitInputs): boolean {
   return Boolean(t.wakeWhen?.agent && t.wakeWhen.topic && t.looseEnds?.ends.some((e) => e.kind === 'unlanded'));
-}
-
-// Where the guess's verdict would take a done thread straight to Archived
-// (runner/src/experiments/inboxGuess.md). Today it never does: the 29 Nov
-// check-in decides whether it should, and this is the one line to change.
-// Follow-ups or open loose ends always keep a thread in view (Mike, 18 Nov).
-export function autoArchive(_state: WaitState, _guess: { verdict?: 'skip' | 'see' }, _keepsInView: boolean): boolean {
-  return false;
 }
 
 // The section a thread is drawn under: Starred above the rest for a starred
