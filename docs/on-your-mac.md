@@ -686,7 +686,13 @@ File references are where to look.
   `install-runtime`, which replaces its runtime and restarts its service;
   then copies the build to the machines in `archive.pushTo` over ssh and
   installs it there. It remembers the last build in
-  `agent-archive-update.json`. It never reads the archive's credentials.
+  `agent-archive-update.json`. When you search threads in the app, it
+  also runs the archive's own `search --json` (and `read --json` when you
+  open an archived session) with your words, which the archive's command
+  sends to the archive it was set up with, using its own read-only key.
+  Every Claude and Codex session it starts gets the archive's MCP server,
+  the archive's own command, as a tool server. It never reads the
+  archive's credentials.
 - **Recipes, if you turn them on** (`runner/src/recipes.ts`, the
   experiment recipes, off unless you turn it on): every 30 seconds the
   runner reads the recipes that come with Threadbear (`runner/src/recipes/`)
@@ -874,7 +880,7 @@ File references are where to look.
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A UnifiedPush server (ntfy.sh or whichever distributor the phone uses) | the distributor's | Only with the Android app's F-Droid build paired: each notification is posted from your Convex deployment, not the Mac, to the https address the phone's distributor gave it, encrypted so the server sees neither the text nor the thread (`convex/push.ts` `sendWebPush`, `docs/push-relay.md`, "UnifiedPush"). Private and local addresses are refused. |
 | A Connectors gateway | whoever runs it | Only if one is set in `runner.json` or `~/.claude.json`. Its `/health` every few minutes (and once more at the end of a turn where a call to one of its services failed, to see if it needs signing in), and for a project with a Notion page, a Notion read or two every 5 minutes for its task board (`runner/src/notion-tasks.ts`), signed with the header the `headersHelper` command in that `connectors` entry prints, which it runs for each read |
-| Agent Archive's repo, and the machines you list for it, over ssh | yours | Only with the archive experiment on and `archive.repo` set: `git ls-remote` and `git fetch` of that repo every ten minutes, `npm ci` from the npm registry when its main moves, and the built sync copied over ssh to each machine in `archive.pushTo`. The runner sends nothing to the archive itself: Agent Archive's own sync does, to the archive it was set up with. |
+| Agent Archive's repo, and the machines you list for it, over ssh | yours | Only with the archive experiment on and `archive.repo` set: `git ls-remote` and `git fetch` of that repo every ten minutes, `npm ci` from the npm registry when its main moves, and the built sync copied over ssh to each machine in `archive.pushTo`. The runner sends nothing to the archive itself: Agent Archive's own sync does, to the archive it was set up with, and the archive's own command sends your thread search's words when you search. |
 | Sentry | Mike's | Nothing from your copy. Only a copy whose `origin` is Mike's own repo reports errors or uploads the app's debug symbols (`runner/src/sentry.ts`, `app/Sources/Threadbear/CrashReporting.swift`, `app/build-app.sh`). The installed GPUI app of Mike's repo, on the real data folder, sends its panics, crashes and freezes of 15 seconds or more, each as one POST to Sentry's endpoint with the function names and nothing typed or opened (`desktop/core/src/crash_report.rs`, `desktop/gpui/src/crash_reporting.rs`); it uploads no symbols. The App Store iPhone app sends anonymous crash reports. |
 
 An HTML file opened in the side pane (a mockup or report an agent made,

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { AgentArchive, formatArchive, readSyncState, runtimeOf, sessionsFor, SESSIONS_FILE, STALE_MS, type SessionsFile } from '../../src/agent-archive.ts';
+import { AgentArchive, archiveMcpServer, archiveMethods, formatArchive, readSyncState, runtimeOf, sessionsFor, SESSIONS_FILE, STALE_MS, type SessionsFile } from '../../src/agent-archive.ts';
+import { mcpServerConfig } from '../../src/adapters/codex/adapter.ts';
 import type { ThreadRecord } from '../../src/store.ts';
 import { tmpDir } from '../helpers/fakes.ts';
 
@@ -78,7 +79,7 @@ test('tb status says when the sync has stopped, and not before', () => {
 
 type Call = { bin: string; args: string[] };
 
-function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boolean; pushTo?: { host: string; node: string }[] } = {}) {
+function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boolean; pushTo?: { host: string; node: string }[]; on?: () => boolean; answer?: (c: Call) => string | undefined } = {}) {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const dir = path.join(root, 'aa');
@@ -93,7 +94,7 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
   const a = new AgentArchive({
     home,
     log: noLog,
-    on: () => true,
+    on: opts.on ?? (() => true),
     records: () => [rec({})],
     projectTitles: () => new Map(),
     runnerName: () => 'M5',
@@ -107,12 +108,14 @@ function setup(opts: { server?: boolean; repo?: boolean; fail?: (c: Call) => boo
       const c = { bin, args };
       calls.push(c);
       if (opts.fail?.(c)) throw new Error('it broke');
+      const said = opts.answer?.(c);
+      if (said !== undefined) return said;
       if (bin === 'git' && args[0] === 'ls-remote') return `${sha}\trefs/heads/main\n`;
       if (args.includes('status')) return '{"service":"running"}';
       return '';
     },
   });
-  return { a, home, calls, setSha: (s: string) => (sha = s) };
+  return { a, home, dir, calls, setSha: (s: string) => (sha = s) };
 }
 
 const isInstall = (c: Call) => c.args.some((x) => x === 'install-runtime' || x.includes('install-runtime'));
@@ -152,4 +155,61 @@ test("a machine with the archive server leaves updates to its deployer, and no r
     await s.a.tick();
     assert.equal(s.calls.filter((c) => c.bin === 'git').length, 0);
   }
+});
+
+const AID = 'jx7dxftq67r8tcqe3rn7c4ehmh8gtjeb';
+const hit = { threadId: AID, title: 'Move Agent Archive to Bruce', agent: 'claude', updatedAt: 1, sequence: 243, snippet: 'search in LanceDB' };
+
+test("the sidebar's archive search runs the archive's own command, and passes its hits on", async () => {
+  const s = setup({ answer: (c) => (c.args.includes('search') ? JSON.stringify({ hits: [hit, { nope: 1 }], more: true }) : undefined) });
+  const m = archiveMethods(s.a);
+  assert.deepEqual(await m['archive.search']!({ query: '  --lancedb ', limit: 99 }), { hits: [hit], more: true });
+  const call = s.calls.find((c) => c.args.includes('search'))!;
+  assert.deepEqual(call.args.slice(1), ['search', '--json', '--limit', '50', 'lancedb'], 'no leading dash, the limit capped');
+  assert.deepEqual(await m['archive.search']!({ query: '   ' }), { hits: [], more: false });
+});
+
+test('with the experiment off or the archive not installed, the search says so and runs nothing', async () => {
+  const off = setup({ on: () => false });
+  assert.deepEqual(await off.a.search('x'), { hits: [], off: 'experiment' });
+  const gone = setup();
+  fs.rmSync(runtimeOf(gone.dir).cli);
+  assert.deepEqual(await gone.a.search('x'), { hits: [], off: 'not_installed' });
+  await assert.rejects(gone.a.read(AID), /isn't installed/);
+  assert.equal(off.calls.length + gone.calls.length, 0);
+});
+
+test("a failed search says why in the archive's own words", async () => {
+  const s = setup({ fail: (c) => c.args.includes('search') });
+  s.a['d'].run = async () => {
+    throw Object.assign(new Error('Command failed: node cli search'), { stderr: 'loading\nAgent Archive at https://bruce is unreachable (network)\n', code: 1 });
+  };
+  await assert.rejects(s.a.search('x'), /^Error: Agent Archive at https:\/\/bruce is unreachable \(network\)$/);
+  s.a['d'].run = async () => '<html>';
+  await assert.rejects(s.a.search('x'), /didn't answer in JSON/);
+});
+
+test('reading an archived session asks around the hit, and an unknown one is a bad request', async () => {
+  const page = { thread: { threadId: AID, title: 'Move', agent: 'claude', updatedAt: 1, messages: 2 }, items: [{ sequence: 243, role: 'assistant', text: 'hi' }] };
+  const s = setup({ answer: (c) => (c.args.includes('read') ? JSON.stringify(page) : undefined) });
+  assert.deepEqual(await archiveMethods(s.a)['archive.read']!({ threadId: AID, around: 243 }), page);
+  assert.deepEqual(s.calls.find((c) => c.args.includes('read'))!.args.slice(1), ['read', '--json', AID, '--around', '243']);
+  await assert.rejects(s.a.read('../etc'), /must be an Agent Archive thread id/);
+  s.a['d'].run = async () => {
+    throw Object.assign(new Error('x'), { stderr: 'not_found: no thread ' + AID, code: 2 });
+  };
+  await assert.rejects(s.a.read(AID), (e: Error & { code?: number }) => e.code === -32602 && /doesn't have that session/.test(e.message));
+});
+
+test("every thread gets the archive's MCP server once it's installed, Codex's as config overrides", () => {
+  const dir = path.join(tmpDir(), 'aa');
+  assert.equal(archiveMcpServer(dir), undefined);
+  const { node, cli } = runtimeOf(dir);
+  fs.mkdirSync(path.dirname(node), { recursive: true });
+  fs.writeFileSync(node, '');
+  fs.writeFileSync(cli, '');
+  const server = archiveMcpServer(dir)!;
+  assert.deepEqual(server, { command: node, args: [cli, 'mcp'] });
+  assert.deepEqual(mcpServerConfig({ 'agent-archive': server }), { 'mcp_servers.agent-archive.command': node, 'mcp_servers.agent-archive.args': [cli, 'mcp'] });
+  assert.deepEqual(mcpServerConfig(), {});
 });

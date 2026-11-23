@@ -85,6 +85,9 @@ export type CodexAdapterDeps = {
   log: Logger;
   // The threadbear tools for a thread, given to new threads as dynamic tools.
   toolsFor?: (threadId: string) => ToolDefinition[];
+  // MCP servers a thread gets besides config.toml's, read at each start or
+  // resume (Agent Archive's, with its experiment on).
+  mcpServers?: () => Record<string, { command: string; args: string[] }>;
   // Section B's CodexNormalizer unless a test passes its own.
   normalizer?: NormalizerFactory;
   // A runner.notice warning (configWarning: a broken config.toml).
@@ -354,6 +357,11 @@ export function threadConfig(threadId: string, key?: string): Record<string, unk
   };
 }
 
+// Servers as config overrides, beside config.toml's own [mcp_servers].
+export function mcpServerConfig(servers: Record<string, { command: string; args: string[] }> = {}): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(servers).flatMap(([name, s]) => [[`mcp_servers.${name}.command`, s.command], [`mcp_servers.${name}.args`, s.args]]));
+}
+
 function enabledSkills(r: SkillsListResponse | undefined) {
   return (r?.data ?? []).flatMap((e) => e.skills ?? []).filter((s) => s.enabled !== false && typeof s.name === 'string' && s.name && typeof s.path === 'string');
 }
@@ -567,7 +575,7 @@ export class CodexSession implements AgentSession {
       ...threadPolicy(this.mode),
       // The thread's projects, as developer instructions: config.toml's
       // own key, set per thread like the rest of threadConfig.
-      config: { ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
+      config: { ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...mcpServerConfig(this.deps.mcpServers?.()), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
     };
     let res: ThreadStartResponse;
     if (opts.resume) {

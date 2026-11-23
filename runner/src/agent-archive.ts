@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { inBackground } from './background.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import type { Logger } from './log.ts';
+import { ErrorCode, RpcError } from './protocol.ts';
 import type { ThreadRecord } from './store.ts';
 
 // Agent Archive through Threadbear (docs/agent-archive-plan.md), behind the
@@ -24,6 +25,10 @@ import type { ThreadRecord } from './store.ts';
 //      server has a deployer that already does this for Bruce's sync, so a
 //      machine with the server leaves it to that.
 //
+// With the experiment on it also answers the sidebar's search of the archive
+// (archive.search and archive.read, through the archive's own command and
+// key), and every thread gets the archive's MCP server (archiveMcpServer).
+//
 // The sync stays a LaunchAgent (systemd on Linux) rather than a child of the
 // runner: the runner moves to a new release several times an hour, and each
 // move would stop an upload half done (Mike, 20 Nov, in b2612e00).
@@ -36,6 +41,10 @@ const EVERY_MS = 10 * 60_000;
 // one up a while, so only past this is it said to have stopped.
 export const STALE_MS = 3 * 3_600_000;
 const STATUS_TIMEOUT_MS = 30_000;
+// The sidebar waits on a search, so it gets less than the sync's status.
+const QUERY_TIMEOUT_MS = 20_000;
+// The archive's own thread ids (its MCP refuses anything else).
+const ARCHIVE_THREAD_ID = /^[a-z0-9]{31,37}$/;
 
 // runner.json's `archive`. Everything here is Mike's own setup, so none of
 // it is in the code (docs/forking.md).
@@ -91,6 +100,23 @@ export type ArchiveUpdateState = {
   pushed?: Record<string, string>; // host: "ok" or what went wrong
 };
 
+// docs/protocol.md, "Searching Agent Archive". The archive's command makes
+// these; only what the app needs to find is checked, the rest passed on.
+export type ArchiveHit = {
+  threadId: string;
+  title: string;
+  agent: string;
+  folder?: string;
+  machine?: string;
+  updatedAt: number;
+  sequence: number;
+  snippet: string;
+  threadbear?: { threadId: string; title: string };
+};
+export type ArchiveOff = 'experiment' | 'not_installed';
+export type ArchiveSearch = { hits: ArchiveHit[]; more: boolean } | { hits: []; off: ArchiveOff };
+export type ArchiveRead = { thread: Record<string, unknown>; items: unknown[] };
+
 export type ArchiveStatus = {
   installed: boolean;
   sessions: number;
@@ -110,6 +136,16 @@ export function archiveDir(platform: NodeJS.Platform = process.platform, home = 
 export function runtimeOf(dir: string): { node: string; cli: string } {
   const current = path.join(dir, 'runtime', 'current');
   return { node: path.join(current, 'bin', 'node'), cli: path.join(current, 'agent-archive.js') };
+}
+
+// The archive's own MCP server, the command its installer puts in Mike's
+// Claude and Codex config. With the experiment on, every thread's session
+// gets it (main.ts), so a login whose config doesn't name it still has the
+// archive's tools: the cloud box's Threadbear login didn't (23 Nov).
+export const ARCHIVE_MCP_NAME = 'agent-archive';
+export function archiveMcpServer(dir = archiveDir()): { command: string; args: string[] } | undefined {
+  const { node, cli } = runtimeOf(dir);
+  return fs.existsSync(cli) && fs.existsSync(node) ? { command: node, args: [cli, 'mcp'] } : undefined;
 }
 
 // Bruce's archive server, whose deployer keeps Bruce's sync on main.
@@ -181,14 +217,31 @@ export function readSyncState(stdout: string): ArchiveSyncState | undefined {
 }
 
 type Run = (bin: string, args: string[], opts: { cwd?: string; timeoutMs: number }) => Promise<string>;
+// What a failed command rejects with: its own stderr and exit code as well,
+// for archive.search and archive.read to say why in the archive's words.
+type RunError = Error & { stderr?: string; code?: number | string; killed?: boolean };
 
 const run: Run = (bin, args, opts) =>
   new Promise((resolve, reject) => {
     execFile(bin, args, { cwd: opts.cwd, timeout: opts.timeoutMs, maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (err, stdout, stderr) => {
-      if (err) reject(new Error(lastLines(`${stderr}\n${err.message}`)));
+      if (err) reject(Object.assign(new Error(lastLines(`${stderr}\n${err.message}`)), { stderr, code: err.code ?? undefined, killed: err.killed }));
       else resolve(stdout);
     });
   });
+
+function parseObject(text: string): Record<string, unknown> | undefined {
+  try {
+    const v = JSON.parse(text) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isHit(h: unknown): h is ArchiveHit {
+  const x = h as Partial<ArchiveHit> | null;
+  return !!x && typeof x === 'object' && typeof x.threadId === 'string' && typeof x.title === 'string';
+}
 
 function lastLines(text: string): string {
   return text.trim().split('\n').filter(Boolean).slice(-3).join(' / ').slice(0, 400);
@@ -367,6 +420,59 @@ export class AgentArchive {
     await r('ssh', [p.host, `${q(p.node)} ${q(tmp + '/dist-daemon/cli.js')} install-runtime && rm -rf ${q(tmp)}`], { timeoutMs: 10 * 60_000 });
   }
 
+  private off(): ArchiveOff | undefined {
+    if (!this.d.on()) return 'experiment';
+    return this.installed() ? undefined : 'not_installed';
+  }
+
+  // The archive's command, answering for the app now: not at background
+  // priority, and failing with the archive's own last line on stderr.
+  private async ask(args: string[]): Promise<string> {
+    const { node, cli } = runtimeOf(this.d.dir);
+    try {
+      return await this.d.run(node, [cli, ...args], { timeoutMs: QUERY_TIMEOUT_MS });
+    } catch (e) {
+      const x = e as RunError;
+      if (x.killed) throw new Error(`Agent Archive didn't answer within ${QUERY_TIMEOUT_MS / 1000} seconds`);
+      const said = (x.stderr ?? '').trim().split('\n').filter(Boolean).at(-1);
+      throw Object.assign(new Error(said ?? errText(e)), { code: x.code });
+    }
+  }
+
+  // The sidebar's search of the archive (docs/protocol.md, "Searching Agent
+  // Archive"): one hit per archived session, best first.
+  async search(query: string, limit = 20): Promise<ArchiveSearch> {
+    const off = this.off();
+    if (off) return { hits: [], off };
+    // A leading dash would read as one of the command's options.
+    const words = query.trim().replace(/^-+/, '').trim().slice(0, 500);
+    if (!words) return { hits: [], more: false };
+    const n = Math.min(Math.max(1, Math.floor(limit)), 50);
+    const v = parseObject(await this.ask(['search', '--json', '--limit', String(n), words]));
+    if (!v || !Array.isArray(v.hits)) throw new Error("Agent Archive's search didn't answer in JSON");
+    return { hits: v.hits.filter(isHit), more: v.more === true };
+  }
+
+  // An archived session's messages around one of them, for the read-only view.
+  async read(threadId: string, around?: number, limit?: number): Promise<ArchiveRead> {
+    if (!ARCHIVE_THREAD_ID.test(threadId)) throw new RpcError(ErrorCode.badParams, 'threadId must be an Agent Archive thread id');
+    const off = this.off();
+    if (off) throw new RpcError(ErrorCode.invalidRequest, off === 'experiment' ? 'Agent Archive is off on this runner' : "Agent Archive isn't installed on this runner's machine");
+    const args = ['read', '--json', threadId];
+    if (around !== undefined) args.push('--around', String(around));
+    if (limit !== undefined) args.push('--limit', String(Math.min(Math.max(1, limit), 200)));
+    let out: string;
+    try {
+      out = await this.ask(args);
+    } catch (e) {
+      if ((e as RunError).code === 2 && /^not_found/.test(errText(e))) throw new RpcError(ErrorCode.badParams, "Agent Archive doesn't have that session");
+      throw e;
+    }
+    const v = parseObject(out);
+    if (!v || !v.thread || typeof v.thread !== 'object' || !Array.isArray(v.items)) throw new Error("Agent Archive's reader didn't answer in JSON");
+    return { thread: v.thread as Record<string, unknown>, items: v.items };
+  }
+
   status(): ArchiveStatus | undefined {
     if (!this.d.on()) return undefined;
     return {
@@ -378,6 +484,27 @@ export class AgentArchive {
       ...(this.updating ? { updating: true } : {}),
     };
   }
+}
+
+type Params = Record<string, unknown>;
+
+// archive.search and archive.read (docs/protocol.md, "Searching Agent Archive").
+export function archiveMethods(a: Pick<AgentArchive, 'search' | 'read'>): Record<string, (p: Params) => unknown> {
+  const str = (p: Params, k: string) => {
+    const v = p[k];
+    if (typeof v !== 'string') throw new RpcError(ErrorCode.badParams, `${k} must be a string`);
+    return v;
+  };
+  const int = (p: Params, k: string) => {
+    const v = p[k];
+    if (v === undefined) return undefined;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) throw new RpcError(ErrorCode.badParams, `${k} must be a whole number`);
+    return v;
+  };
+  return {
+    'archive.search': (p) => a.search(str(p, 'query'), int(p, 'limit') ?? 20),
+    'archive.read': (p) => a.read(str(p, 'threadId'), int(p, 'around'), int(p, 'limit')),
+  };
 }
 
 function npmBeside(nodePath: string): string {
