@@ -6,6 +6,9 @@
 # The installed app's own build (desktop/scripts/stage-update.sh) builds with
 # exactly this channel too, and switch-from-swift.sh installs it, so keep it
 # an exact version (1.x.y): a moving name like stable builds nothing there.
+# Moving it moves desktop/scripts/rust-toolchain.pins too, in the same
+# commit (that file says how): the app's build checks the toolchain's parts
+# against those hashes, and a test fails while the two disagree.
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]

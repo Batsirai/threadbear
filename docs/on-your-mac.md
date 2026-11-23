@@ -77,7 +77,9 @@ File references are where to look.
   with Homebrew's `rust`) it installs Rust first, with rustup's own
   installer, `rustup-init`, downloaded from `https://static.rust-lang.org`
   at the version `desktop/scripts/rustup-init.pins` names and run only if
-  its SHA-256 matches the one pinned there (the minimal profile, about 1 GB with the crates
+  its SHA-256 matches the one pinned there, and the build runs that Rust
+  only once its parts match the SHA-256s in `desktop/scripts/rust-toolchain.pins`
+  (the minimal profile, about 1 GB with the crates
   the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
   shell's startup files). The build runs at background priority, takes
   20 to 40 minutes the first time (31 on a test Mac with no Rust, 15 Nov

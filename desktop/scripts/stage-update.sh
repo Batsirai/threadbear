@@ -273,14 +273,37 @@ else
   # which this Mac already had: nothing is downloaded to build with.
   channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$SRC/rust-toolchain.toml" 2>/dev/null | head -1 || true)"
   [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Main's rust-toolchain.toml doesn't pin an exact Rust (channel = \"1.x.y\"; it says \"${channel:-nothing}\"), so nothing was built." >&2; exit 1; }
+  # And that toolchain's parts are checked against the SHA-256s main pins
+  # for them (desktop/scripts/rust-toolchain.pins) before any of it runs:
+  # rustup checked what it downloaded against the manifest it got and kept
+  # that manifest in the toolchain, so its hashes being the pinned ones
+  # means the compiler is the one main reviewed, not just one with its
+  # version number.
   cargo=(cargo)
   if command -v rustup >/dev/null; then
-    if rustup toolchain install "$channel" --profile minimal --no-self-update >/dev/null 2>&1 || rustup run "$channel" cargo --version >/dev/null 2>&1; then
-      cargo=(rustup run "$channel" cargo)
-    else
+    case "$(uname -m)" in
+      arm64 | aarch64) rust_host=aarch64-apple-darwin ;;
+      x86_64) rust_host=x86_64-apple-darwin ;;
+      *) rust_host="" ;;
+    esac
+    toolchain="${RUSTUP_HOME:-$HOME/.rustup}/toolchains/$channel-$rust_host"
+    rustup toolchain install "$channel" --profile minimal --no-self-update >/dev/null 2>&1 || true
+    if [[ -z "$rust_host" || ! -f "$toolchain/lib/rustlib/multirust-channel-manifest.toml" ]]; then
       echo "Couldn't get Rust $channel, the version rust-toolchain.toml pins (rustup toolchain install $channel), so nothing was built; the app tries again later." >&2
       exit 1
     fi
+    if ! /usr/bin/awk -v ch="$channel" -v host="$rust_host" '
+      FNR == NR { if ($0 !~ /^#/ && NF == 5 && $1 == ch && $2 == host) want[$3] = $4 " " $5; next }
+      /^\[/ { sec = $0; next }
+      { for (p in want) if (sec == "[pkg." p ".target." host "]") { v = $3; gsub(/"/, "", v); if ($1 == "hash") h[p] = v; if ($1 == "xz_hash") x[p] = v } }
+      END {
+        if (!("rustc" in want) || !("cargo" in want) || !("rust-std" in want)) exit 2
+        for (p in want) if (h[p] " " x[p] != want[p]) exit 1
+      }' "$SRC/desktop/scripts/rust-toolchain.pins" "$toolchain/lib/rustlib/multirust-channel-manifest.toml"; then
+      echo "Rust $channel in $toolchain isn't the one main pins (desktop/scripts/rust-toolchain.pins: its rustc, cargo and rust-std hashes for $rust_host), so nothing was built. If you installed it yourself from elsewhere, rustup toolchain uninstall $channel and the next update fetches it again." >&2
+      exit 1
+    fi
+    cargo=(rustup run "$channel" cargo)
   fi
   (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 "${cargo[@]}" build --release -p threadbear-gpui --features "$FEATURES") || {
     rc=$?

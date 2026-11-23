@@ -26,7 +26,18 @@ function write(file: string, text: string, mode = 0o644) {
 // rust: 'rustup' has a stand-in rustup beside cargo, whose `run stable`
 // runs that cargo; 'none' is a Mac with only a cargo (Homebrew's rust).
 // cargoFails: the build fails.
-function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'rustup' | 'none' | 'offline' = 'rustup', cargoFails = false, toolchain: string | null = '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n') {
+// A toolchain's parts as Rust's manifest lists them, and the pins main
+// keeps for them (desktop/scripts/rust-toolchain.pins); `tampered` changes
+// one hash in what rustup installed.
+const PARTS = ['rustc', 'cargo', 'rust-std'];
+const HOSTS = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const hashOf = (part: string, xz = false) => (xz ? 'e' : 'd').repeat(4) + Buffer.from(part).toString('hex').padEnd(60, '0');
+const PINS = `# version target part hash xz_hash\n${HOSTS.flatMap((h) => PARTS.map((p) => `1.99.1 ${h} ${p} ${hashOf(p)} ${hashOf(p, true)}`)).join('\n')}\n`;
+function manifest(host: string, tampered = false) {
+  return `manifest-version = "2"\n\n${PARTS.map((p) => `[pkg.${p}.target.${host}]\navailable = true\nhash = "${tampered && p === 'rustc' ? 'f'.repeat(64) : hashOf(p)}"\nxz_hash = "${hashOf(p, true)}"\n`).join('\n')}\n[pkg.rustc.target.other-target]\nhash = "${'0'.repeat(64)}"\n`;
+}
+
+function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'rustup' | 'none' | 'offline' | 'tampered' = 'rustup', cargoFails = false, toolchain: string | null = '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n', pins: string | null = PINS) {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const marks = path.join(root, 'marks');
@@ -48,7 +59,13 @@ echo BUILT_IN=/mock-target
   if (rust === 'rustup') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}[ "$1" = run ] || exit 0\nshift 2\nexec "$@"\n`, 0o755);
   // A rustup that can't reach Rust's servers and hasn't the pinned version.
   if (rust === 'offline') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}exit 1\n`, 0o755);
+  if (rust === 'tampered') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}[ "$1" = run ] || exit 0\nshift 2\nexec "$@"\n`, 0o755);
+  // What rustup installed: the toolchain with the manifest it checked its parts against.
+  if (rust === 'rustup' || rust === 'tampered') {
+    for (const host of HOSTS) write(path.join(home, '.rustup', 'toolchains', `1.99.1-${host}`, 'lib', 'rustlib', 'multirust-channel-manifest.toml'), manifest(host, rust === 'tampered'));
+  }
   if (toolchain !== null) write(path.join(checkout, 'rust-toolchain.toml'), toolchain);
+  if (pins !== null) write(path.join(checkout, 'desktop', 'scripts', 'rust-toolchain.pins'), pins);
   const git = (...args: string[]) => {
     const r = spawnSync('git', ['-C', checkout, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
     assert.equal(r.status, 0, r.stderr);
@@ -223,6 +240,36 @@ test("a rustup that can't get the pinned Rust builds nothing rather than with it
   assert.match(r.out, /Couldn't get Rust 1\.99\.1/);
   assert.equal(r.marked('cargo'), '');
   assert.equal(r.marked('bundle'), '');
+});
+
+test('a toolchain whose parts are not the ones main pins builds nothing, and none of it runs', () => {
+  const tampered = setup(null, undefined, 'tampered')();
+  assert.equal(tampered.status, 1, tampered.out);
+  assert.match(tampered.out, /isn't the one main pins/);
+  assert.equal(tampered.marked('cargo'), '', 'its cargo never ran');
+  assert.doesNotMatch(tampered.marked('rustup'), /^run /m, 'nothing run through rustup');
+  assert.equal(tampered.marked('bundle'), '');
+  // Pins that leave a part out, or name another version, pass nothing either.
+  for (const pins of [null, PINS.split('\n').filter((l) => !/ cargo /.test(l)).join('\n'), PINS.replaceAll('1.99.1', '1.98.0')]) {
+    const r = setup(null, undefined, 'rustup', false, undefined, pins)();
+    assert.equal(r.status, 1, `${pins}: ${r.out}`);
+    assert.equal(r.marked('cargo'), '');
+  }
+});
+
+test("the repo's toolchain pins are for rust-toolchain.toml's version, every part, both kinds of Mac", () => {
+  const root = path.join(import.meta.dirname, '..', '..', '..');
+  const channel = /^channel = "([^"]+)"$/m.exec(fs.readFileSync(path.join(root, 'rust-toolchain.toml'), 'utf8'))![1];
+  const lines = fs.readFileSync(path.join(root, 'desktop', 'scripts', 'rust-toolchain.pins'), 'utf8').split('\n').filter((l) => l && !l.startsWith('#'));
+  const seen = lines.map((l) => {
+    const [version, host, part, hash, xz, extra] = l.split(' ');
+    assert.equal(version, channel, 'move the pins with rust-toolchain.toml');
+    assert.match(hash!, /^[0-9a-f]{64}$/);
+    assert.match(xz!, /^[0-9a-f]{64}$/);
+    assert.equal(extra, undefined);
+    return `${host} ${part}`;
+  });
+  assert.deepEqual(seen.sort(), HOSTS.flatMap((h) => PARTS.map((p) => `${h} ${p}`)).sort());
 });
 
 test('no production build script asks rustup for a floating channel', () => {

@@ -1,0 +1,23 @@
+# The Rust that builds the installed app (desktop/scripts/stage-update.sh),
+# pinned by the SHA-256 of each part a minimal toolchain is made of, as
+# Rust's channel manifest for that version lists them (`hash` the .tar.gz,
+# `xz_hash` the .tar.xz rustup fetches). rustup checks each part it
+# downloads against the manifest it got, and keeps that manifest in the
+# toolchain (lib/rustlib/multirust-channel-manifest.toml); the build reads
+# the hashes there and builds nothing unless they're these, so a toolchain
+# served from a compromised Rust distribution never builds what this Mac
+# runs (Daybreak 173, 23 Nov 2026).
+#
+# The version must be rust-toolchain.toml's channel (a test checks). Moving
+# it on: download https://static.rust-lang.org/dist/channel-rust-<version>.toml,
+# check `shasum -a 256` of it matches the .sha256 beside it, and copy each
+# [pkg.<part>.target.<target>] section's hash and xz_hash here, in the same
+# commit as rust-toolchain.toml.
+#
+# version target part hash xz_hash
+1.99.1 aarch64-apple-darwin rustc cc998c1dc8df006106472357aa87838b2da3f7b25446b98a94cfd58796cb0610 23948a0a9c162fd2952defb3fb0462c44e8fcfd1a4ab8a274a1e1bdb2cf810a3
+1.99.1 aarch64-apple-darwin cargo b5cc7634f919949c3e5e131123f813416dc47f6b809a5371d12f1f593595ae13 685e563d94db1f003ffa5f5831439eec02569b9950b69867953c8213269c1eaf
+1.99.1 aarch64-apple-darwin rust-std c124006d63885ba1029aca49efd59e93be6b2b171c379318ff94a00ef5eba664 fe79d6ab5a0321de26463999d8c112b8ad3eafbcbcf822d66a2300b45dde1031
+1.99.1 x86_64-apple-darwin rustc dad7c1300549bc846e1f02652fa11d131b86cdbb8288d64da5f62b4504d62a8f 203feef2c2165d7dda1f30ccf75590f72a6abc52ce259ed1c418de84a6887698
+1.99.1 x86_64-apple-darwin cargo ed05dab7a703d1b4c6fa5cec8e99272cb1c3902a323986c80e0bc57915c85ddd 6636dabcec164909d1c6eb9e2c596148787c84f7d3a02ff68a141569077f80b5
+1.99.1 x86_64-apple-darwin rust-std 5cc4606fdd6c9226be51f59a333942cc8a203e74f7da38d47aaaf44b986bfe3c 484d5b88b424ddd29df196e1eb9420c8335bb5fac90a3c37140253345a8c65c4
