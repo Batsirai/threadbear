@@ -178,7 +178,12 @@ jobs:
 
   # `latest` moves to this commit's image only when it was built, passed the
   # smoke test and was pushed, and the runner's tests passed (a failed or
-  # skipped job before it skips this one).
+  # skipped job before it skips this one), and only forward: a re-run of an
+  # older main run (its github.sha is still the old commit) would otherwise
+  # put the older runner back (Codex's review, 23 Nov). The commit `latest`
+  # holds now (its revision label) must be this one or one before it on
+  # GitHub's compare; main's runs go one at a time (the concurrency above),
+  # so nothing moves it between the check and the push.
   latest:
     needs: [image, tests]
     if: needs.image.outputs.push == 'true' && github.ref == 'refs/heads/main'
@@ -194,7 +199,23 @@ jobs:
         env:
           IMAGE: ${{ needs.image.outputs.image }}
           SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if docker pull --platform linux/amd64 "$IMAGE:latest"; then
+            now=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:latest")
+          else
+            now=""
+            echo "No latest yet."
+          fi
+          if [ -n "$now" ] && [ "$now" != "$SHA" ]; then
+            # How this commit stands against latest's: "ahead" moves it on.
+            status=$(gh api "repos/$REPO/compare/$now...$SHA" --jq .status)
+            if [ "$status" != ahead ]; then
+              echo "::notice::latest is ${now:0:8}, and this commit is $status of it, so latest stays."
+              exit 0
+            fi
+          fi
           docker pull --platform linux/amd64 "$IMAGE:$SHA"
           docker tag "$IMAGE:$SHA" "$IMAGE:latest"
           docker push "$IMAGE:latest"

@@ -887,7 +887,7 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   `registry.fly.io/<FLY_APP>:<commit>`, then `:latest` once the runner's
   typecheck and unit tests pass on that commit (the workflow runs them
   beside the build; until 23 Nov a main failing them still became
-  `:latest`), and `setRunnerService` makes a virtual runner with `:latest`
+  `:latest`), and only forward, so a re-run of an older run leaves it, and `setRunnerService` makes a virtual runner with `:latest`
   when it names no image (`defaultBoxImage`). A new box is ten minutes or
   so behind main while the image builds and the tests run; the runner and backend stay compatible both ways,
   as for any runner. A release tag publishes `:release-<date>` too, for a
