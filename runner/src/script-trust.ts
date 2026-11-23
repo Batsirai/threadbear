@@ -242,6 +242,8 @@ export type FollowOptions = {
   scanJs: (src: string, file: string) => { specifiers: string[]; packages?: string[]; strings: string[]; launches?: string; problem?: string };
   resolveImport: (dir: string, spec: string) => string;
   namedPaths: (src: string) => string[];
+  // WRITES_READ_BUDGET, smaller in tests.
+  writesBudget?: number;
   // Shared with the caller's hash, so it hashes the bytes followed here.
   reads?: Reads;
   // For a Claude Code hook, which runs by itself (claude-trust.ts): what
@@ -278,6 +280,13 @@ const MSYS_SET = ARITH_SET('MSYS2?_(?:ARG_CONV_EXCL|NO_PATHCONV|ENV_CONV_EXCL)')
 export const MAX_SCRIPT_FILES = 300;
 const MAX_DEPTH = 12;
 const MAX_VISITS = 600;
+// How much script text the writes-only reads past a problem may read
+// (Reach.writeReads), each read (a script or a `sh -c`) counted as at least
+// WRITES_READ_MIN_COST: at most 16,384 reads. Big enough for a repo's
+// helpers read again from every script a problem unwinds through (12 levels
+// of 50 helpers of 32 KB is 20 MB: Codex's review), small enough to end.
+const WRITES_READ_BUDGET = 64 * 1024 * 1024;
+const WRITES_READ_MIN_COST = 4096;
 
 const SHELL_EXT = ['.sh', '.bash', '.zsh', '.ksh', '.command'];
 const JS_EXT = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs', '.tsx', '.jsx'];
@@ -927,6 +936,25 @@ class Reach {
   // Functions any script followed defines, for what they're handed.
   private definedFns = new Set<string>();
   private writesDepth = 0;
+  // Each script read for its writes alone (writesOnly), by where it runs, as
+  // `visits` is for the follow: read again the same way it adds nothing, as
+  // what it's handed goes into `deps` before the read. Without it a script
+  // that runs itself, or two that run each other, were read again at every
+  // level down to writesDepth's limit, doubling each time: Threadbear's own
+  // check.sh and check-remote.sh made one look at its checks patch read
+  // check.sh over 2,500 times and take 40 to 70 s, and as each thread's
+  // patches are read every 15 to 20 s, the trust worker of every runner with
+  // a thread in that repo never stopped (23 Nov: seven old runners finishing
+  // their turns took about 5 cores between them). Kept with the depth it
+  // was read at: a read cut off by the depth limit doesn't stand for one
+  // from higher up, which may reach what that one couldn't (`cp payload.dat
+  // run.sh` one script further down: Codex's review), so a script is read
+  // again only from shallower, at most writesDepth's limit times.
+  private writeReads = new Map<string, number>();
+  // What those reads have cost (WRITES_READ_BUDGET), and set once a
+  // script went unread for it (settleWrites).
+  private writesReadBytes = 0;
+  private writesUnread?: string;
   private exported = new Set<string>();
   private cleared = new Set<string>();
   private deps = new Map<string, Deps>();
@@ -2221,7 +2249,9 @@ class Reach {
         const own = `${ctx.file}\u0000-c${cmd.line}`;
         this.handed(args.slice(c + 2), [own], ctx);
         if (code === undefined) this.writesSomewhere ??= `${ctx.label} line ${cmd.line}`;
-        else this.writesOnlyText(code, { ...ctx, file: own, vars: new Map() });
+        // Counted like a script, so nested ones can't read past the budget
+        // (Gemini's review).
+        else if (this.chargeWrites(code.length, ctx, cmd.line)) this.writesOnlyText(code, { ...ctx, file: own, vars: new Map() });
       } else if (prog === 'find') {
         // Each -exec, as the main follower does.
         for (let at = 0; at < args.length; at++) {
@@ -2238,13 +2268,47 @@ class Reach {
         this.handed(args.slice(name.includes('/') ? 0 : args.findIndex((w) => this.str(w, ctx) === file) + 1), files, ctx);
         for (const f of files) {
           this.reached.add(f);
+          // Past the budget it fails whatever's left, so nothing more is read.
+          if (this.writesUnread) continue;
           const text = isFile(f) && this.inRepo(f) ? this.text(f) : undefined;
-          if (text !== undefined && text.length <= MAX_CONFIG_BYTES) this.writesOnlyText(text, { ...ctx, file: f, label: this.rel(f), vars: new Map() });
+          if (text === undefined || text.length > MAX_CONFIG_BYTES) continue;
+          // Everything on this path the read depends on: its variables start
+          // empty (what it's handed is in `deps`), and the rest is where it
+          // runs, whether a cd was lost, and $0, which it takes from the
+          // caller here. Nothing that isn't read here (a `[[` shell, being in
+          // a `$(...)`), so the same scripts don't count again for it.
+          // The folders in their order: past 16 only the first 16 are $PWD's
+          // values, so a set the same but in another order isn't the same
+          // read (Gemini's review).
+          const key = JSON.stringify([f, [...ctx.dirs], Boolean(ctx.lost), ctx.argv0]);
+          const before = this.writeReads.get(key);
+          if (before !== undefined && before <= this.writesDepth) continue;
+          if (!this.chargeWrites(text.length, ctx, cmd.line)) continue;
+          this.writeReads.set(key, this.writesDepth);
+          this.writesOnlyText(text, { ...ctx, file: f, label: this.rel(f), vars: new Map() });
         }
       }
     } finally {
       this.writesDepth--;
     }
+  }
+
+  // Counts a writes-only read against the budget, or fails what's left past
+  // it. A Mac's disk takes a name in any case, so one script can be run under
+  // as many keys as its name has spellings (Gemini's review). Past the budget,
+  // what's left unread could write what it runs, so it fails as one that
+  // does, which no approval gets past, not as somewhere it can't tell, which
+  // an owner's check is approved with (Codex's and Gemini's reviews). A
+  // budget of text, not a count of contexts: a count of 600 refused real
+  // checks whose helpers were run from many places (Gemini's review).
+  private chargeWrites(length: number, ctx: Ctx, line: number): boolean {
+    const cost = Math.max(length, WRITES_READ_MIN_COST);
+    if (this.writesUnread || this.writesReadBytes + cost > (this.o.writesBudget ?? WRITES_READ_BUDGET)) {
+      this.writesUnread ??= `${ctx.label} line ${line} runs more scripts than patch trust reads for what they write, so it can't tell whether one writes something that's run.`;
+      return false;
+    }
+    this.writesReadBytes += cost;
+    return true;
   }
 
   private writesOnlyText(text: string, ctx: Ctx): void {
@@ -2440,6 +2504,7 @@ class Reach {
     // as far as it can be: this one mustn't be (PatchTrust.approveCheck).
     const wp = writeProblem(this.writes(), this.o.top);
     if (wp?.definite) this.problem = this.writeFailed = wp.problem;
+    else if (this.writesUnread) this.problem = this.writeFailed = this.writesUnread;
     else if (wp) this.problem ??= wp.problem;
     this.problem ??= this.launches ?? this.later;
   }
