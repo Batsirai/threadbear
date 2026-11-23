@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpDir } from '../helpers/fakes.ts';
-import { CANCELLED_LOOKED_AT, FRESH_MS, filesThatRunIt, holdingWorkflows, keptVerdict, lastVerdict, pushPaths, shortestTimeoutMins, STALE_MS, watchedWorkflows, type Gh } from '../../src/land-gate.ts';
+import { CANCELLED_LOOKED_AT, FRESH_MS, filesThatRunIt, holdingWorkflows, keptVerdict, lastVerdict, pushPaths, STALE_MS, watchedWorkflows, type Gh } from '../../src/land-gate.ts';
 import { sayRedOnLanding } from '../../src/red-watch.ts';
 import { land } from '../../src/worktrees.ts';
 import { capture, commit, makeBranch, makeRepo, sh } from '../helpers/worktrees-harness.ts';
@@ -50,7 +50,8 @@ function fakeGh(runs: object[] | 'offline', jobs: Record<number, object[]> = {},
     calls.push(args);
     if (runs === 'offline') return { ok: false, stdout: '', stderr: 'error connecting to api.github.com\nmore' };
     if (args[1] === 'list') return { ok: true, stdout: JSON.stringify(runs), stderr: '' };
-    if (args[0] === 'api') return { ok: true, stdout: JSON.stringify(notes[Number(/check-runs\/(\d+)\//.exec(args[1])?.[1])] ?? []), stderr: '' };
+    // gh api --paginate --jq '.[].message': each page's messages, a line each.
+    if (args[0] === 'api') return { ok: true, stdout: ((notes[Number(/check-runs\/(\d+)\//.exec(args.join(' '))?.[1])] ?? []) as { message: string }[]).map((n) => `${n.message}\n`).join(''), stderr: '' };
     return { ok: true, stdout: JSON.stringify({ jobs: jobs[Number(args[2])] ?? [] }), stderr: '' };
   };
   return Object.assign(fn, { calls });
@@ -123,11 +124,7 @@ test("the last finished run on main is the verdict, past cancelled ones", async 
 // push, and each run came out cancelled, which was passed over as a newer
 // push's doing.
 test('a run cancelled by a job running into its own timeout is red; one cancelled for a newer push or by hand is passed over', async () => {
-  const yaml = WORKFLOW + '    timeout-minutes: 30\n  slow:\n    timeout-minutes: 60\n';
-  const root = workflows({ 'runner.yml': yaml });
-  assert.equal(shortestTimeoutMins(yaml), 30);
-  assert.equal(shortestTimeoutMins('jobs:\n  a:\n    runs-on: x\n'), 360);
-  assert.equal(shortestTimeoutMins('    timeout-minutes: ${{ matrix.t }}\n    timeout-minutes: 20\n'), 0);
+  const root = workflows({ 'runner.yml': WORKFLOW });
   const job = (id: number, name: string, conclusion: string, mins: number) => ({ databaseId: id, name, conclusion, startedAt: '2026-11-23T16:00:00Z', completedAt: new Date(Date.parse('2026-11-23T16:00:00Z') + mins * 60_000).toISOString(), steps: [{ name: 'Set up', conclusion: 'success' }, { name: 'Runner tests', conclusion }] });
   const gh = fakeGh(
     [
@@ -135,14 +132,14 @@ test('a run cancelled by a job running into its own timeout is red; one cancelle
       run(5, 'cancelled', '2026-11-23T17:00:00Z', 'completed', '2026-11-23T18:10:00Z'),
       // Stopped by hand after 40 minutes.
       run(4, 'cancelled', '2026-11-23T16:20:00Z', 'completed', '2026-11-23T17:00:00Z'),
-      // Too short for any job to have timed out: not looked into at all.
+      // Its one job stopped by hand within the minute: its annotations aren't asked for.
       run(3, 'cancelled', '2026-11-23T16:10:00Z', 'completed', '2026-11-23T16:15:00Z'),
       // Its Mac job ran into 30 minutes.
       run(2, 'cancelled', '2026-11-23T16:00:00Z', 'completed', '2026-11-23T16:31:00Z'),
       run(1, 'success', '2026-11-23T15:00:00Z'),
     ],
-    { 4: [job(41, 'Linux', 'cancelled', 40)], 2: [job(21, 'macos-26', 'cancelled', 30.5), job(22, 'ubuntu', 'success', 12), job(23, 'windows', 'cancelled', 3)] },
-    { 41: [{ message: 'The operation was canceled.' }], 21: [{ message: 'The job has exceeded the maximum execution time of 30m0s' }, { message: 'The operation was canceled.' }] },
+    { 4: [job(41, 'Linux', 'cancelled', 40)], 3: [job(31, 'Linux', 'cancelled', 0.5)], 2: [job(21, 'macos-26', 'cancelled', 30.5), job(22, 'ubuntu', 'success', 12), job(23, 'windows', 'cancelled', 3)] },
+    { 41: [{ message: 'The operation was canceled.' }], 21: [{ message: 'The job has exceeded the maximum execution time of 30m0s' }, { message: 'The operation was canceled.' }], 23: [{ message: 'The operation was canceled.' }] },
   );
   const kept = new Map<string, string[] | null>();
   const memo = { get: (k: string) => kept.get(k), set: (k: string, v: string[] | null) => void kept.set(k, v) };
@@ -151,11 +148,11 @@ test('a run cancelled by a job running into its own timeout is red; one cancelle
   assert.ok(v.state === 'red');
   assert.equal(v.run.databaseId, 2);
   assert.deepEqual(v.failedJobs, ['macos-26 (timed out after 30m0s in Runner tests)']);
-  const asked = gh.calls.map((c) => c.slice(0, 3).join(' '));
-  assert.ok(!asked.includes('run view 3'), 'a run shorter than any timeout is never looked into');
-  // The windows job was cancelled after 3 minutes: no annotation asked for.
-  assert.ok(!asked.includes('api repos/o/r/check-runs/23/annotations'));
-  assert.ok(asked.includes('api repos/o/r/check-runs/21/annotations'));
+  const asked = gh.calls.map((c) => c.join(' '));
+  assert.ok(!asked.some((c) => c.includes('check-runs/31/')), 'a job cancelled within its first minute');
+  // However short next to the workflow's timeouts now: one raised by the fix mustn't hide this run.
+  assert.ok(asked.includes("api --paginate repos/o/r/check-runs/23/annotations?per_page=100 --jq .[].message"));
+  assert.ok(asked.includes("api --paginate repos/o/r/check-runs/21/annotations?per_page=100 --jq .[].message"));
   // What was found about each run is kept, so the next look asks only for the list.
   const again = gh.calls.length;
   assert.equal((await lastVerdict(root, 'runner.yml', gh, memo)).state, 'red');

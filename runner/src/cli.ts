@@ -466,12 +466,15 @@ async function threadFromRunner(cfg: ReturnType<typeof loadConfig>, threadId: st
 // --from GitHub` would start one and `tb send` tell it.
 function fixThreads(client: RunnerClient): FixThreads {
   let all: Promise<ThreadSummary[]> | undefined;
+  const list = () => (all ??= client.call<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed', 'archived'] }).then((r) => r.threads));
   return {
     state: async (id) => {
-      all ??= client.call<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed', 'archived'] }).then((r) => r.threads);
-      const t = (await all).find((x) => x.id === id);
+      const t = (await list()).find((x) => x.id === id);
       return !t ? 'gone' : t.archivedAt ? 'archived' : 'open';
     },
+    // Its `why` stays until the thread's first end_turn gives it a byline,
+    // which covers a start whose answer was lost.
+    findOpen: async (why) => (await list()).find((t) => !t.archivedAt && t.startedBy?.label === 'GitHub' && t.startedBy.why === why)?.id,
     start: async ({ text, why, cwd }) => {
       const startedBy = startedByFlags({ from: 'GitHub', why, icon: 'wrench.and.screwdriver' }, process.env.THREADBEAR_THREAD_ID);
       // Not under the thread that ran tb red-watch, if one did.

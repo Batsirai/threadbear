@@ -243,7 +243,9 @@ nothing. Instead:
   watch's, with the run, the jobs and steps that failed, and to fix it and
   land. That thread is the one for the red stretch: a newer failed run is
   sent to it, never a second thread, and so is the news when the workflow
-  passes again. A later red stretch starts a new thread, unless the last
+  passes again (a failed rerun of the same run counts as newer). A start
+  whose answer was lost is found again by its "why", so it isn't started
+  twice. A later red stretch starts a new thread, unless the last
   one is still open (not archived), which is told instead; one that was
   deleted is left alone for the rest of its stretch. What it knows is in
   `threadbear-land-gate/red-watch/<workflow>.json`.
@@ -259,10 +261,12 @@ is passed over. One cancelled because a job ran into its own
 `timeout-minutes` is red: GitHub calls both `cancelled`, and only the job's
 annotation ("exceeded the maximum execution time") tells them apart. From
 22 Nov `runner.yml`'s Mac jobs hit their 30 minutes on every push of main
-and nothing noticed. So a cancelled run that lasted at least the
-workflow's shortest `timeout-minutes` has its cancelled jobs' annotations
-read, a few runs a look, and what was found is kept by run in
-`threadbear-land-gate/cancelled-runs.json`. A whole page of cancelled runs,
+and nothing noticed. So a cancelled run has its jobs read, and each
+cancelled job that ran a minute or more its annotations (every page), a
+few runs a look, and what was found is kept by run and attempt in
+`threadbear-land-gate/cancelled-runs.json`. Not only jobs as long as the
+workflow's timeouts are now: a fix that raises one would pass over the run
+that timed out, and the older green run behind it would count. A whole page of cancelled runs,
 or a trigger it can't read (an alias, a list over several lines, which
 counts as every file), is as before.
 A watched workflow mustn't cancel its runs on main for newer pushes, or a

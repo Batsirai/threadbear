@@ -27,7 +27,7 @@ function repo(): string {
   return root;
 }
 
-const run = (id: number, conclusion: string, at: string) => ({ databaseId: id, status: 'completed', conclusion, headSha: `${id}abcdef0123`, url: `https://github.com/o/r/actions/runs/${id}`, createdAt: at, updatedAt: at, displayTitle: `Commit ${id}` });
+const run = (id: number, conclusion: string, at: string, updatedAt = at) => ({ databaseId: id, status: 'completed', conclusion, headSha: `${id}abcdef0123`, url: `https://github.com/o/r/actions/runs/${id}`, createdAt: at, updatedAt, displayTitle: `Commit ${id}` });
 
 // GitHub, whose runs on main the test changes as it goes.
 function github() {
@@ -45,19 +45,22 @@ function runner() {
   const started: { id: string; text: string; why: string; cwd: string }[] = [];
   const sent: { thread: string; text: string }[] = [];
   const states = new Map<string, FixThreadState>();
-  let fail = false;
+  // 'refuse': nothing started; 'lost': started, but the answer never came back.
+  let fail: false | 'refuse' | 'lost' = false;
   const threads: FixThreads = {
     state: async (id) => states.get(id) ?? 'gone',
+    findOpen: async (why) => started.find((t) => t.why === why && states.get(t.id) === 'open')?.id,
     start: async (p) => {
-      if (fail) throw new Error('runner went away');
+      if (fail === 'refuse') throw new Error('runner went away');
       const id = `thread-${started.length + 1}`;
       started.push({ id, ...p });
       states.set(id, 'open');
+      if (fail === 'lost') throw new Error('connection closed');
       return id;
     },
     send: async (thread, text) => void sent.push({ thread, text }),
   };
-  return { threads, started, sent, states, failNext: (v: boolean) => (fail = v) };
+  return { threads, started, sent, states, failNext: (v: typeof fail) => (fail = v) };
 }
 
 test('a red stretch gets one fix thread, told when it fails again and when it passes', async () => {
@@ -104,6 +107,14 @@ test('a red stretch gets one fix thread, told when it fails again and when it pa
   assert.equal(r.sent[0].thread, 'thread-1');
   assert.match(r.sent[0].text, /^Desktop app \(desktop\.yml\) failed on main again: https:\/\/github\.com\/o\/r\/actions\/runs\/3/);
 
+  // That run run again (gh run rerun) and failed again: told too, once.
+  s.runs = [run(3, 'failure', '2026-11-24T02:00:00Z', '2026-11-24T02:40:00Z'), ...s.runs.slice(1)];
+  await look();
+  await look();
+  assert.equal(r.sent.length, 2);
+  assert.match(r.sent[1].text, /failed on main again: https:\/\/github\.com\/o\/r\/actions\/runs\/3/);
+  r.sent.pop();
+
   // Green again: the thread hears it, once.
   s.runs = [run(4, 'success', '2026-11-24T03:00:00Z'), ...s.runs];
   await look();
@@ -148,10 +159,20 @@ test("a thread that couldn't be started is tried again next look, and two looks 
   const { s, gh } = github();
   s.runs = [run(2, 'failure', '2026-11-24T01:00:00Z')];
   const r = runner();
-  r.failNext(true);
+  r.failNext('refuse');
   await assert.rejects(watchRed(root, { gh, threads: r.threads, cache, now: () => now }), /couldn't start or tell a fix thread[\s\S]*runner went away/);
   assert.equal(readWatch(cache.dir, 'desktop.yml'), undefined);
+  // Started, but the answer lost: the next look finds that thread rather than starting another.
+  r.failNext('lost');
+  await assert.rejects(watchRed(root, { gh, threads: r.threads, cache, now: () => now }), /connection closed/);
   r.failNext(false);
+  assert.deepEqual(await watchRed(root, { gh, threads: r.threads, cache, now: () => now }), ['Desktop app (desktop.yml) is red on main: fix thread thread-1 was already started.']);
+  assert.equal(r.started.length, 1);
+  assert.equal(readWatch(cache.dir, 'desktop.yml')?.state, 'red');
+  // From here, as if none had started yet.
+  fs.rmSync(watchDir(cache.dir), { recursive: true });
+  fs.mkdirSync(watchDir(cache.dir));
+  r.started.length = 0;
 
   // Another look has the workflow: this one leaves it alone.
   const lock = path.join(watchDir(cache.dir), 'desktop.yml.lock');

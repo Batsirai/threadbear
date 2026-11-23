@@ -189,23 +189,9 @@ export type Verdict =
 // their 30 minutes on every push of main and nobody noticed, as every
 // cancelled run was passed over.
 export const TIMED_OUT = /exceeded the maximum execution time of ([\w.]+)/;
-// GitHub's own, for a job that sets none.
-const DEFAULT_TIMEOUT_MINS = 360;
 // Cancelled runs not seen before that one look reads the jobs of: one call
-// each, and one more for each job long enough to have timed out.
+// each, and one more for each cancelled job that ran.
 export const CANCELLED_LOOKED_AT = 10;
-
-// The shortest timeout-minutes in a workflow, a job's or a step's: a
-// cancelled run or job that took less can't have stopped at its own. One
-// set by an expression could be anything, so it's none.
-export function shortestTimeoutMins(yaml: string): number {
-  let min = DEFAULT_TIMEOUT_MINS;
-  for (const m of yaml.matchAll(/^\s*timeout-minutes:\s*(.*?)\s*(?:#.*)?$/gm)) {
-    const n = Number(unquote(m[1]));
-    min = Math.min(min, Number.isFinite(n) ? n : 0);
-  }
-  return min;
-}
 
 const minutesBetween = (from?: string, to?: string): number => {
   const ms = Date.parse(to ?? '') - Date.parse(from ?? '');
@@ -219,8 +205,12 @@ const memoKey = (r: Run): string => `${r.databaseId}@${r.updatedAt ?? ''}`;
 
 // The jobs of a cancelled run that ran into their own timeout, as "macos-26
 // (timed out after 30m0s in Runner tests)": none when it was stopped for a
-// newer push or by hand, undefined when GitHub couldn't say.
-async function timedOutJobs(root: string, r: Run, shortest: number, run: Gh): Promise<string[] | undefined> {
+// newer push or by hand, undefined when GitHub couldn't say. Every
+// cancelled job that ran a minute or more is asked about, not only those as
+// long as the workflow's timeouts are now: a fix that raises one would
+// otherwise pass over the run it timed out in, and the older green run
+// behind it would count (Codex's review).
+async function timedOutJobs(root: string, r: Run, run: Gh): Promise<string[] | undefined> {
   const repo = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/actions\/runs\//.exec(r.url)?.[1];
   if (!repo) return undefined;
   const jobs = await run(['run', 'view', String(r.databaseId), '--json', 'jobs'], root);
@@ -234,29 +224,17 @@ async function timedOutJobs(root: string, r: Run, shortest: number, run: Gh): Pr
   const out: string[] = [];
   for (const j of parsed.jobs ?? []) {
     if (j.conclusion !== 'cancelled' || !j.databaseId) continue;
-    if (minutesBetween(j.startedAt, j.completedAt) < shortest) continue;
-    const a = await run(['api', `repos/${repo}/check-runs/${j.databaseId}/annotations`], root);
+    if (minutesBetween(j.startedAt, j.completedAt) < 1) continue;
+    // Every page, one message a line: a job's warnings can push the
+    // timeout's past the first.
+    const a = await run(['api', '--paginate', `repos/${repo}/check-runs/${j.databaseId}/annotations?per_page=100`, '--jq', '.[].message'], root);
     if (!a.ok) return undefined;
-    let notes: { message?: string }[];
-    try {
-      notes = JSON.parse(a.stdout) as { message?: string }[];
-    } catch {
-      return undefined;
-    }
-    const hit = (Array.isArray(notes) ? notes : []).map((n) => TIMED_OUT.exec(String(n?.message ?? ''))).find(Boolean);
+    const hit = a.stdout.split('\n').map((m) => TIMED_OUT.exec(m)).find(Boolean);
     if (!hit) continue;
     const step = j.steps?.find((s) => s.conclusion === 'cancelled')?.name;
     out.push(`${j.name} (timed out after ${hit[1]}${step ? ` in ${step}` : ''})`);
   }
   return out;
-}
-
-function workflowText(root: string, file: string): string | undefined {
-  try {
-    return fs.readFileSync(path.join(root, '.github', 'workflows', file), 'utf8');
-  } catch {
-    return undefined;
-  }
 }
 
 // The workflow's last finished run on main, from pushes: one that failed,
@@ -270,9 +248,6 @@ export async function lastVerdict(root: string, file: string, run: Gh = gh, memo
   } catch {
     return { state: 'unknown', why: "gh's answer wasn't JSON" };
   }
-  // Unreadable, it may have any timeout.
-  const text = workflowText(root, file);
-  const shortest = text === undefined ? 0 : shortestTimeoutMins(text);
   // One still going, for a newer push: it may be the fix.
   const newer = (than: Run) => {
     const n = runs.find((x) => x.status !== 'completed' && x.createdAt > than.createdAt);
@@ -282,11 +257,10 @@ export async function lastVerdict(root: string, file: string, run: Gh = gh, memo
   for (const x of runs) {
     if (x.status !== 'completed' || NO_VERDICT.has(x.conclusion ?? '')) continue;
     if (x.conclusion === 'cancelled') {
-      if (minutesBetween(x.createdAt, x.updatedAt) < shortest) continue;
       let timedOut = memo?.get(memoKey(x));
       if (timedOut === undefined) {
         if (++looked > CANCELLED_LOOKED_AT) return { state: 'unknown', why: `more than ${CANCELLED_LOOKED_AT} cancelled runs to look through` };
-        const found = await timedOutJobs(root, x, shortest, run);
+        const found = await timedOutJobs(root, x, run);
         if (!found) return { state: 'unknown', why: `couldn't read why run ${x.databaseId} was cancelled` };
         timedOut = found.length ? found : null;
         memo?.set(memoKey(x), timedOut);

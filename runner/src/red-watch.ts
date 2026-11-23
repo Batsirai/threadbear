@@ -25,6 +25,9 @@ export type FixThreadState = 'open' | 'archived' | 'gone';
 // The runner's side: what tb red-watch does with threads.
 export type FixThreads = {
   state(threadId: string): Promise<FixThreadState>;
+  // An open thread this started with that `why`: one whose start went
+  // through though the answer, or the Watch after it, was lost.
+  findOpen(why: string): Promise<string | undefined>;
   start(p: { text: string; why: string; cwd: string }): Promise<string>;
   send(threadId: string, text: string): Promise<void>;
 };
@@ -38,8 +41,9 @@ export type FixThreads = {
 // GitHub not answering, or no finished run, moves nothing.
 export type Watch =
   | { state: 'green'; since: string; thread?: string }
-  // `told`: the newest failed run its thread has heard of (its createdAt).
-  | { state: 'red'; since: string; thread: string; run: number; told: string };
+  // `told`: the newest failed run its thread has heard of (its createdAt),
+  // and `toldAt` that run's updatedAt, which a rerun of it moves.
+  | { state: 'red'; since: string; thread: string; run: number; told: string; toldAt?: string };
 
 const shortSha = (r: Run): string => r.headSha.slice(0, 8);
 const runLine = (r: Run): string => `${r.url} (${shortSha(r)}${r.displayTitle ? `: ${r.displayTitle}` : ''}, ${r.createdAt})`;
@@ -78,16 +82,27 @@ export async function step(w: HeldWorkflow, was: Watch | undefined, v: Verdict, 
     const next: Watch = { state: 'green', since: now, thread: was.thread };
     return (await threads.state(was.thread)) === 'gone' ? { next } : { next, act: { kind: 'send', thread: was.thread, text: greenText(w, v) } };
   }
-  const red = (thread: string): Watch => ({ state: 'red', since: was?.state === 'red' ? was.since : now, thread, run: v.run.databaseId, told: v.run.createdAt });
+  const red = (thread: string): Watch => redWatch(thread, v, was?.state === 'red' ? was.since : now);
   if (was?.state === 'red') {
-    if (v.run.createdAt <= was.told) return {};
+    // A newer run, or the same one run again (gh run rerun) and failed again.
+    const rerun = v.run.databaseId === was.run && (v.run.updatedAt ?? '') > (was.toldAt ?? '');
+    if (v.run.createdAt <= was.told && !rerun) return {};
     // Deleted: someone didn't want it, so it isn't started again.
-    if ((await threads.state(was.thread)) === 'gone') return { next: { ...was, run: v.run.databaseId, told: v.run.createdAt } };
+    if ((await threads.state(was.thread)) === 'gone') return { next: red(was.thread) };
     return { next: red(was.thread), act: { kind: 'send', thread: was.thread, text: againText(w, v) } };
   }
   if (was?.thread && (await threads.state(was.thread)) === 'open') return { next: red(was.thread), act: { kind: 'send', thread: was.thread, text: redText(w, v, true) } };
   return { act: { kind: 'start', text: redText(w, v, false), why: `${w.file} red on main` } };
 }
+
+export const redWatch = (thread: string, v: Extract<Verdict, { state: 'red' }>, since: string): Watch => ({
+  state: 'red',
+  since,
+  thread,
+  run: v.run.databaseId,
+  told: v.run.createdAt,
+  ...(v.run.updatedAt ? { toldAt: v.run.updatedAt } : {}),
+});
 
 // Where each workflow's Watch is kept: beside GitHub's shared answers.
 export const watchDir = (cacheDir: string): string => path.join(cacheDir, 'red-watch');
@@ -171,13 +186,14 @@ export async function watchRed(root: string, deps: WatchDeps): Promise<string[]>
       const was = readWatch(dir, w.file);
       const at = new Date(now()).toISOString();
       const { next, act } = await step(w, was, verdict, deps.threads, at);
-      if (act?.kind === 'start') {
-        const thread = await deps.threads.start({ text: act.text, why: act.why, cwd });
-        if (verdict.state === 'red') writeWatch(dir, w.file, { state: 'red', since: at, thread, run: verdict.run.databaseId, told: verdict.run.createdAt });
-        did.push(`${named(w)} is red on main: started fix thread ${thread}.`);
+      if (act?.kind === 'start' && verdict.state === 'red') {
+        const found = await deps.threads.findOpen(act.why);
+        const thread = found ?? (await deps.threads.start({ text: act.text, why: act.why, cwd }));
+        writeWatch(dir, w.file, redWatch(thread, verdict, at));
+        did.push(found ? `${named(w)} is red on main: fix thread ${thread} was already started.` : `${named(w)} is red on main: started fix thread ${thread}.`);
         continue;
       }
-      if (act) {
+      if (act?.kind === 'send') {
         await deps.threads.send(act.thread, act.text);
         did.push(`${named(w)}: told ${act.thread} it's ${verdict.state === 'green' ? 'green again' : 'red'}.`);
       }
