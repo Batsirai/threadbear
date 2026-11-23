@@ -1383,34 +1383,8 @@ fn step(
             } else {
                 MouseButton::Left
             };
-            window.pointer_move(at, None, cx);
-            // Each press carries its count, as a real double-click's second does.
-            for click_count in 1..=cmd["count"].as_u64().unwrap_or(1).clamp(1, 3) as usize {
-                let modifiers = window.modifiers();
-                window.dispatch_event(
-                    MouseDownEvent {
-                        button,
-                        position: at,
-                        modifiers,
-                        click_count,
-                        first_mouse: false,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-                window.render_frame(cx);
-                window.dispatch_event(
-                    MouseUpEvent {
-                        button,
-                        position: at,
-                        modifiers,
-                        click_count,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-                window.render_frame(cx);
-            }
+            let count = cmd["count"].as_u64().unwrap_or(1).clamp(1, 3) as usize;
+            click_at(window, at, button, count, cx);
             Ok(json!("click-at ok"))
         }
         "expand" | "collapse" => {
@@ -2088,6 +2062,44 @@ fn type_in_composer(
     Ok(())
 }
 
+/// `click-at`'s presses: the pointer moved there, then each press with its
+/// count, as a real double-click's second carries 2.
+fn click_at(
+    window: &mut Window,
+    at: Point<Pixels>,
+    button: MouseButton,
+    count: usize,
+    cx: &mut App,
+) {
+    window.pointer_move(at, None, cx);
+    for click_count in 1..=count {
+        let modifiers = window.modifiers();
+        window.dispatch_event(
+            MouseDownEvent {
+                button,
+                position: at,
+                modifiers,
+                click_count,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+        window.dispatch_event(
+            MouseUpEvent {
+                button,
+                position: at,
+                modifiers,
+                click_count,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    }
+}
+
 /// label-point against a Highlights card scrolled half out of its pane, with
 /// the transcript beside it: the card's whole-bounds middle is over the
 /// transcript, so a right click there opened the transcript's menu (13 Nov).
@@ -2237,5 +2249,156 @@ mod label_point_tests {
             assert_eq!(sliver(100., 150.), Some(125));
         })
         .expect("the test window");
+    }
+}
+
+/// `click-at` on a heading that opens its row, then on an empty spot: the
+/// heading's tooltip has to go, as it does for a real pointer moving away.
+/// And when the click moves the heading out from under the pointer (the
+/// transcript following its tail as the row opens), its tooltip doesn't come
+/// up over what's there now (23 Nov: the lab review's "Show every finding"
+/// stayed up over the findings in a filmed take).
+#[cfg(test)]
+mod click_at_tests {
+    use super::click_at;
+    use gpui_kit::prelude::*;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{
+        div, px, size, AnyView, AnyWindowHandle, Bounds, MouseButton, Point, TestAppContext,
+        Window, WindowBounds, WindowOptions,
+    };
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+
+    /// The tooltip, counting its draws: a draw only happens while it shows.
+    struct Tip(Rc<Cell<u32>>);
+
+    impl Render for Tip {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            self.0.set(self.0.get() + 1);
+            div().w(px(120.)).h(px(20.)).child("Show every finding")
+        }
+    }
+
+    /// A heading the width of the window that opens its row. With `moves`,
+    /// opening it pushes it down 60 points, as rows above it scroll.
+    struct Ledger {
+        open: bool,
+        moves: bool,
+        drawn: Rc<Cell<u32>>,
+    }
+
+    impl Render for Ledger {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let drawn = self.drawn.clone();
+            let mut column = div().size_full().flex().flex_col();
+            if self.open && self.moves {
+                column = column.child(div().id("above").w_full().h(px(60.)));
+            }
+            column = column.child(
+                div()
+                    .id("heading")
+                    .w_full()
+                    .h(px(20.))
+                    .tooltip(move |_, cx| -> AnyView { cx.new(|_| Tip(drawn.clone())).into() })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open = !this.open;
+                        cx.notify();
+                    })),
+            );
+            if self.open {
+                column = column.child(div().id("findings").w_full().h(px(60.)));
+            }
+            column
+        }
+    }
+
+    fn ledger(moves: bool, cx: &mut TestAppContext) -> (AnyWindowHandle, Rc<Cell<u32>>) {
+        cx.update(gpui_kit::init);
+        let drawn = Rc::new(Cell::new(0));
+        let d = drawn.clone();
+        let window = cx.update(|cx| {
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: Point::default(),
+                    size: size(px(400.), px(300.)),
+                })),
+                ..Default::default()
+            };
+            gpui_kit::open_window(options, cx, move |_, cx| {
+                cx.new(|_| Ledger {
+                    open: false,
+                    moves,
+                    drawn: d,
+                })
+            })
+            .expect("a test window")
+            .0
+        });
+        (window, drawn)
+    }
+
+    fn click(window: AnyWindowHandle, x: f32, y: f32, cx: &mut TestAppContext) {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            click_at(
+                window,
+                gpui_kit::point(px(x), px(y)),
+                MouseButton::Left,
+                1,
+                cx,
+            );
+        })
+        .expect("the test window");
+    }
+
+    /// Whether the tooltip is still up, once its wait is over. The window
+    /// lays a tooltip out before it checks the pointer is still over its
+    /// element, so a frame that drops it renders it too: it's up if the next
+    /// frame renders it again.
+    fn shows(window: AnyWindowHandle, drawn: &Cell<u32>, cx: &mut TestAppContext) -> bool {
+        cx.executor().advance_clock(Duration::from_secs(2));
+        cx.run_until_parked();
+        let frame = |cx: &mut TestAppContext| {
+            cx.update_window(window, |_, window, cx| window.render_frame(cx))
+                .expect("the test window")
+        };
+        frame(cx);
+        let before = drawn.get();
+        frame(cx);
+        drawn.get() > before
+    }
+
+    #[gpui_kit::test]
+    fn moving_on_ends_the_last_spots_tooltip(cx: &mut TestAppContext) {
+        let (window, drawn) = ledger(false, cx);
+        click(window, 50., 10., cx);
+        assert!(
+            shows(window, &drawn, cx),
+            "the test needs the tooltip up after the click, as the pointer stays on the heading"
+        );
+        click(window, 300., 250., cx);
+        assert!(
+            !shows(window, &drawn, cx),
+            "the heading's tooltip stayed up after a click elsewhere"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_heading_the_click_moved_away_shows_no_tooltip(cx: &mut TestAppContext) {
+        let (window, drawn) = ledger(true, cx);
+        click(window, 50., 10., cx);
+        assert!(
+            !shows(window, &drawn, cx),
+            "the heading moved out from under the pointer, but its tooltip came up there"
+        );
+        // Along where the heading was, to the right of where its tooltip
+        // would be.
+        click(window, 300., 10., cx);
+        assert!(
+            !shows(window, &drawn, cx),
+            "a tooltip is up after a click on what's under the pointer now"
+        );
     }
 }
