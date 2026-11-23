@@ -25,10 +25,12 @@ export type FixThreadState = 'open' | 'archived' | 'gone';
 // The runner's side: what tb red-watch does with threads.
 export type FixThreads = {
   state(threadId: string): Promise<FixThreadState>;
-  // An open thread this started with that `why`: one whose start went
-  // through though the answer, or the Watch after it, was lost.
-  findOpen(why: string): Promise<string | undefined>;
-  start(p: { text: string; why: string; cwd: string }): Promise<string>;
+  // An open thread this started in that repo (`cwd`) with that title or
+  // `why`: one whose start went through though the answer, or the Watch
+  // after it, was lost. Both, as an agent may rename it and its first
+  // end_turn replaces the why with a byline.
+  findOpen(p: { why: string; title: string; cwd: string }): Promise<string | undefined>;
+  start(p: { text: string; why: string; title: string; cwd: string }): Promise<string>;
   send(threadId: string, text: string): Promise<void>;
 };
 
@@ -74,7 +76,7 @@ const greenText = (w: HeldWorkflow, v: Extract<Verdict, { state: 'green' }>): st
 
 // The move for one look, and what to do for it. Pure, apart from asking
 // whether the last thread is still there.
-type Act = { kind: 'start'; text: string; why: string } | { kind: 'send'; thread: string; text: string };
+type Act = { kind: 'start'; text: string; why: string; title: string } | { kind: 'send'; thread: string; text: string };
 export async function step(w: HeldWorkflow, was: Watch | undefined, v: Verdict, threads: Pick<FixThreads, 'state'>, now: string): Promise<{ next?: Watch; act?: Act }> {
   if (v.state === 'unknown' || v.state === 'none') return {};
   if (v.state === 'green') {
@@ -92,7 +94,7 @@ export async function step(w: HeldWorkflow, was: Watch | undefined, v: Verdict, 
     return { next: red(was.thread), act: { kind: 'send', thread: was.thread, text: againText(w, v) } };
   }
   if (was?.thread && (await threads.state(was.thread)) === 'open') return { next: red(was.thread), act: { kind: 'send', thread: was.thread, text: redText(w, v, true) } };
-  return { act: { kind: 'start', text: redText(w, v, false), why: `${w.file} red on main` } };
+  return { act: { kind: 'start', text: redText(w, v, false), why: `${w.file} red on main`, title: `Fix ${named(w)}, red on main` } };
 }
 
 export const redWatch = (thread: string, v: Extract<Verdict, { state: 'red' }>, since: string): Watch => ({
@@ -187,8 +189,9 @@ export async function watchRed(root: string, deps: WatchDeps): Promise<string[]>
       const at = new Date(now()).toISOString();
       const { next, act } = await step(w, was, verdict, deps.threads, at);
       if (act?.kind === 'start' && verdict.state === 'red') {
-        const found = await deps.threads.findOpen(act.why);
-        const thread = found ?? (await deps.threads.start({ text: act.text, why: act.why, cwd }));
+        const p = { why: act.why, title: act.title, cwd };
+        const found = await deps.threads.findOpen(p);
+        const thread = found ?? (await deps.threads.start({ ...p, text: act.text }));
         writeWatch(dir, w.file, redWatch(thread, verdict, at));
         did.push(found ? `${named(w)} is red on main: fix thread ${thread} was already started.` : `${named(w)} is red on main: started fix thread ${thread}.`);
         continue;

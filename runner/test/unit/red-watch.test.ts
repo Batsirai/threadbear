@@ -42,14 +42,15 @@ function github() {
 
 // The runner: threads started and messages sent.
 function runner() {
-  const started: { id: string; text: string; why: string; cwd: string }[] = [];
+  const started: { id: string; text: string; why: string; title: string; cwd: string }[] = [];
   const sent: { thread: string; text: string }[] = [];
   const states = new Map<string, FixThreadState>();
   // 'refuse': nothing started; 'lost': started, but the answer never came back.
   let fail: false | 'refuse' | 'lost' = false;
   const threads: FixThreads = {
     state: async (id) => states.get(id) ?? 'gone',
-    findOpen: async (why) => started.find((t) => t.why === why && states.get(t.id) === 'open')?.id,
+    // As the runner's: its why may be a byline by now, so the title counts too, and only in that repo.
+    findOpen: async ({ title, cwd }) => started.find((t) => t.title === title && t.cwd === cwd && states.get(t.id) === 'open')?.id,
     start: async (p) => {
       if (fail === 'refuse') throw new Error('runner went away');
       const id = `thread-${started.length + 1}`;
@@ -87,6 +88,7 @@ test('a red stretch gets one fix thread, told when it fails again and when it pa
   const first = r.started[0];
   assert.equal(first.cwd, root);
   assert.equal(first.why, 'desktop.yml red on main');
+  assert.equal(first.title, 'Fix Desktop app (desktop.yml), red on main');
   assert.match(first.text, /^Desktop app \(desktop\.yml\) is red on main\. Find out why, fix it in your worktree and land the fix with tb land\./);
   assert.match(first.text, /Run: https:\/\/github\.com\/o\/r\/actions\/runs\/2 \(2abcdef0: Commit 2,/);
   assert.match(first.text, /Failed: Windows \(Link\)/);

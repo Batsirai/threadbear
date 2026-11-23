@@ -244,8 +244,8 @@ nothing. Instead:
   land. That thread is the one for the red stretch: a newer failed run is
   sent to it, never a second thread, and so is the news when the workflow
   passes again (a failed rerun of the same run counts as newer). A start
-  whose answer was lost is found again by its "why", so it isn't started
-  twice. A later red stretch starts a new thread, unless the last
+  whose answer was lost is found again by its title ("Fix <name> (<file>),
+  red on main") or why in that repo, so it isn't started twice. A later red stretch starts a new thread, unless the last
   one is still open (not archived), which is told instead; one that was
   deleted is left alone for the rest of its stretch. What it knows is in
   `threadbear-land-gate/red-watch/<workflow>.json`.

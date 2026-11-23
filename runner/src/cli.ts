@@ -472,13 +472,12 @@ function fixThreads(client: RunnerClient): FixThreads {
       const t = (await list()).find((x) => x.id === id);
       return !t ? 'gone' : t.archivedAt ? 'archived' : 'open';
     },
-    // Its `why` stays until the thread's first end_turn gives it a byline,
-    // which covers a start whose answer was lost.
-    findOpen: async (why) => (await list()).find((t) => !t.archivedAt && t.startedBy?.label === 'GitHub' && t.startedBy.why === why)?.id,
-    start: async ({ text, why, cwd }) => {
+    findOpen: async ({ why, title, cwd }) =>
+      (await list()).find((t) => !t.archivedAt && t.startedBy?.label === 'GitHub' && (t.startedBy.why === why || t.title === title) && [t.cwd, t.worktree?.mainCheckout].some((d) => d !== undefined && sameDir(d, cwd)))?.id,
+    start: async ({ text, why, title, cwd }) => {
       const startedBy = startedByFlags({ from: 'GitHub', why, icon: 'wrench.and.screwdriver' }, process.env.THREADBEAR_THREAD_ID);
       // Not under the thread that ran tb red-watch, if one did.
-      const r = await client.call<{ thread: ThreadSummary }>('threads.create', { text, cwd, images: [], detached: true, ...(startedBy ? { startedBy } : {}) });
+      const r = await client.call<{ thread: ThreadSummary }>('threads.create', { text, cwd, title, images: [], detached: true, ...(startedBy ? { startedBy } : {}) });
       return r.thread.id;
     },
     send: async (threadId, text) => {
