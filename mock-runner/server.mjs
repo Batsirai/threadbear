@@ -2741,6 +2741,7 @@ async function playScripted(threadId, turnId, started, turn, interrupted) {
   t.inProgress.delete(itemId);
   persist(threadId, { type: 'assistant.text', itemId, text: finalText }, turnId);
   if (turn.limit && !interrupted()) return limitHit(threadId, turnId, started, turn.limit);
+  if (turn.labReview && !interrupted()) return labReviewStarts(threadId, turnId, started, turn.labReview);
   finishTurn(threadId, turnId, started, interrupted() ? 'interrupted' : 'completed', turn.end);
 }
 
@@ -2814,6 +2815,38 @@ function limitHit(threadId, turnId, started, limit) {
       if (threads.has(threadId) && !s.archivedAt && !t.interrupt) fakeTurn(threadId, CARRY_ON_MOVED, [], undefined, 'runner', { wakeReason: 'Moved to another login' });
     }, 1500));
   }, limit.moveMs ?? 1500));
+}
+
+// A scripted turn with `labReview` finishes into another lab's review, as the
+// runner's startLabReview does (runner/src/runner/lab-review.ts): the note
+// saying who reviews, the thread waiting on "Review: <title>", and `waitMs`
+// later (6 s) the findings back as the runner's message (deliverReview in
+// runner/src/runner/hibernation.ts). A scripted turn matching "reviewed the
+// change you just made" answers them, with the ledger as its `end.review`.
+// `labReview: { lab ("Codex"), login, findings: [{ severity, claim, where }], waitMs }`.
+// For the X series' review clip; no review thread is made.
+function labReviewStarts(threadId, turnId, started, review) {
+  const t = threads.get(threadId);
+  const s = t.summary;
+  persist(threadId, { type: 'turn.completed', turnId, outcome: 'completed', durationMs: Date.now() - started, costUsd: 0.0123, needs: 'nothing' }, turnId);
+  t.interrupt = undefined;
+  const lab = review.lab ?? 'Codex';
+  const login = review.login ?? accounts.find((a) => a.provider === lab.toLowerCase())?.title ?? `${lab.toLowerCase()}-1`;
+  const id8 = crypto.randomBytes(4).toString('hex');
+  persist(threadId, { type: 'system.note', text: `Another lab is reviewing this change before it's done: ${lab} (${login}), in thread ${id8}.` });
+  s.waitingOn = [{ threadId: `review_${id8}`, title: `Review: ${s.title}`, review: true }];
+  s.snoozedUntil = new Date(Date.now() + 86_400_000).toISOString();
+  setStatus(threadId, 'idle', false);
+  const findings = review.findings ?? [];
+  const text = findings.length
+    ? `${lab} reviewed the change you just made (thread ${id8}). Its findings, numbered:\n\n${findings.map((f, i) => `${i + 1}. [${f.severity ?? 'medium'}] ${f.claim}${f.where ? ` (${f.where})` : ''}`).join('\n')}\n\nAnswer each one by its number: fix it, dispute it and say why, or leave it for Mike to decide.`
+    : `${lab} reviewed the change you just made (thread ${id8}) and found nothing that holds up.\n\nSay so in a line in your reply and finish as you were.`;
+  t.timers.push(setTimeout(() => {
+    if (!threads.has(threadId) || s.archivedAt) return;
+    delete s.waitingOn;
+    delete s.snoozedUntil;
+    fakeTurn(threadId, text, [], undefined, 'runner', { wakeReason: `${lab} reviewed the change` });
+  }, review.waitMs ?? 6000));
 }
 
 function finishTurn(threadId, turnId, started, outcome, said) {
