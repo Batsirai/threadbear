@@ -302,6 +302,9 @@ export type Turn = {
   // (isCarryOn): new work, from Mike, a schedule, another thread or the
   // runner's own reports (settleInstructionsNews).
   newWork?: true;
+  // A message in it was Mike's own: he's at the thread, so a check it does
+  // or leaves owed needs no mark to tell him (completeTurn).
+  byMike?: true;
   // It did the check a wake gave the thread (runner/hibernation.ts,
   // wakeToCheck), so how it ends says whether Mike is needed (completeTurn).
   wakeCheck?: true;
@@ -2184,6 +2187,7 @@ export class Runner {
     if (msg.ceiling !== undefined) (turn.ceilings ??= new Map()).set(msg.turnId, msg.ceiling);
     turn.messages.push(msg.turnId);
     if (!isCarryOn(msg)) turn.newWork = true;
+    if (fromMike(msg.text, msg)) turn.byMike = true;
     // He wrote again, so the turn owes him another reply; a card it was sent
     // back for (needs.ts, REPLY_ASKS) gives way to this message's own (from
     // Codex's review); an archive it asked for before reading this is off.
@@ -2293,6 +2297,7 @@ export class Runner {
     rt.turn = { turnId: msg.turnId, startedAt: this.clock.now(), interruptRequested: false, messages: [msg.turnId], edited: new Set(), access: rec.permissionMode };
     rt.turn.inputs = new Map([[msg.turnId, messageSeq]]);
     if (!isCarryOn(msg)) rt.turn.newWork = true;
+    if (fromMike(msg.text, msg)) rt.turn.byMike = true;
     if (msg.ceiling !== undefined) rt.turn.ceilings = new Map([[msg.turnId, msg.ceiling]]);
     this.markOlderInputs(st, msg);
     rt.activeAt = this.clock.now();
@@ -3297,17 +3302,25 @@ export class Runner {
     // the runner is about to carry the turn on (a full login, a lost
     // network), which may yet end asleep.
     const checkOwed = rec.wakeNews?.check;
-    if ((turn.wakeCheck || (checkOwed !== undefined && !rec.queue.some((q) => q.turnId === checkOwed))) && !limitHit && !netLost && !movedOff) {
+    // Nor after a turn Mike's own message was in (he's there, and it would
+    // only mark what he has just read: Gemini's review, 23 Nov 2026).
+    if ((turn.wakeCheck || (checkOwed !== undefined && !rec.queue.some((q) => q.turnId === checkOwed))) && !turn.byMike && !limitHit && !netLost && !movedOff) {
       const mark = (later: boolean) => {
-        if (rt.deleted || rec.archivedAt || this.bucket(rec) !== 'inbox' || (later && rt.turn)) return;
+        if (rt.deleted || rec.archivedAt || this.bucket(rec) !== 'inbox') return;
+        // Since the helper's check: a new turn, Mike has looked, or it's
+        // to archive once the threads it started are done.
+        if (later && (rt.turn || rec.lastSeenSeq >= rec.lastTurnCompletedSeq || rt.quietOnceChildrenDone !== undefined)) return;
         rec.forceUnread = true;
         this.markDirty(st);
       };
       // A helper thread that may archive itself now (runner/quiet-inbox.ts)
       // is marked only if it stays: its starter has its result, and a mark
       // meanwhile could reach Mike's phone (Codex's review, 23 Nov 2026).
-      if (settling && this.helperNobodyTouched(st)) void settling.then(() => mark(true), () => mark(true));
-      else mark(false);
+      // One whose finish is held for a turn the CLI may open (finishPending)
+      // settles, and may archive, later: left to a helper's own rules.
+      const helper = (settling || rt.finishPending) && this.helperNobodyTouched(st);
+      if (helper && settling) void settling.then(() => mark(true), () => mark(true));
+      else if (!helper) mark(false);
     }
     // An invalid wait may leave the thread awake; do not strand its queue.
     if (holdQueue && !rt.turn && this.bucket(rec) === 'inbox') this.afterTurn(st);
@@ -3422,8 +3435,8 @@ export class Runner {
   // inbox with nothing to say Mike should look (Gemini's second review,
   // 22 Nov 2026).
   notHibernatedAfterCheck(st: ThreadState, afterCheck = false): void {
-    const { rec, rt } = st;
-    if ((!afterCheck && !rec.lateChecks) || rt.turn || this.bucket(rec) !== 'inbox') return;
+    const { rec } = st;
+    if ((!afterCheck && !rec.lateChecks) || this.bucket(rec) !== 'inbox') return;
     rec.forceUnread = true;
     this.markDirty(st);
   }
@@ -3476,6 +3489,9 @@ export class Runner {
     this.keepHeldMessage(st);
     this.saveInterruptedMessages(st);
     this.settleInstructionsNews(st, false);
+    // A wake's check that failed before the CLI (its folder gone): unread
+    // as a failed turn is, and its row says it woke.
+    if (rec.wakeNews?.check && turn.inputs?.has(rec.wakeNews.check)) rec.forceUnread = true;
     this.persistInProgress(st, turn.turnId);
     this.expireApprovals(st, 'The turn ended.');
     // A crash or a Stop ends a scheduled run for good: it stays in the
@@ -5142,7 +5158,7 @@ export class Runner {
     const told = news?.told;
     // (Not a turn that sent nothing: one held at dispatch, runner/ceiling.ts.)
     if (news?.check && completed && rt.turn && !rt.turn.local && (rt.turn.inputs?.has(news.check) || (told?.inFlight && !told.deferred))) {
-      rt.turn.wakeCheck = true;
+      if (!rt.turn.byMike) rt.turn.wakeCheck = true;
       delete rec.wakeNews;
     }
     // A sleep backs off at the end of the check's own turn, or of one the

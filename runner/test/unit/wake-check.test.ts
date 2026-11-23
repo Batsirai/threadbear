@@ -118,6 +118,7 @@ test('a check that never reaches the agent leaves the thread awake, unread and s
   assert.equal(h.events(id).filter((e) => e.type === 'turn.completed').at(-1).outcome, 'failed');
   assert.equal(asleep(h, id), false);
   assert.equal(h.runner.get(id).needsYou, true);
+  assert.ok(h.runner.get(id).woke, 'its row says it woke');
   assert.ok(notes(h, id).some((t) => /^Woke up.*: to check whether the supplier has sent the test results/.test(t)));
   fs.renameSync(`${cwd}-away`, cwd);
   h.runner.send(id, 'Any reason why this woke up?');
@@ -212,7 +213,9 @@ test('Stop as the check finishes, with nothing needed and no snooze: still marke
   assert.equal(h.runner.get(id).needsYou, true);
 });
 
-test('a check cut off by a lost network is not marked while the runner is to carry it on, and is quiet if the carry-on goes back to sleep', async () => {
+// (A turn that loses the network reads as unread by itself while it waits,
+// as any thread's does: that is not the check's doing, and not changed here.)
+test('a check cut off by a lost network gets no mark of its own while the runner is to carry it on, nor if the carry-on goes back to sleep', async () => {
   const { h, id, other } = await setup();
   h.runner.wakeForTopic(id, other, { topic: TOPIC, happened: true });
   await tick();
@@ -258,4 +261,39 @@ test('a helper thread whose check finishes with nothing left archives itself wit
   assert.ok(h.runner.get(child).archivedAt, 'archived itself');
   h.runner.flush();
   assert.deepEqual(marks.filter(Boolean), [], 'never shown as needing Alex');
+});
+
+// From Gemini's review of the fix (23 Nov 2026).
+test('a mark left from before it slept does not make the next false alarm loud', async () => {
+  const { h, id, other } = await setup();
+  // An earlier wake Alex never opened left it unread as it went back to sleep.
+  h.runner.threads.get(id)!.rec.forceUnread = true;
+  h.runner.wakeForTopic(id, other, { topic: TOPIC, happened: true });
+  await tick();
+  const checking = h.runner.get(id);
+  assert.equal(checking.needsYou, false);
+  assert.equal(checking.woke, undefined);
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing', snooze: SAID }, 'Not yet.');
+  assert.ok(asleep(h, id));
+  assert.equal(h.runner.get(id).needsYou, false);
+});
+
+test("a lost check that Alex's own message has done is not marked again once he has read it", async () => {
+  const { h, id, other } = await setup();
+  h.runner.wakeForTopic(id, other, { topic: TOPIC, happened: true });
+  await tick();
+  h.adapter.last.init();
+  h.adapter.last.result('failed', undefined, 'API Error: overloaded');
+  await tick();
+  assert.equal(h.runner.get(id).needsYou, true);
+  // He opens it and asks.
+  h.runner.markSeen(id, h.runner.get(id).lastSeq);
+  h.runner.send(id, 'Any reason why this woke up?');
+  await tick();
+  assert.match(h.adapter.last.sent.at(-1)!.text, /do that check now as well\./);
+  h.adapter.last.init();
+  await endTurn(h, { needs: 'nothing' }, 'Another thread looked to show the results had come. I checked: they have not.');
+  assert.equal(h.runner.threads.get(id)!.rec.forceUnread, false, 'not marked again by the turn he asked for');
+  assert.equal(h.runner.threads.get(id)!.rec.wakeNews, undefined);
 });

@@ -199,14 +199,20 @@ export const hibernationPart = {
   wakeToCheck(this: Runner, st: ThreadState, c: { id: string; why: string; prompt: string; news: string; unsent: string; wakeReason?: string; ceiling?: PermissionMode }): 'started' | 'waiting' | 'unsent' {
     const { rec } = st;
     const had = rec.wakeNews;
+    const unread = rec.forceUnread;
     const at = this.isoNow();
     rec.wakeNews = { text: c.news, at, check: c.id, ...withCeiling(c.ceiling) };
+    // A mark left from before it slept (an earlier wake Mike never opened)
+    // would make this one loud: nothing clears it as a thread goes to
+    // sleep (Gemini's review, 23 Nov 2026).
+    if (unread) rec.forceUnread = false;
     try {
       this.wake(st, { why: c.why }, true);
     } catch (e) {
       // Not woken (its log can't be written): still asleep.
       if (had) rec.wakeNews = had;
       else delete rec.wakeNews;
+      if (unread) rec.forceUnread = unread;
       throw e;
     }
     let how: 'started' | 'waiting' | 'unsent' = 'waiting';

@@ -363,8 +363,10 @@ unread and with its "Woke up", whatever `needs` it ended with, as the
 thing has happened or the agent wants him; so does a snooze that doesn't
 take, and a turn that ends with the check still owed (it failed, or was
 stopped as it finished). Not while the runner is about to carry the turn
-on (a full login, a lost network), and a helper thread that archives
-itself (A quiet inbox) is marked only if it stays. A check that can't start (behind a queued message or a move, or
+on (a full login, a lost network), nor after a turn Mike's own message
+was in, and a helper thread that archives itself (A quiet inbox) is marked
+only if it stays. A mark left from before the thread slept is cleared as
+the check wakes it. A check that can't start (behind a queued message or a move, or
 held for Mike because the thread has more access than when it wrote its
 words, `runner/src/runner/ceiling.ts`) is unread at once, as any wake is. Until the check's
 turn completes, the record keeps why it woke as a line for the agent
