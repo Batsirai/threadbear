@@ -196,7 +196,8 @@ export type Flight = { to: 'archive' | 'hibernate'; thread?: string | null; star
 export type RailButton = { title: string; badge?: number | null; dot?: boolean; quietDot?: boolean; nextVersion?: 'none' | 'coming' | 'ready'; active: boolean };
 
 /** One of the activity bar's panels: whether it's on show, and what it says. */
-export type PanelLines = { shown: boolean; lines: string[] };
+/** `docked`: in the layout, in front of its tab group or behind another tab (GPUI only). */
+export type PanelLines = { shown: boolean; docked?: boolean; lines: string[] };
 
 export interface Driver {
   readonly name: 'swift' | 'gpui';

@@ -52,8 +52,8 @@ Feature: The panels round the thread
     And the Threads panel is showing
     And the "View" menu has "Show Sidebar Panels" on "⇧⌘B"
     When I press "b" with "cmd,shift"
-    Then the Runners panel is open
-    And the Connectors panel is open
+    Then the Connectors panel is open
+    And the Runners panel is a tab behind another
 
   @dock.threadpanel
   Scenario: Open in New Panel puts a thread beside the main one, and the main panel moves on

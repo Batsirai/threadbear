@@ -1508,7 +1508,11 @@ impl Threadbear {
                 checked.map_or_else(|| "[Check now]".to_owned(), |c| format!("{c} [Check now]")),
             );
         }
-        json!({ "shown": self.activity_panel_showing(shell::UPDATES, cx), "lines": lines })
+        json!({
+            "shown": self.activity_panel_showing(shell::UPDATES, cx),
+            "docked": self.dock.read(cx).layout().contains(shell::UPDATES),
+            "lines": lines
+        })
     }
 }
 

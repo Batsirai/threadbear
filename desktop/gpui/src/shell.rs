@@ -821,12 +821,18 @@ impl Threadbear {
             }
             return;
         }
+        // Those in front of their tab group come back last, so each is in
+        // front again: Runners then Connectors share a group, and bringing
+        // them back in the list's order left Runners on top.
+        let (front, behind): (Vec<String>, Vec<String>) = open
+            .into_iter()
+            .partition(|p| self.activity_panel_showing(p, cx));
         self.dock.update(cx, |m, cx| {
-            for panel in &open {
+            for panel in behind.iter().chain(&front) {
                 m.close(panel, cx);
             }
         });
-        self.hidden_sidebar_panels = open;
+        self.hidden_sidebar_panels = behind.into_iter().chain(front).collect();
     }
 
     /// Hide or Show Threads (`toggleThreadsPanel`): closed, or opened down
