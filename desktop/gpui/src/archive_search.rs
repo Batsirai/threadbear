@@ -820,7 +820,15 @@ impl Threadbear {
             .bg(style::primary_opacity(cx, 0.03))
             .text_size(px(style::size::LABEL))
             .text_color(secondary)
-            .child(div().flex_1().min_w_0().truncate().child("Read only, from Agent Archive"))
+            .child(
+                tipped!(
+                    div().flex_1().min_w_0().truncate(),
+                    "archive-read-only",
+                    "This session is in Agent Archive: read it here, or pick it up in a new thread",
+                    gpui_kit::Role::GenericContainer
+                )
+                .child("Read only"),
+            )
             .when_some(url, |s, url| {
                 s.child(
                     Button::new("archive-open-reader")
