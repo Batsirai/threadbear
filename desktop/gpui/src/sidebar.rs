@@ -4458,6 +4458,10 @@ pub(crate) fn automation(
                         }
                     } else {
                         let recipes = Some(app.read(cx).recipes.home_scroll.clone());
+                        // The threads list's own, for a control at the foot of
+                        // a long Inbox (the quiet inbox's line), below the
+                        // fold on those Macs (23 Nov).
+                        let threads = Some(app.read(cx).sidebar.scroll.clone());
                         let scrolls = app
                             .read(cx)
                             .side
@@ -4466,7 +4470,8 @@ pub(crate) fn automation(
                             .shown_scroll()
                             .into_iter()
                             .chain(crate::activity_panels::panel_scrolls())
-                            .chain(recipes);
+                            .chain(recipes)
+                            .chain(threads);
                         for scroll in scrolls {
                             let pane = scroll.bounds();
                             if bounds.center().x < pane.left()
