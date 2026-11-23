@@ -16,7 +16,7 @@ import { inBackground } from './background.ts';
 import { mainCheckoutOf as linkedMainCheckout } from './patch-trust.ts';
 import { untrustedGitArgs } from './safe-git.ts';
 import { carryAcross, formatChanges, crossings, mergeAcross, remakeOwn, touchesFormatted, TreeFormatter, type FormatCommit } from './format-replay.ts';
-import { LAND_TIMES_FILE, joinQueue, leaveQueue, queueDir, readEntry, readRunning, ridesFree, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
+import { LAND_TIMES_FILE, isCarried, joinQueue, leaveQueue, queueDir, readEntry, readRunning, ridesFree, setRunning, typicalCheckSeconds, waiting, waitingLine, writeEntry, type QueueEntry } from './land-queue.ts';
 
 // What a thread's record keeps about its worktree.
 export type WorktreeRecord = {
@@ -536,16 +536,18 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // the line, as nobody would hear how its landing went, so it says so in
     // what its thread reads. On 17 Nov two waits killed by the two-hour
     // limit left their threads thinking they were still queued.
-    // One already in the running group's check may still land with it (a
-    // holder lands one whose tb has gone, if its branch hasn't moved), and
-    // one whose group has landed has: it says which (Codex's review).
+    // One already in a group check stays in the line, and the holders land
+    // it once a check with it passes (isCarried, in land-queue.ts), and one
+    // whose group has landed has: it says which (Codex's review).
     const stopped = (signal: NodeJS.Signals): void => {
       const now = entry && readEntry(common, entry.id);
-      const inCheck = !!entry && !!readRunning(common)?.entries?.includes(entry.id);
+      const inCheck = !!now && (now.inCheckAt !== undefined || !!readRunning(common)?.entries?.includes(now.id));
+      // Marked here too, in case the holder hasn't yet.
+      if (now && inCheck && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
       const said = now?.result
         ? `it had already landed with its group (${now.result.landed.slice(0, 9)} on ${MAIN}); its next tb land moves ${t.branch} there.`
         : inCheck
-          ? `${t.branch} is out of the line, but it was in the group being checked, which may still land it: its next tb land says whether it did, and lands it if not.`
+          ? `${t.branch} stays in the line, as it was in a group check: the landings after it carry it and land it once a check with it passes, unless ${t.branch} drops those commits first. Its next tb land says whether it landed, and lands it if not.`
           : `${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin (in the background, with the longest timeout).`;
       if (entry && !now?.result && !inCheck) leaveQueue(common, entry.id);
       err(`tb land was stopped (${signal}) while it waited in the landing queue: ${said}`);
@@ -680,6 +682,28 @@ async function ownerWaiting(common: string, e: QueueEntry): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// Whether every commit a landing asked to land has its change in
+// `upstream` (git cherry, by patch id), as a rebase carries them.
+async function changesIn(cwd: string, e: QueueEntry, upstream: string): Promise<boolean> {
+  if ((await git(cwd, ['merge-base', '--is-ancestor', e.commit, upstream])).ok) return true;
+  const said = await gitOut(cwd, ['cherry', upstream, e.commit, e.base]);
+  if (said === undefined) return false;
+  const lines = said.split('\n').filter(Boolean);
+  return lines.length > 0 && lines.every((l) => l.startsWith('- '));
+}
+
+// Whether a landing whose tb has gone still asks for what it asked to land:
+// its branch has those commits, as they were, with more on top, or rebased.
+// On 23 Nov two passing group checks landed nothing because a member's
+// agent, its tb killed, ran tb land again, and that rebased the branch
+// before it waited: the same commits on a newer main. One whose branch was
+// rewritten without them (amended, reset) asks for something else now.
+async function stillAsked(cwd: string, e: QueueEntry): Promise<boolean> {
+  const tip = await gitOut(cwd, ['rev-parse', '--verify', '-q', `refs/heads/${e.branch}`]);
+  if (!tip || !/^[0-9a-f]{40,64}$/.test(tip)) return false;
+  return tip === e.commit || (await changesIn(cwd, e, tip));
 }
 
 // A group check runs with HEAD detached at the stack (landLocked). This
@@ -887,7 +911,7 @@ async function lockLanding(file: string, out: (line: string) => void, where: () 
 // while there's still time to plan for it (18 Nov).
 function longWait(asked: number, now = Date.now()): string {
   if (now - asked < landLimits.longWaitMs) return '';
-  return ` It has waited ${Math.round((now - asked) / 60_000)} min: if what ran tb land stops it before it gets the lock (an agent's tool time limit), it leaves the line and says so, and needs running again. Once its check starts, that carries on whatever happens to it.`;
+  return ` It has waited ${Math.round((now - asked) / 60_000)} min: if what ran tb land stops it before it gets the lock (an agent's tool time limit), it leaves the line and says so, and needs running again. Once its check starts, it stays in the line whatever happens to what ran it, and lands when a check with it passes, unless its branch drops those commits first.`;
 }
 
 // How often a waiting landing says where it is, and looks for having been
@@ -1360,8 +1384,19 @@ async function stackWaiting(
     if (!free(e) && allowed && !allowed.has(e.id)) continue;
     if (e.path === t.path || e.branch === t.branch) continue;
     if ((e.check ?? null) !== check || (e.checkFrom ?? '') !== checkFrom) continue;
-    if (!(await ownerWaiting(common, e))) continue;
-    if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
+    // A landing whose tb has gone after a check of it started is carried:
+    // stacked as it asked, while its branch still has those commits.
+    // Dropped once it doesn't, or once they're on main by another way (its
+    // next tb land landed them).
+    if (await ownerWaiting(common, e)) {
+      if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
+    } else {
+      if (!isCarried(e)) continue;
+      if (!(await stillAsked(t.path, e)) || (await changesIn(t.path, e, main))) {
+        leaveQueue(common, e.id);
+        continue;
+      }
+    }
     if (!(await git(t.path, ['merge-base', '--is-ancestor', e.base, main])).ok) continue;
     if ((await gitOut(t.path, ['rev-list', '--merges', `${e.base}..${e.commit}`])) !== '') continue;
     const next = await replayFormatted(t.path, e.base, e.commit, tip, main);
@@ -1802,6 +1837,12 @@ async function landLocked(
       out(group.length
         ? `Running the check, together with ${together.join(', ')}: ${check}`
         : `Running the check: ${check}`);
+      // From here each of the others stays in the line if its tb goes, and
+      // lands once a check with it passes (isCarried, land-queue.ts).
+      for (const g of group) {
+        const now = readEntry(common, g.entry.id);
+        if (now && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
+      }
       setRunning(common, {
         startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,
         entries: [...(times.entryId ? [times.entryId] : []), ...group.map((g) => g.entry.id)],
@@ -1990,19 +2031,26 @@ async function landLocked(
     // One whose tb went during the check (killed: on 12 Nov session
     // restarts killed waiting tb lands again and again, and checking again
     // without each one meant two passing group checks in a row landed
-    // nothing) still lands, as long as its branch is still what it asked to
-    // land: that's what it asked for. Its next tb land then has nothing to
-    // land. One whose branch has moved on is checked again without.
+    // nothing) still lands, as long as its branch still has what it asked
+    // to land (stillAsked): that's what it asked for. Its next tb land then
+    // has nothing to land. Its branch rebased by that next tb land counts:
+    // on 23 Nov that alone threw away two passing checks of six and ten
+    // landings. One whose branch was rewritten without them is checked
+    // again without.
     if (group.length) {
       const movedOn = [];
       for (const g of group) {
         if (await ownerWaiting(common, g.entry)) continue;
-        if ((await gitOut(g.entry.path, ['rev-parse', 'HEAD'])) !== g.entry.commit) movedOn.push(g.entry.branch);
+        if (!(await stillAsked(t.path, g.entry))) {
+          movedOn.push(g.entry.branch);
+          leaveQueue(common, g.entry.id);
+        }
       }
       if (movedOn.length) {
-        if (!(await back())) return fail(`${movedOn.join(', ')} stopped waiting and moved on during the check, so nothing landed. ${stuck}`);
+        const what = `${movedOn.join(', ')} stopped waiting and ${movedOn.length > 1 ? 'their branches no longer have' : 'its branch no longer has'} what was checked`;
+        if (!(await back())) return fail(`${what}, so nothing landed. ${stuck}`);
         if (carried) return fail(committedMeanwhile);
-        out(`${movedOn.join(', ')} stopped waiting and moved on during the check, so it's checked again without ${movedOn.length > 1 ? 'them' : 'it'}.`);
+        out(`${what}, so it's checked again without ${movedOn.length > 1 ? 'them' : 'it'}.`);
         continue;
       }
     }

@@ -305,19 +305,33 @@ their own.
 - An entry is left out, to see to itself later, if it asks for a
   different check (or reads it from another folder), its worktree has
   moved on since it asked, it doesn't go onto the stack cleanly, its tb
-  has gone, or the group's files would be held by a workflow red on
+  has gone before any check of it started, or the group's files would be held by a workflow red on
   GitHub ("Red on GitHub"; the holder asks for the whole stack, and again
   once the check has passed). A dry run and a branch with a merge on it
   are never put in anyone's check.
 - One whose tb goes during the check (killed: a session restart does
-  that) still lands, as long as its worktree is still on what it asked to
-  land; its branch is moved to what landed for it, or, if that worktree
-  is busy, `threadbear-land-done/<commit>` (beside the lock) says what
-  landed, and its next `tb land` moves it there first. Either way that
-  `tb land` then says there's nothing to land. Only one
-  that has moved on means the check runs again without it. On 12 Nov
-  restarts killed waiting landings again and again, and checking again
-  for each meant two passing group checks in a row landed nothing.
+  that) still lands, as long as its branch still has what it asked to
+  land: as it was, with more on top, or rebased (its next `tb land`
+  rebases before it waits). Its branch is moved to what landed for it
+  if it's still on what it asked, or, if that worktree is busy,
+  `threadbear-land-done/<commit>` (beside the lock) says what landed,
+  and its next `tb land` moves it there first; one rebased meanwhile
+  drops what's already on main. Either way that `tb land` then says
+  there's nothing to land. Only one whose branch was rewritten without
+  those commits (amended, reset) means the check runs again without it.
+  On 12 Nov restarts killed waiting landings again and again, and
+  checking again for each meant two passing group checks in a row landed
+  nothing; on 23 Nov a rebase by a killed landing's next `tb land` threw
+  away two passing checks of six and ten.
+- Once a holder has put it in a check (`inCheckAt` in its entry), a
+  landing stays in the line after its tb has gone, and each holder after
+  carries it, until a check with it passes and it lands, it's refused or
+  set aside to be checked alone, its branch drops those commits, or 12
+  hours go by. So a passing check that still doesn't land (GitHub went
+  red, main's checkout was busy, another's branch was rewritten) never
+  loses it: on 23 Nov one killed by its agent's two-hour limit was in a
+  group that passed and was then held for red, and the next holder landed
+  the rest without it.
 - A tb killed during a group check leaves its worktree detached at the
   stack (its branch is untouched) and a marker in the worktree's git dir;
   the next `tb land` there checks the branch out again. Commits made on
@@ -334,7 +348,8 @@ their own.
   it has, with how to rejoin, so its thread doesn't think it's still
   queued. Killed outright, its entry is dropped by the next reader. Either
   way it's out: nobody would hear how it went, and it may have been
-  stopped on purpose.
+  stopped on purpose. Not once a check of it has started: then it stays
+  in the line, as above, and says so.
 - A landing made with `tb land --despite-red` is the repair for what's
   red, so it's a fix in the queue: it goes first on the stack in every
   group check, outside the group's limit, and the red hold isn't asked
