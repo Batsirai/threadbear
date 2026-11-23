@@ -1339,3 +1339,72 @@ test('Daybreak 165 review 5: MAKEFILES, home startup files, interactive shells a
   assert.equal(checkCardProblem('make', dir), undefined);
   assert.equal(checkDigest('cp payload.txt state.txt', dir).problem, undefined);
 });
+
+// From a thread in Auto mode, a check of a plain bash script (curl, grep,
+// echo) was refused for its `[[` and its `case`: shell keywords, which run
+// nothing, were taken for programs on PATH that might load code (23 Nov).
+// They're only keywords bare and at the command's start: quoted, or after
+// an assignment, a redirect or a wrapper, they're a program's name. And bash evaluates a number compared
+// in `[[` (or `-v`'s name) as arithmetic, whose `a[$(cmd)]` runs a command
+// from the data, so a value worked out as it runs isn't let through there.
+test('a check from a thread that asks first may use [[ ]] and case, which run nothing', () => {
+  const ci = [
+    '#!/bin/bash',
+    "out=$(curl -fsS 'https://api.github.com/x' 2>/dev/null) || exit 0",
+    're=\'"status": *"([a-z_]+)"\'',
+    '[[ $out =~ $re ]] && status=${BASH_REMATCH[1]}',
+    'case "$status" in',
+    '  completed) echo done ;;',
+    '  queued|in_progress) [[ -n $status && $status != x ]] || echo no ;;',
+    'esac',
+    'n=3',
+    '[[ 2 -lt 3 ]] && echo yes',
+    'exit 0',
+    '',
+  ].join('\n');
+  const body = (s: string) => `#!/bin/bash\nout=$(curl -fsS https://x 2>/dev/null)\n${s}\n`;
+  const dir = repo({
+    'ci.sh': ci,
+    'arith.sh': body('[[ $out -eq 1 ]] && echo one'),
+    'arith2.sh': body('[[ 1 -ne "$out" ]] && echo one'),
+    'isset.sh': body('[[ -v $out ]] && echo set'),
+    'quoted.sh': body('"[[" "$out" ]]'),
+    'wrapped.sh': body('env [[ "$out" ]]'),
+    'casequoted.sh': body("'case' x"),
+    'sub.sh': body('[[ $(git log -1) == x ]] && echo y'),
+    'casesub.sh': body('case $(git log -1) in *) echo y ;; esac'),
+    'patsub.sh': body('case x in $(git log -1)) echo y ;; esac'),
+    'body.sh': body('case x in x) git log -1 ;; esac'),
+    'evals.sh': body('[[ -n $out ]] && eval "$out"'),
+    'procsub.sh': body('[[ -s <(git log -1) ]] && echo y'),
+    'bare.sh': body('[[ out -gt 0 ]] && echo y'),
+    'assigned.sh': body('x=1 [[ "$out" ]]'),
+    'redirected.sh': body('>/dev/null [[ "$out" ]]'),
+    'assignedcase.sh': body('x=1 case a'),
+    'patredir.sh': body('case x in *<$(git log -1)) echo y ;; esac'),
+    'braces.sh': body('{{ [[ x || git log -1'),
+    'zshsub.sh': '#!/bin/zsh\n[[ -n =(git log -1) ]]\n',
+    'dash.sh': '#!/bin/dash\n[[ -n x || git log -1 ]]\n',
+    'sh.sh': '#!/bin/sh\n[[ -n x ]]\n',
+    'noshebang.sh': '[[ -n x ]]\n',
+    'bracescase.sh': body('{{ case x in\ngit log -1'),
+  });
+  assert.equal(checkCardProblem('./ci.sh', dir), undefined);
+  // Only a shell with [[ makes it the shell's: dash, a Linux sh, runs a
+  // program called [[ and then what's after its ||, whatever the #! says.
+  for (const c of ['bash ./ci.sh', 'zsh ./ci.sh', "bash -c '[[ -n x ]]'", 'env bash ./ci.sh']) assert.equal(checkCardProblem(c, dir), undefined, c);
+  for (const c of ['sh ./ci.sh', 'dash ./ci.sh', "sh -c '[[ -n x ]]'", '[[ -n x ]]']) assert.match(checkCardProblem(c, dir) ?? '', /only bash, zsh and ksh/, c);
+  for (const s of ['arith', 'arith2', 'isset', 'quoted', 'wrapped', 'casequoted', 'sub', 'casesub', 'patsub', 'body', 'evals', 'procsub', 'bare', 'assigned', 'redirected', 'assignedcase', 'patredir', 'braces', 'bracescase', 'zshsub', 'dash', 'sh', 'noshebang']) assert.ok(checkCardProblem(`./${s}.sh`, dir), s);
+  assert.match(checkCardProblem('./arith.sh', dir) ?? '', /arithmetic/);
+  // After a redirect, what follows `[[` (a program then) is a command of its own, for any check.
+  const later = repo({ 'payload.txt': 'touch /tmp/x\n', 'r.sh': '#!/bin/bash\n>/dev/null [[ x || sh payload.txt\n' });
+  assert.ok(checkDigest('./r.sh', later).problem);
+  // So does what follows `{{ [[` and `{{ case x in`, where {{ is a program.
+  for (const s of ['{{ [[ x || sh payload.txt', '{{ case x in\nsh payload.txt']) {
+    fs.writeFileSync(path.join(later, 'r.sh'), `#!/bin/bash\n${s}\n`);
+    assert.ok(checkDigest('./r.sh', later).problem, s);
+  }
+  // An owner's check, held to less, is as it was.
+  assert.equal(checkDigest('./ci.sh', dir).problem, undefined);
+  assert.equal(checkDigest('./arith.sh', dir).problem, undefined);
+});

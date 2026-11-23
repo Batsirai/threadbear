@@ -378,7 +378,13 @@ card unless it's one a Claude Code hook may run (the hook's strict follow,
 `checkCardProblem`: a program handed a data file can run it as code by its
 own rules, `git -c alias.x='!sh data.txt' x`, `sqlite3 :memory: '.read
 data.txt'`, `apply`; an owner's check isn't held to that, and the digest
-doesn't change), `npm version` (its version scripts are followed) and
+doesn't change; `case` and `[[ ]]`, bare and at the command's start, are
+the shell's own and run nothing, `[[` only in a script bash, zsh or ksh runs
+(by its `#!` or by name: dash, a Linux `sh`, runs a program called `[[`),
+but there a number compared with `-eq` and
+the like, or a name tested with `-v` or `-R`, must be plain and known now,
+as bash works them out as arithmetic, whose `a[$(cmd)]` runs a command
+from the data), `npm version` (its version scripts are followed) and
 `npm explore`, any of npm's own commands that could run something of the
 folder's for a check or hook, `MAKEFILES`, `MAKEFLAGS`, `AWKPATH` or
 `AWKLIBPATH` set, `make --eval`, gawk's `--include`, `-i`, `--load` or

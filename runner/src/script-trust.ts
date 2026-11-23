@@ -490,10 +490,11 @@ class Lexer {
 
   private op(): boolean {
     const s = this.s;
-    const op = OPS.find((o) => s.startsWith(o, this.i));
+    const op = s.startsWith('=(', this.i) ? '=(' : OPS.find((o) => s.startsWith(o, this.i));
     if (!op) return false;
     const line = this.line;
-    if (op === '<(' || op === '>(') {
+    // zsh's `=(...)` at a word's start is a process substitution too.
+    if (op === '<(' || op === '>(' || op === '=(') {
       const src = this.balanced(this.i + 1);
       this.toks.push({ t: 'word', w: { parts: [{ k: 'sub', src, line }], line } });
       return true;
@@ -747,9 +748,15 @@ function bareOf(w: Word): string | undefined {
   return w.parts.every((p) => p.k === 'lit' && !p.q) ? w.parts.map((p) => (p as { s: string }).s).join('') : undefined;
 }
 
-type Simple = { words: Word[]; redirs: { op: string; target?: Word }[]; line: number; arrays: Word[] };
+// `notAtStart`: a redirect, or a word the shell doesn't read as its own
+// (`{{`, `}}`), came before its command's name, after which `case` or `[[`
+// is a program's name, not the shell's syntax.
+type Simple = { words: Word[]; redirs: { op: string; target?: Word }[]; line: number; arrays: Word[]; notAtStart?: boolean };
 
 const RESERVED = new Set(['if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '{', '}', '!', 'time', '}}', '{{']);
+// The reserved words after which the shell still reads `case` and `[[` as
+// its own: `{{ [[ x || sh y.sh` runs a program called {{, then y.sh.
+const OPENERS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '{', '!', 'time']);
 
 // Simple commands from tokens, with `case` patterns, `[[ ]]` and `x=(...)`
 // kept from looking like commands of their own.
@@ -772,9 +779,11 @@ function simpleCommands(toks: Tok[]): Simple[] {
   const lead = () => leadAt;
   const push = (w: Word) => {
     cur.words.push(w);
-    if (leadAt < 0 && !RESERVED.has(bareOf(w) ?? '')) {
+    const bare = bareOf(w) ?? '';
+    if (leadAt < 0 && RESERVED.has(bare) && !OPENERS.has(bare)) cur.notAtStart = true;
+    if (leadAt < 0 && !RESERVED.has(bare)) {
       leadAt = cur.words.length - 1;
-      leadIsCase = bareOf(w) === 'case';
+      leadIsCase = bare === 'case' && !cur.notAtStart;
     }
   };
   for (let k = 0; k < toks.length; k++) {
@@ -784,6 +793,8 @@ function simpleCommands(toks: Tok[]): Simple[] {
       else if (t.t === 'op' && t.op === ')') cases[cases.length - 1] = 'body';
       // A pattern is expanded, so what's in it runs: kept as `:`'s words.
       else if (t.t === 'word') out.push({ words: [{ parts: [{ k: 'lit', s: ':', q: false }], line: t.w.line }, t.w], redirs: [], line: t.w.line, arrays: [] });
+      // A shell refuses a redirect there, but what's in one is followed all the same.
+      else if (t.t === 'redir' && t.target) out.push({ words: [{ parts: [{ k: 'lit', s: ':', q: false }], line: t.line }, t.target], redirs: [], line: t.line, arrays: [] });
       continue;
     }
     if (t.t === 'op') {
@@ -806,6 +817,7 @@ function simpleCommands(toks: Tok[]): Simple[] {
         continue;
       }
       cur.redirs.push({ op: t.op, ...(t.target ? { target: t.target } : {}) });
+      if (lead() < 0) cur.notAtStart = true;
       if (!cur.line) cur.line = t.line;
       continue;
     }
@@ -817,7 +829,9 @@ function simpleCommands(toks: Tok[]): Simple[] {
       end();
       continue;
     }
-    if (at < 0 && bare === '[[') inTest = true;
+    // After a redirect or `{{`, `[[` is a program's name, and what follows
+    // is commands of its own (`>f [[ x || sh y.sh`).
+    if (at < 0 && bare === '[[' && !cur.notAtStart) inTest = true;
     if (inTest && bare === ']]') inTest = false;
     push(t.w);
     const first = lead();
@@ -841,7 +855,22 @@ type Ctx = {
   vars: Map<string, string[] | undefined>;
   depth: number;
   inSub?: boolean;
+  // Run by bash, zsh or ksh for sure, which read `[[` as their own: dash
+  // (a Linux sh) runs a program by that name, and what's after its `||`.
+  cond?: boolean;
 };
+
+// The shells that have `[[`, by the name they run as.
+const COND_SHELLS = new Set(['bash', 'zsh', 'ksh']);
+
+// The shell a script's #! runs it with (`#!/bin/bash`, `#!/usr/bin/env
+// zsh`), or undefined.
+function shebangShell(text: string): string | undefined {
+  const m = /^#![ \t]*(\S+)(?:[ \t]+(\S+))?/.exec(text);
+  if (!m) return undefined;
+  const prog = path.basename(m[1]!);
+  return programName(prog === 'env' ? path.basename(m[2] ?? '') : prog);
+}
 
 // The files an import of `want` (no extension, or a folder) could load,
 // when `want` itself isn't a file.
@@ -965,7 +994,8 @@ class Reach {
   // code or config (an import, a package.json a package script runs from),
   // or it's only named (an argument, a string): then it's hashed only if
   // it's code (looksRunnable), and only a script is followed.
-  follow(file: string, how: 'run' | 'source' | 'load' | 'named', ctx: Ctx | undefined, line?: number): void {
+  // `via`: the shell it's handed to (`sh x.sh`), which runs it whatever its #! says.
+  follow(file: string, how: 'run' | 'source' | 'load' | 'named', ctx: Ctx | undefined, line?: number, via?: string): void {
     if (this.problem) return;
     const abs = path.resolve(file);
     if (how !== 'named' || looksRunnable(abs)) this.reached.add(abs);
@@ -1039,7 +1069,8 @@ class Reach {
       this.dependsOn(`#args:${abs}`, { direct: false, names: [`#args:${ctx.file}`] });
       return this.shell(text, { ...ctx, label, file: abs, argv0: [...ctx.argv0, abs], depth });
     }
-    this.shell(text, { label, file: abs, argv0: [abs], dirs: startDirs, vars: new Map(), depth });
+    const cond = ctx !== undefined && COND_SHELLS.has(via ?? shebangShell(text) ?? '');
+    this.shell(text, { label, file: abs, argv0: [abs], dirs: startDirs, vars: new Map(), depth, ...(cond ? { cond } : {}) });
   }
 
   // A script outside the repo this reaches (FollowOptions.outside). A
@@ -1804,13 +1835,16 @@ class Reach {
     words = words.slice(k);
     for (const w of cmd.arrays) this.named(w, ctx);
     if (!words.length) return;
-    this.run(words, ctx, line, false);
+    this.run(words, ctx, line, false, false, k === 0 && !cmd.notAtStart);
   }
 
   // A command's words, from its name. `extra`: xargs adds arguments this
   // can't see.
   // `wrappedIn`: run by a wrapper whose own run named these words already.
-  private run(words: Word[], ctx: Ctx, line: number, extra: boolean, wrappedIn = false): void {
+  // `atStart`: the simple command's first word, past reserved words only,
+  // where the shell reads `case` and `[[` as its own (after `x=1`, `>f`
+  // or a wrapper they're a program's name).
+  private run(words: Word[], ctx: Ctx, line: number, extra: boolean, wrappedIn = false, atStart = false): void {
     if (this.problem || !words.length) return;
     const head = words[0]!;
     const headVals = this.values(head, ctx);
@@ -1834,6 +1868,15 @@ class Reach {
     }
     if (!wrappedIn) for (const w of args) this.named(w, ctx);
     if (this.problem) return;
+    // `case` and `[[` are the shell's own syntax, not programs on PATH that
+    // could load code (FollowOptions.strict): what their words substitute
+    // was followed with the command, and a case's patterns as `:`'s words.
+    // Only bare and at the command's start: `"[["`, `Case`, `x=1 [[`,
+    // `>f [[` or `env [[` runs a program by that name.
+    const keyword = this.o.strict && atStart ? bareOf(head) : undefined;
+    if (keyword === 'case') return;
+    if (keyword === '[[' && !ctx.cond) return this.fail(ctx, line, "uses [[ ]], which only bash, zsh and ksh have (to sh it's a program by that name), so patch trust can't follow it. Give the script a #!/bin/bash line, or use [ ].");
+    if (keyword === '[[') return this.condition(args, ctx, line);
     // A path: the repo's file runs (followed), or a program outside it,
     // treated by its name (/bin/sh is sh).
     // On Windows a backslash names a folder too: a quoted 'C:\repo\x.exe'
@@ -1870,6 +1913,27 @@ class Reach {
       if (bin) return this.follow(bin, 'run', ctx, line);
     }
     this.program(name, args, ctx, line, extra);
+  }
+
+  // A `[[ ]]` for a hook or a limited thread's check. Bash evaluates a
+  // number compared there (`-eq`, `-lt`...) as arithmetic, and a name
+  // tested with `-v` or `-R` by its subscript, either of which runs the
+  // `$(...)` in `a[$(cmd)]`, so a value from a download or a file would
+  // run as code: those must be plain numbers and names, known now.
+  private condition(args: Word[], ctx: Ctx, line: number): void {
+    const plain = (w: Word | undefined, re: RegExp) => {
+      const v = w && this.values(w, ctx);
+      return Boolean(v?.length && v.every((x) => re.test(x)));
+    };
+    for (let i = 0; i < args.length; i++) {
+      const op = this.str(args[i], ctx);
+      if (op !== undefined && /^-(eq|ne|lt|le|gt|ge)$/.test(op) && !(plain(args[i - 1], /^-?[0-9]+$/) && plain(args[i + 1], /^-?[0-9]+$/))) {
+        return this.fail(ctx, line, `compares numbers in [[ ]] (${op}) that aren't plain numbers known now, and bash works them out as arithmetic, which can run a command named in the data, so a hash can't follow it. Compare them as strings, or check them with grep first.`);
+      }
+      if ((op === '-v' || op === '-R') && !plain(args[i + 1], /^[A-Za-z_]\w*$/)) {
+        return this.fail(ctx, line, `tests a variable in [[ ]] (${op}) whose name isn't a plain one known now, and bash works out its subscript as arithmetic, which can run a command, so a hash can't follow it.`);
+      }
+    }
   }
 
   private str(w: Word | undefined, ctx: Ctx): string | undefined {
@@ -2555,7 +2619,7 @@ class Reach {
       if (s === undefined) return this.fail(ctx, line, `runs ${name} with a script worked out as it runs, which patch trust can't follow.`);
       if (s === '--') {
         const file = this.str(args[i + 1], ctx);
-        return file === undefined ? this.fail(ctx, line, `runs ${name} reading what to run from its input, which patch trust can't follow.`) : this.runFile(file, ctx, line);
+        return file === undefined ? this.fail(ctx, line, `runs ${name} reading what to run from its input, which patch trust can't follow.`) : this.runFile(file, ctx, line, name);
       }
       if (/^[-+][a-zA-Z]*o$/.test(s) || s === '-O' || s === '+O') {
         i++;
@@ -2581,16 +2645,16 @@ class Reach {
         // the caller's (Grok's review).
         const own = `${ctx.file}\u0000-c${line}`;
         this.handed(args.slice(i + 2), [own], ctx);
-        return this.shell(code, { ...ctx, file: own, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs) }, line);
+        return this.shell(code, { ...ctx, file: own, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs), cond: COND_SHELLS.has(name) }, line);
       }
       if (/^-[a-zA-Z]*s[a-zA-Z]*$/.test(s)) return this.fail(ctx, line, `runs ${name} reading what to run from its input, which patch trust can't follow.`);
       if (s.startsWith('-') || s.startsWith('+')) continue;
-      return this.runFile(s, ctx, line);
+      return this.runFile(s, ctx, line, name);
     }
     this.fail(ctx, line, `runs ${name} reading what to run from its input${extra ? ' (from xargs)' : ' (a pipe or a here-doc)'}, which patch trust can't follow.`);
   }
 
-  private runFile(file: string, ctx: Ctx, line: number): void {
+  private runFile(file: string, ctx: Ctx, line: number, via?: string): void {
     // `-` as the file (`node -- -`, `sh -- -`) is the input, whatever file
     // is called that.
     if (file === '-') return this.fail(ctx, line, `runs \`-\`, which reads what to run from its input, which patch trust can't follow.`);
@@ -2634,7 +2698,7 @@ class Reach {
     const found = inRepo.filter(isFile);
     for (const t of inRepo) if (!isFile(t) && this.missing.size < 500) this.missing.add(t);
     if (!found.length) return this.fail(ctx, line, `runs ${file}, which isn't a file in the repo now, so patch trust can't see what it'll be.`);
-    for (const t of found) this.follow(t, 'run', ctx, line);
+    for (const t of found) this.follow(t, 'run', ctx, line, via);
   }
 
   private jsRun(name: string, args: Word[], ctx: Ctx, line: number, extra: boolean): void {
@@ -3036,7 +3100,7 @@ class Reach {
         const outer = this.binDirs;
         this.binDirs = [...outer, ...ctx.dirs];
         try {
-          return this.shell(code, { ...ctx, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs) }, line);
+          return this.shell(code, { ...ctx, argv0: [], vars: new Map(), dirs: new Set(ctx.dirs), cond: false }, line);
         } finally {
           this.binDirs = outer;
         }
