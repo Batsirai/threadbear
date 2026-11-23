@@ -19,8 +19,8 @@ const SHA = '0123456789abcdef0123456789abcdef01234567';
 const IMAGE = `registry.fly.io/tb-boxes@sha256:${'b'.repeat(64)}`;
 const now = () => Math.floor(Date.now() / 1000);
 
-const pair = (await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'])) as CryptoKeyPair;
-const other = (await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'])) as CryptoKeyPair;
+const pair = (await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'])) as { privateKey: CryptoKey; publicKey: CryptoKey };
+const other = (await crypto.subtle.generateKey({ name: 'RSASSA-PKCS1-v1_5', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' }, true, ['sign', 'verify'])) as { privateKey: CryptoKey; publicKey: CryptoKey };
 const jwk = await crypto.subtle.exportKey('jwk', pair.publicKey);
 const JWKS = { keys: [{ ...jwk, kid: 'gh1', use: 'sig', alg: 'RS256' }] };
 
@@ -64,6 +64,10 @@ test("a token from main's box-image workflow in the trusted repo, for this deplo
   assert.deepEqual(await verify(await sign(claims)), { commit: SHA, issuedAt: claims.iat });
   // workflow_dispatch on main is the workflow's other way to run.
   assert.equal((await verify(await sign({ ...goodClaims(), event_name: 'workflow_dispatch' }))).commit, SHA);
+  // An ordinary job's token may have no job_workflow_ref (that's for reusable
+  // workflows): it checks out on workflow_ref alone (Codex's review).
+  const { job_workflow_ref: _, ...plain } = goodClaims();
+  assert.equal((await verify(await sign(plain))).commit, SHA);
   // GitHub's repo names don't care about case.
   assert.equal((await boxImage.verifyPromotion(await sign(goodClaims()), { repo: 'MikeCann/Threadbear', audience: SITE, nowS: now() })).commit, SHA);
 });
@@ -75,6 +79,7 @@ test('a token for another repository, branch, workflow, event or deployment prom
     ['a release tag', { ref: 'refs/tags/release/2026-11-23' }],
     ['another workflow', { workflow_ref: `${REPO}/.github/workflows/runner.yml@refs/heads/main`, job_workflow_ref: `${REPO}/.github/workflows/runner.yml@refs/heads/main` }],
     ['a reusable workflow called from another', { job_workflow_ref: `${REPO}/.github/workflows/other.yml@refs/heads/main` }],
+    ['no workflow_ref', { workflow_ref: undefined }],
     ['a pull request', { event_name: 'pull_request' }],
     ['another deployment', { aud: 'https://other.convex.site' }],
     ['two audiences', { aud: [SITE, 'https://other.convex.site'] }],
@@ -99,6 +104,15 @@ test("a token not signed by GitHub's key promotes nothing", async () => {
   // Claims changed after signing.
   await assert.rejects(verify(`${h}.${b64(JSON.stringify({ ...claims, sha: 'f'.repeat(40) }))}.${(await sign(claims)).split('.')[2]}`), /signature/);
   await assert.rejects(verify('not.a-jwt'), boxImage.PromotionRefused);
+  // A signature that isn't base64url is refused as such, not as GitHub being down.
+  await assert.rejects(verify(`${h}.${p}.abcde`), boxImage.PromotionRefused);
+  // A key GitHub marks for something else doesn't verify a token.
+  JWKS.keys[0] = { ...JWKS.keys[0]!, use: 'enc' };
+  try {
+    await assert.rejects(verify(await sign(claims)), /isn't one of GitHub's/);
+  } finally {
+    JWKS.keys[0] = { ...JWKS.keys[0]!, use: 'sig' };
+  }
 });
 
 // The route, with this deployment's settings.
@@ -160,7 +174,7 @@ afterEach(() => {
 test('the workflow promotes the digest its own push reported, with an OIDC token, never a tag', async () => {
   const { readFile } = await import('node:fs/promises');
   const wf = await readFile(new URL('../../../.github/workflows/box-image.yml', import.meta.url), 'utf8');
-  const latestJob = wf.slice(wf.indexOf('\n  latest:'));
+  const latestJob = wf.slice(wf.indexOf('\n  promote:'));
   assert.match(latestJob, /id-token: write/);
   assert.match(latestJob, /DIGEST: \$\{\{ needs\.image\.outputs\.digest \}\}/);
   assert.match(latestJob, /--arg image "\$IMAGE@\$DIGEST"/);
@@ -168,4 +182,24 @@ test('the workflow promotes the digest its own push reported, with an OIDC token
   assert.match(wf, /digest: \$\{\{ steps\.push\.outputs\.digest \}\}/);
   // Only the job that promotes can mint a token.
   assert.equal((wf.match(/id-token: write/g) ?? []).length, 1);
+  // Promoted only while this commit is main's head, by GitHub's account,
+  // never by anything read from the registry; and the build takes no cache
+  // from it, and pushes no `latest` (Daybreak 171's second review).
+  assert.match(latestJob, /gh api "repos\/\$REPO\/commits\/heads\/main"/);
+  assert.match(latestJob, /\[ "\$head" != "\$SHA" \]/);
+  const code = wf.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  assert.doesNotMatch(code, /--cache-from|BUILDKIT_INLINE_CACHE|:latest/);
+  assert.doesNotMatch(latestJob, /docker (pull|inspect)/);
+});
+
+test('the same promotion sent again (its answer lost) is done already, an older or other one with the same token is not', async () => {
+  const b = memoryBackend();
+  const a = { app: 'tb-boxes', image: IMAGE, commit: SHA, issuedAt: 5000 };
+  const ctx = actionCtx(b);
+  assert.deepEqual(await ctx.runMutation('internal.boxImage.promote', a), { ok: true });
+  assert.deepEqual(await ctx.runMutation('internal.boxImage.promote', a), { ok: true });
+  assert.equal((await ctx.runMutation('internal.boxImage.promote', { ...a, image: `registry.fly.io/tb-boxes@sha256:${'c'.repeat(64)}` })).ok, false);
+  assert.equal((await ctx.runMutation('internal.boxImage.promote', { ...a, issuedAt: 4000 })).ok, false);
+  assert.equal(b.rows('boxImages').length, 1);
+  assert.equal(b.rows('boxImages')[0].image, IMAGE);
 });

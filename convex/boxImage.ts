@@ -64,6 +64,8 @@ export const promote = internalMutation({
   handler: async (ctx, a) => {
     if (!isPinnedImage(a.image)) return { ok: false as const, why: 'not pinned by digest' };
     const was = await ctx.db.query('boxImages').withIndex('by_app', (q) => q.eq('app', a.app)).unique();
+    // The same promotion again (a retry whose answer was lost) is done already.
+    if (was && was.issuedAt === a.issuedAt && was.image === a.image && was.commit === a.commit) return { ok: true as const };
     if (was && was.issuedAt >= a.issuedAt) return { ok: false as const, why: `the image promoted already (${was.commit.slice(0, 8)}) came with a token as new or newer` };
     const row = { app: a.app, image: a.image, commit: a.commit, issuedAt: a.issuedAt, promotedAt: Date.now() };
     if (was) await ctx.db.replace('boxImages', was._id, row);
@@ -76,7 +78,7 @@ type Claims = Record<string, unknown>;
 export class PromotionRefused extends Error {}
 
 function b64url(part: string): Uint8Array<ArrayBuffer> {
-  if (!/^[A-Za-z0-9_-]*$/.test(part)) throw new PromotionRefused('the token is not base64url');
+  if (!/^[A-Za-z0-9_-]*$/.test(part) || part.length % 4 === 1) throw new PromotionRefused('the token is not base64url');
   const bin = atob(part.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (part.length % 4)) % 4));
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -98,9 +100,11 @@ export async function verifyPromotion(token: string, o: { repo: string; audience
   if (parts.length !== 3) throw new PromotionRefused('the token is not a JWT');
   let header: Claims;
   let c: Claims;
+  let signature: Uint8Array<ArrayBuffer>;
   try {
     header = json(parts[0]!);
     c = json(parts[1]!);
+    signature = b64url(parts[2]!);
   } catch (e) {
     throw e instanceof PromotionRefused ? e : new PromotionRefused('the token is not a JWT');
   }
@@ -119,7 +123,9 @@ export async function verifyPromotion(token: string, o: { repo: string; audience
   if (!repository || repository.toLowerCase() !== o.repo.toLowerCase()) throw new PromotionRefused(`the token is from ${repository || 'no repository'}, not ${o.repo}`);
   if (str('ref') !== MAIN) throw new PromotionRefused(`the token is from ${str('ref') || 'no ref'}, not main`);
   const want = `${repository}/${PROMOTING_WORKFLOW}@${MAIN}`;
-  if (str('workflow_ref') !== want || str('job_workflow_ref') !== want) throw new PromotionRefused(`the token is from another workflow (${str('workflow_ref') || 'none'})`);
+  // job_workflow_ref is there for a job from a reusable workflow: if there,
+  // it must be this one too, so no other workflow's job can stand in.
+  if (str('workflow_ref') !== want || (c.job_workflow_ref !== undefined && str('job_workflow_ref') !== want)) throw new PromotionRefused(`the token is from another workflow (${str('workflow_ref') || 'none'})`);
   if (!['push', 'workflow_dispatch'].includes(str('event_name'))) throw new PromotionRefused(`the token is from a ${str('event_name') || 'no'} event`);
   const commit = str('sha');
   if (!/^[0-9a-f]{40}$/.test(commit)) throw new PromotionRefused('the token names no commit');
@@ -127,10 +133,10 @@ export async function verifyPromotion(token: string, o: { repo: string; audience
   const got = await (o.fetch ?? fetch)(JWKS_URL, { redirect: 'error' });
   if (!got.ok) throw new Error(`GitHub's keys: ${got.status}`);
   const keys = ((await got.json()) as { keys?: unknown }).keys;
-  const jwk = Array.isArray(keys) ? (keys as Claims[]).find((k) => k && k.kid === header.kid && k.kty === 'RSA') : undefined;
+  const jwk = Array.isArray(keys) ? (keys as Claims[]).find((k) => k && k.kid === header.kid && k.kty === 'RSA' && (k.use === undefined || k.use === 'sig') && (k.alg === undefined || k.alg === 'RS256')) : undefined;
   if (!jwk || typeof jwk.n !== 'string' || typeof jwk.e !== 'string') throw new PromotionRefused("the token's key isn't one of GitHub's");
   const key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: jwk.n, e: jwk.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-  const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url(parts[2]!), new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
+  const ok = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, new TextEncoder().encode(`${parts[0]}.${parts[1]}`));
   if (!ok) throw new PromotionRefused("the token's signature doesn't check");
   return { commit, issuedAt: iat };
 }

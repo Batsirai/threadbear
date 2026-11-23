@@ -6,25 +6,25 @@
 # isn't ours to publish (Mike, 19 Nov): Fly pulls it for that app's
 # machines with no credentials, and no one else can.
 #
-# - a push to main that changes what the image holds: `<commit>`, and
-#   `latest` once the runner's tests pass on that commit (the `tests` job).
-#   New boxes of a virtual runner that follows main (convex/boxes.ts
-#   defaultBoxImage) then boot that image by the digest this run pushed,
-#   once the `latest` job promotes it (convex/boxImage.ts), never by tag;
+# - a push to main that changes what the image holds: `<commit>`. Once the
+#   runner's tests pass on that commit (the `tests` job), new boxes of a
+#   virtual runner that follows main (convex/boxes.ts defaultBoxImage) boot
+#   that image by the digest this run pushed, when the `promote` job
+#   promotes it (convex/boxImage.ts), never by tag;
 # - a release tag (release/YYYY-MM-DD, runner/src/upstream.ts):
 #   `<commit>` and `release-YYYY-MM-DD`, for a virtual runner pinned to a
 #   release (a release is only tagged on a commit every workflow passed on);
-# - by hand (workflow_dispatch): `<commit>`, and `latest` from main, after
-#   the tests as for a push.
+# - by hand (workflow_dispatch): `<commit>`, promoted from main after the
+#   tests as for a push.
 #
-# Until 23 Nov `latest` went out with only the smoke test in front of it,
-# so a main whose runner failed its tests still became every new box's
-# runner. The tests run here, in this workflow, rather than waiting on
+# Until 23 Nov new boxes booted a `latest` tag, which went out with only
+# the smoke test in front of it, so a main whose runner failed its tests
+# still became every new box's runner. The tests run here, in this workflow, rather than waiting on
 # runner.yml's run: that one has its own paths (a change to only this file
 # runs it not at all) and its Windows and Mac jobs, which the box doesn't
 # need and which take up to an hour. They're runner.yml's Linux job on
 # Node 24 (the box's Node), check.sh's runner typecheck and unit tests, run
-# beside the image's build; `latest` waits for both.
+# beside the image's build; `promote` waits for both.
 #
 # The app is the repo variable FLY_BOX_APP (the deployment's FLY_APP), and
 # the secret FLY_BOX_IMAGE_TOKEN a Fly token that reaches that app only
@@ -92,7 +92,6 @@ jobs:
             image="threadbear-box"; push=false
             echo "::notice::FLY_BOX_APP or FLY_BOX_IMAGE_TOKEN isn't set, so the image is built and checked but not pushed."
           fi
-          # `latest` isn't here: the `latest` job adds it once the tests pass.
           tags="$image:$SHA"
           case "$REF" in
             refs/tags/release/*) tags="$tags $image:release-${REF#refs/tags/release/}" ;;
@@ -112,8 +111,9 @@ jobs:
         run: printf '%s' "$TOKEN" | docker login registry.fly.io -u x --password-stdin
 
       - name: Build
-        # The last `latest` as a cache, when there is one: the Claude Code and
-        # packages layers only change when their versions do.
+        # From scratch, with no cache from the registry: whoever can push
+        # there could plant cache layers the build would take in place of
+        # running its steps (Daybreak 171's second review).
         env:
           IMAGE: ${{ steps.names.outputs.image }}
           SHA: ${{ github.sha }}
@@ -121,7 +121,6 @@ jobs:
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
         run: |
           docker build --platform linux/amd64 -f runner/box/Dockerfile \
-            --cache-from "$IMAGE:latest" --build-arg BUILDKIT_INLINE_CACHE=1 \
             --build-arg COMMIT="$SHA" --build-arg BUILT_AT="$BUILT_AT" \
             --label org.opencontainers.image.source="$SOURCE" \
             --label org.opencontainers.image.revision="$SHA" \
@@ -134,7 +133,7 @@ jobs:
 
       # The digest is the one this push of the image just built and tested
       # reports, never read back from the registry later: that's what a box
-      # boots once the `latest` job promotes it (convex/boxImage.ts).
+      # boots once the `promote` job promotes it (convex/boxImage.ts).
       - name: Push
         id: push
         if: steps.names.outputs.push == 'true'
@@ -156,8 +155,8 @@ jobs:
           done
 
   # The runner's typecheck and unit tests, as runner.yml's Linux job on Node 24
-  # runs them (its comments say why each step is there). Only where `latest`
-  # can be pushed: main, in a repo with the boxes' app set.
+  # runs them (its comments say why each step is there). Only where an image
+  # can be promoted: main, in a repo with the boxes' app set.
   tests:
     if: github.ref == 'refs/heads/main' && vars.FLY_BOX_APP != ''
     runs-on: ubuntu-24.04
@@ -188,23 +187,26 @@ jobs:
       - name: Runner typecheck and unit tests
         run: THREADBEAR_NODE="$(command -v node)" ./check.sh --runner --local
 
-  # `latest` moves to this commit's image only when it was built, passed the
+  # New boxes get this commit's image only when it was built, passed the
   # smoke test and was pushed, and the runner's tests passed (a failed or
-  # skipped job before it skips this one), and only forward: a re-run of an
-  # older main run (its github.sha is still the old commit) would otherwise
-  # put the older runner back (Codex's review, 23 Nov). The commit `latest`
-  # holds now (its revision label) must be this one or one before it on
-  # GitHub's compare; main's runs go one at a time (the concurrency above),
-  # so nothing moves it between the check and the push.
+  # skipped job before it skips this one), and only while this commit is
+  # still the head of main, by GitHub's own account: a re-run of an older
+  # main run (its github.sha is still the old commit) would otherwise put
+  # the older runner back (Codex's review, 23 Nov). Nothing about the
+  # registry is read for that: until the second review of Daybreak 171 it
+  # came from `latest`'s revision label, which whoever can push there can
+  # write.
   #
-  # Then it promotes that image, by the digest its push reported, to the
-  # backend (vars.BOX_PROMOTE_URL, the deployment's CONVEX_SITE_URL): new
-  # boxes boot only a promoted digest, never `latest` (Daybreak 171,
-  # convex/boxImage.ts). The proof is this job's GitHub OIDC token, made for
-  # that address: the backend takes one only from this workflow on main in
-  # the repo its BOX_IMAGE_REPO names, so FLY_BOX_IMAGE_TOKEN, which can push
-  # images, can't promote one. `latest` still moves, as the build's cache.
-  latest:
+  # It promotes that image, by the digest its push reported, to the backend
+  # (vars.BOX_PROMOTE_URL, the deployment's CONVEX_SITE_URL): new boxes boot
+  # only a promoted digest, never a tag (Daybreak 171, convex/boxImage.ts).
+  # The proof is this job's GitHub OIDC token, made for that address: the
+  # backend takes one only from this workflow on main in the repo its
+  # BOX_IMAGE_REPO names, so FLY_BOX_IMAGE_TOKEN, which can push images,
+  # can't promote one. No `latest` tag is pushed any more, and the build
+  # takes no cache from the registry: a pushed cache could hand the build
+  # layers it never ran (the same review).
+  promote:
     needs: [image, tests]
     if: needs.image.outputs.push == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
@@ -213,46 +215,18 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - name: Sign in to the registry
-        env:
-          TOKEN: ${{ secrets.FLY_BOX_IMAGE_TOKEN }}
-        run: printf '%s' "$TOKEN" | docker login registry.fly.io -u x --password-stdin
-
-      - name: Tag it latest
-        env:
-          IMAGE: ${{ needs.image.outputs.image }}
-          SHA: ${{ github.sha }}
-          REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if docker pull --platform linux/amd64 "$IMAGE:latest"; then
-            now=$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:latest")
-          else
-            now=""
-            echo "No latest yet."
-          fi
-          if [ -n "$now" ] && [ "$now" != "$SHA" ]; then
-            # How this commit stands against latest's: "ahead" moves it on.
-            status=$(gh api "repos/$REPO/compare/$now...$SHA" --jq .status)
-            if [ "$status" != ahead ]; then
-              echo "::notice::latest is ${now:0:8}, and this commit is $status of it, so latest stays."
-              exit 0
-            fi
-          fi
-          docker pull --platform linux/amd64 "$IMAGE:$SHA"
-          docker tag "$IMAGE:$SHA" "$IMAGE:latest"
-          docker push "$IMAGE:latest"
-          echo "PROMOTE=1" >> "$GITHUB_ENV"
-
       - name: Promote it for new boxes
-        if: env.PROMOTE == '1'
         env:
           URL: ${{ vars.BOX_PROMOTE_URL }}
           IMAGE: ${{ needs.image.outputs.image }}
           DIGEST: ${{ needs.image.outputs.digest }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Without it nothing is promoted: new boxes keep the image promoted
           # before, or, with none, aren't made. Never a tag in its place.
+          URL="${URL%/}"
           case "$URL" in
             https://*) ;;
             "") echo "::warning::The repo variable BOX_PROMOTE_URL isn't set, so this image isn't promoted for new boxes. Set it to the backend's CONVEX_SITE_URL once virtual runners are on (docs/virtual-runners.md)."; exit 0 ;;
@@ -262,6 +236,11 @@ jobs:
             sha256:*) ;;
             *) echo "::error::The image job reported no digest."; exit 1 ;;
           esac
+          head=$(gh api "repos/$REPO/commits/heads/main" --jq .sha)
+          if [ "$head" != "$SHA" ]; then
+            echo "::notice::main is at ${head:0:8} now, not ${SHA:0:8}, so this older image isn't promoted."
+            exit 0
+          fi
           token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "$URL" '$a|@uri')" | jq -r .value)
           echo "::add-mask::$token"
@@ -269,7 +248,7 @@ jobs:
           for try in 1 2 3 4 5 6; do
             code=$(curl -sS -o "$RUNNER_TEMP/promote.json" -w '%{http_code}' -X POST \
               -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
-              --data "$body" "${URL%/}/box-image/promote") || code=000
+              --data "$body" "$URL/box-image/promote") || code=000
             cat "$RUNNER_TEMP/promote.json"; echo
             [ "$code" = 200 ] && { echo "Promoted $IMAGE@$DIGEST"; exit 0; }
             # 404 or 503: the backend with the route may still be deploying.

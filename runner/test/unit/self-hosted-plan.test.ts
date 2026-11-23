@@ -414,6 +414,18 @@ test('setup itself refers to the images only through the pinned constants', asyn
   const setup = await readFile(new URL('../../../scripts/setup.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(setup, /ghcr\.io\//, 'an image name in setup.mjs would bypass the pin');
   assert.doesNotMatch(setup, /docker\(\['pull'/, 'setup pulls only through pinnedImage');
+  // Both are checked before either container is made, and each is made from
+  // its pinned constant (the reviews' gap: the order, and what docker run gets).
+  const checked = setup.indexOf('pinnedImage(docker, image)');
+  const loop = setup.lastIndexOf('for (const image of [BACKEND_IMAGE, DASHBOARD_IMAGE])', checked);
+  assert.ok(loop > 0 && checked - loop < 200, 'pinnedImage runs for both images');
+  for (const made of ['ensureContainer(BACKEND_CONTAINER, BACKEND_IMAGE,', 'ensureContainer(DASHBOARD_CONTAINER, DASHBOARD_IMAGE,']) {
+    assert.ok(setup.indexOf(made) > checked, `${made} comes after the check`);
+  }
+  assert.equal((setup.match(/ensureContainer\(/g) ?? []).length, 3, 'its definition and the two containers, nothing else');
+  assert.match(setup, /docker\(\['run', '-d', '--name', name, [^\n]*, image, \.\.\.cmd\]/, 'docker run gets the image ensureContainer was given');
+  // The throwaway container that checks the backend reaches itself runs after the pull too.
+  assert.ok(setup.indexOf("'--rm', '--entrypoint', curl[0], BACKEND_IMAGE") > 0);
 });
 
 // A fake Docker: `images` maps the reference it was asked for to the

@@ -884,15 +884,16 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
 - **Which runner it is.** Built from the repo at a commit rather than from
   a signed release, so it's the runner Mike's backend is deployed from: a
   push to main that changes what the image holds pushes
-  `registry.fly.io/<FLY_APP>:<commit>`, then `:latest` once the runner's
-  typecheck and unit tests pass on that commit (the workflow runs them
-  beside the build; until 23 Nov a main failing them still became
-  `:latest`), and only forward, so a re-run of an older run leaves it.
+  `registry.fly.io/<FLY_APP>:<commit>`, and once the runner's typecheck and
+  unit tests pass on that commit (the workflow runs them beside the
+  build; until 23 Nov a main failing them still went to new boxes as
+  `:latest`), and only while that commit is still main's head by GitHub's
+  API, so a re-run of an older run promotes nothing, it's promoted.
 - **Booted by digest, never by tag** (Daybreak 171, 23 Nov;
   `convex/boxImage.ts`). A box's image gets its boot token, which trades
   for the login's Claude token and the thread's key, and a tag is only a
-  name anyone who can push to the app's registry can move. So with
-  `:latest` the workflow also promotes the image to the backend by the
+  name anyone who can push to the app's registry can move. So the
+  workflow promotes the image to the backend by the
   digest its own push reported (`POST /box-image/promote`), with the job's
   GitHub OIDC token for the deployment's `CONVEX_SITE_URL` (the repo
   variable `BOX_PROMOTE_URL`); the backend takes one only from
@@ -900,7 +901,10 @@ The fourth slice (19 Nov 2026), the **box image** (`runner/box/Dockerfile`,
   newer than the last. No shared secret: `FLY_BOX_IMAGE_TOKEN`, which
   pushes images, can't promote one, so a stolen push token or a moved tag
   reaches no box; a change to main's workflow, or GitHub itself, still
-  could. `setRunnerService` makes a virtual runner that follows main when
+  could. The build takes no cache from the registry and no `:latest` is
+  pushed: a pushed cache could hand the build layers it never ran, which
+  the workflow would then promote under its own name (the fix's second
+  review). `setRunnerService` makes a virtual runner that follows main when
   it names no image (`defaultBoxImage`; its row keeps
   `registry.fly.io/<FLY_APP>:latest` as the sign for that), and each new
   box of it boots the digest promoted when the box is claimed; with none
