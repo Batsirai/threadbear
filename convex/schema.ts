@@ -167,7 +167,7 @@ export const threadFields = {
   // row says "Waiting for connection" rather than Failed.
   waitingForNetwork: v.optional(v.object({ since: v.string() })),
   // What it's waiting on, worked out by its runner for every app to draw
-  // (docs/protocol/threads.md, "Wait state"). Since API 99; a string, so a
+  // (docs/protocol/needs-you.md, "Wait state"). Since API 99; a string, so a
   // state a newer runner adds doesn't turn the row down.
   waitState: v.optional(v.string()),
   // The approval or question the thread is waiting on, if any (step 2).
@@ -522,7 +522,7 @@ export const appSchema = defineSchema({
     keywords: v.optional(v.string()), // the librarian's search words, since API 74
     // Its access mode, so another Mac's composer shows it. Since API 88.
     permissionMode: v.optional(v.string()),
-    // What it's waiting on (docs/protocol/threads.md, "Wait state"), so
+    // What it's waiting on (docs/protocol/needs-you.md, "Wait state"), so
     // another Mac sorts it as its own runner does. Since API 99.
     waitState: v.optional(v.string()),
     // Since API 29: when the backend last wrote the row, so a watching

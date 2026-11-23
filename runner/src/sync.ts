@@ -415,7 +415,7 @@ export const INDEX_MODE_API_VERSION = 88;
 // would turn the row down.
 export const LIVE_PAGES_API_VERSION = 95;
 // From this one a thread's row and its threadIndex row carry `waitState`
-// (docs/protocol/threads.md, "Wait state"), and a thread waiting on its own
+// (docs/protocol/needs-you.md, "Wait state"), and a thread waiting on its own
 // work is in view "inbox" though hibernating, as it's drawn under Running.
 // An older backend's validator would turn the row down, so it goes without.
 export const WAIT_STATE_API_VERSION = 99;

@@ -1,5 +1,5 @@
 // The sidebar's sections. The runner works out what each thread waits on and
-// sends it as `waitState` (runner/src/wait-state.ts, docs/protocol/threads.md
+// sends it as `waitState` (runner/src/wait-state.ts, docs/protocol/needs-you.md
 // "Wait state"); this draws it, with the same map as every app, kept to it by
 // shared/cases/wait-states.json. No React here, so the tests can run it bare.
 import { folderName } from './format.ts';

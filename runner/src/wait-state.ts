@@ -1,7 +1,7 @@
 // What a thread is waiting on: one state per thread, worked out here and sent
 // on its summary (`waitState`), so every app draws the same section, badge and
 // card instead of each working it out from a dozen fields
-// (docs/protocol/threads.md, "Wait state"). Before this the rule was written
+// (docs/protocol/needs-you.md, "Wait state"). Before this the rule was written
 // by hand in the runner, the Mac, the iPhone, Android and the website, and
 // each new thing a thread could wait on (a job, other threads, landing, an
 // app restart) reached only the Mac (the 22 Nov weekly step back).

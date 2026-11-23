@@ -482,7 +482,7 @@
 //    by the runner: codex answered"). A runner sends it only to a backend of
 //    98 or later.
 // 99: thread rows and threadIndex rows can carry `waitState`, what the
-//    thread is waiting on, worked out by its runner (docs/protocol/threads.md,
+//    thread is waiting on, worked out by its runner (docs/protocol/needs-you.md,
 //    "Wait state"), so the phone, the website and another Mac draw the same
 //    sections as the runner's own Mac. A thread waiting on its own work
 //    (onThreads, landing, appRestart) is in view "inbox" though hibernating.

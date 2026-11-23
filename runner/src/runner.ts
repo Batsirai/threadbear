@@ -4886,7 +4886,7 @@ export class Runner {
     if (rec.looseEnds && this.looseEndsCard(st) === rec.looseEnds.seq) s.looseEnds = { seq: rec.looseEnds.seq, ends: rec.looseEnds.ends.map((e) => ({ ...e })), at: rec.looseEnds.at };
     if (rt.moving) s.moving = { ...rt.moving };
     // What it's waiting on, worked out once here for every app
-    // (docs/protocol/threads.md, "Wait state").
+    // (docs/protocol/needs-you.md, "Wait state").
     const state = this.waitState(st, s);
     // Info, not a warning (which reaches Sentry): summaries are made a batch
     // at a time, so a quick turn can skip a step the table lists.

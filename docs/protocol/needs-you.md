@@ -939,3 +939,52 @@ stateDiagram-v2
   reopened --> [*]: turn ends
   open --> [*]: turn ends
 ```
+
+## Wait state
+
+`runner/src/wait-state.ts`. What a thread is waiting on, worked out by the
+runner and sent on every summary as `waitState`, so the Mac, the iPhone,
+Android and the website draw the same section, badge and card. Until 23 Nov
+2026 each app had its own copy of the rule, and each new thing a thread
+could wait on (a job, other threads, landing, an app restart) reached only
+the Mac (the 22 Nov weekly step back).
+
+The states, each with its section (Starred instead, for a starred thread
+that isn't archived):
+
+| `waitState` | Section | What it means |
+|---|---|---|
+| `working` | Running | A turn is running or starting. |
+| `job` | Running | No turn, a background job still going, and nothing asked of Mike that it isn't still working on. |
+| `onThreads` | Running | Its agent put it away to hear back from other threads (`waitingOn`). |
+| `landing` | Running | Its agent put it away until something it watches for, with commits not on main. |
+| `appRestart` | Running | Its agent put it away until the app restarts onto what it landed (`awaitingAppRestart`). |
+| `sending` | Running | Only an app's own guess while a message is on its way; never sent. |
+| `card` | Inbox | Stuck on a card only Mike can answer. First in every order. |
+| `review` | Inbox | A design review waits on his pick, the turn over. |
+| `needsYou` | Inbox | The last turn asked him for something he hasn't done, read or not, or ended without saying and he hasn't read it, or it's marked unread. |
+| `limit` | Inbox | Out of usage (`waitingForRoom`); carries on at the reset, but counts as wanting him. |
+| `done` | Inbox | Finished with nothing for him. |
+| `scheduled` | Hibernating | Idle, nothing for him, and a schedule will message it. |
+| `hibernating` | Hibernating | Snoozed, and not waiting on its own work. |
+| `archived` | Archived | Archived. |
+
+The moves between them are listed once, in `WAIT_MOVES`; a move it doesn't
+list is logged by the runner, not refused, as the state is worked out from
+the record rather than stored. A schedule booked, paused or deleted sends
+`thread.updated` for each thread whose state it moved.
+
+`urgencyOf` and `countsForMike` give the Inbox's Needs you order and the
+badge from the state and `status` alone: `card` and `review` 0, `needsYou` 1
+after a failed or stopped turn else 2, `limit` 2, `done` 3 after a failed or
+stopped turn else 4; 2 or less counts.
+
+Apps draw `waitState` and keep their own rule only for a summary without
+one (a runner from before 23 Nov) and for their optimistic guesses
+(`sending` while a message is on its way, archived at once on Archive).
+An unknown value is drawn as `done`. `shared/cases/wait-states.json` holds
+the cases every app and the runner run. The fields the rule reads stay on
+the summary for older apps.
+
+The inbox guess archives through the quiet inbox (docs/protocol/threads.md,
+"A quiet inbox" and "Inbox guess"); a thread it archives is then `archived` like any other.

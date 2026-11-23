@@ -281,7 +281,7 @@ export type ThreadSummary = {
   woke?: { at: string; since?: string }; // woke from hibernating by itself, not looked at yet
   onOldRunner?: boolean; // finishing a turn on a runner that handed over (Handovers)
   // What it's waiting on, worked out by the runner for every app to draw
-  // (docs/protocol/threads.md, "Wait state"; runner/src/wait-state.ts).
+  // (docs/protocol/needs-you.md, "Wait state"; runner/src/wait-state.ts).
   // Absent from runners before 23 Nov: apps fall back to their own rule.
   waitState?: WaitState;
   archivedAt?: string;

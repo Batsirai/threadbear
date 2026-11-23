@@ -1,7 +1,7 @@
 import Foundation
 
 /// What a thread is waiting on, as the runner works it out and sends on each
-/// row (`waitState`, docs/protocol/threads.md, "Wait state";
+/// row (`waitState`, docs/protocol/needs-you.md, "Wait state";
 /// runner/src/wait-state.ts). The phone draws it instead of working it out
 /// from a dozen fields: the section, the Needs you order and the badge all
 /// come from it and the turn's status. Rows from a runner before 23 Nov 2026

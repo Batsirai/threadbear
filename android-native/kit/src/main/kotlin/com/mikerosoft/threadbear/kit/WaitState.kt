@@ -2,7 +2,7 @@ package com.mikerosoft.threadbear.kit
 
 /**
  * What a thread is waiting on, worked out by the runner and sent on each row
- * as `waitState` (docs/protocol/threads.md, "Wait state"; the reference is
+ * as `waitState` (docs/protocol/needs-you.md, "Wait state"; the reference is
  * runner/src/wait-state.ts). The app draws it instead of working it out, so
  * the phone, the Mac and the website put a thread under the same heading and
  * count it the same way. Rows from a runner before 23 Nov 2026 have none, and

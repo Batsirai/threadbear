@@ -47,7 +47,7 @@ export type View = {
   // "The last turn failed"): a signed-out login on bruce read as an empty
   // reply on this Mac (canary, 13 Nov).
   failed: boolean;
-  // What it's waiting on (docs/protocol/threads.md, "Wait state"): the
+  // What it's waiting on (docs/protocol/needs-you.md, "Wait state"): the
   // section, badge and order every app draws it with.
   waitState?: string;
 };
