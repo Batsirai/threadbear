@@ -717,6 +717,9 @@ impl Threadbear {
         let before = self.threads.get(id).cloned();
         if let Some(t) = self.threads.get_mut(id).map(std::sync::Arc::make_mut) {
             change(t);
+            // The runner's state is from before the change: the app's own
+            // rule draws the guess until the runner's next summary.
+            t.wait_state = None;
         }
         let guess = self.threads.get(id).cloned();
         let mut params = params;

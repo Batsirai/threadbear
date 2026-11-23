@@ -148,6 +148,7 @@ import { coldCompactPart, compactionResult, type ColdCompactPart, type Precompac
 import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 import type { YearTokenAnswer, YearTokenParams } from './year-token-maker.ts';
 import { placeBucket, placeOf } from './place.ts';
+import { allowed as waitMoveAllowed, waitStateOf, type WaitState } from './wait-state.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -559,6 +560,9 @@ type Runtime = {
   // the latest, so an older one finishing late is dropped, and when it began.
   looseEndsRun?: number;
   looseEndsAt?: number;
+  // The wait state its last summary said (wait-state.ts): a move the table
+  // doesn't list is logged, and a schedule change re-sends the threads it moved.
+  waitState?: WaitState;
   // A loose-ends check is running: opening the thread doesn't start another.
   looseEndsBusy?: boolean;
   // That check's look at git, while it's going (LooseEndsPart.checkLooseEnds).
@@ -1550,6 +1554,23 @@ export class Runner {
   // For the runner's neighbours (schedules.ts) to tell every client.
   publish(n: Notification): void {
     this.notify(n);
+    // Whether a schedule will message a thread is part of its wait state.
+    if (n.method === 'schedules.updated') this.recheckWaitStates();
+  }
+
+  // Re-sends each thread whose wait state has moved without its record
+  // changing (a schedule booked, paused or deleted).
+  recheckWaitStates(): void {
+    for (const st of this.threads.values()) {
+      if (st.rt.deleted || st.rt.waitState === undefined) continue;
+      const before = st.rt.waitState;
+      if (this.summary(st).waitState !== before) this.markDirty(st);
+    }
+  }
+
+  private waitState(st: ThreadState, sum: ThreadSummary): WaitState {
+    const scheduled = (this.schedulesFor?.(st.rec.id) ?? []).some((x) => x.threadId === st.rec.id && !x.paused && !x.finishedAt && Boolean(x.nextRunAt));
+    return waitStateOf(sum, { now: this.clock.now(), scheduled });
   }
 
   // Turn ends and folder moves, for the librarian.
@@ -4850,6 +4871,12 @@ export class Runner {
     // Only for the card it was checked for: a new turn's card waits for its own.
     if (rec.looseEnds && this.looseEndsCard(st) === rec.looseEnds.seq) s.looseEnds = { seq: rec.looseEnds.seq, ends: rec.looseEnds.ends.map((e) => ({ ...e })), at: rec.looseEnds.at };
     if (rt.moving) s.moving = { ...rt.moving };
+    // What it's waiting on, worked out once here for every app
+    // (docs/protocol/threads.md, "Wait state").
+    const state = this.waitState(st, s);
+    if (rt.waitState && !waitMoveAllowed(rt.waitState, state)) this.log.warn('wait state moved where the table has no move', { threadId: rec.id, from: rt.waitState, to: state });
+    rt.waitState = state;
+    s.waitState = state;
     return s;
   }
 

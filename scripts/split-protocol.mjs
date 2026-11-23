@@ -66,6 +66,7 @@ export const FILES = [
       'Loose ends',
       'Nested threads',
       'A quiet inbox',
+      'Wait state',
       'Inbox guess',
       'Secrets',
     ],

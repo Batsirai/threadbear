@@ -1398,6 +1398,7 @@ pub fn dress_box(t: &mut ThreadSummary, b: &crate::remote::RunnerBox) {
         return;
     }
     t.needs_you = true;
+    t.wait_state = Some("needsYou".to_owned());
     if matches!(t.status.as_str(), "starting" | "running") {
         t.status = "idle".to_owned();
     }

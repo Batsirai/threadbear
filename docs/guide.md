@@ -66,6 +66,13 @@ agent saying "I'll check again in 20 minutes") and have nothing for you
 until then. Each row says when it wakes, soonest first. When the time comes
 one of these runs again, and lands in the inbox when it's done.
 
+Your runner decides which of these a thread is in, so the Mac, the iPhone,
+Android and the website all sort it the same way, and so does another Mac
+looking at this one's threads. A thread still asking you something counts in
+the badge until you've done it, whether or not you've read it. One whose login
+has run out of usage stays in the inbox and counts too, as you may want to move
+it to another login; it carries on by itself when the limit resets.
+
 To keep a thread at the very top, star it: hover its row and press the star,
 or use its right-click or ... menu. Starred threads sit in a Starred section
 above the Inbox, whatever they're doing, hibernating ones too, in the order you

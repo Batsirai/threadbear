@@ -481,4 +481,11 @@
 //    the website and another Mac head its quiet note as the Mac does ("Sent
 //    by the runner: codex answered"). A runner sends it only to a backend of
 //    98 or later.
-export const API_VERSION = 98;
+// 99: thread rows and threadIndex rows can carry `waitState`, what the
+//    thread is waiting on, worked out by its runner (docs/protocol/threads.md,
+//    "Wait state"), so the phone, the website and another Mac draw the same
+//    sections as the runner's own Mac. A thread waiting on its own work
+//    (onThreads, landing, appRestart) is in view "inbox" though hibernating.
+//    A runner sends it only to a backend of 99 or later. An older app ignores
+//    it, and leaves out those three, as it skips a hibernating inbox row.
+export const API_VERSION = 99;

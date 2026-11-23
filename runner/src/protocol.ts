@@ -2,6 +2,8 @@
 // file in step with it. Both sides ignore unknown fields, so extra internal
 // fields never leak out: summaries are built explicitly by toSummary().
 
+import type { WaitState } from './wait-state.ts';
+
 export const PROTOCOL_VERSION = 1;
 
 // cursor, opencode and grok run over ACP (adapters/acp/); each turns up as a
@@ -278,6 +280,10 @@ export type ThreadSummary = {
   awaitingApp?: { commit?: string; short?: string }; // waiting to hear the app restarted onto this commit (wait_for_app_restart), for the Updates panel
   woke?: { at: string; since?: string }; // woke from hibernating by itself, not looked at yet
   onOldRunner?: boolean; // finishing a turn on a runner that handed over (Handovers)
+  // What it's waiting on, worked out by the runner for every app to draw
+  // (docs/protocol/threads.md, "Wait state"; runner/src/wait-state.ts).
+  // Absent from runners before 23 Nov: apps fall back to their own rule.
+  waitState?: WaitState;
   archivedAt?: string;
   // Who archived it and, from the done card's Archive menu, the user's word
   // on how it went; only while archivedAt is set (Who archived a thread).

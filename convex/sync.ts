@@ -625,6 +625,8 @@ function fitThread<T extends Record<string, any>>(t: T): T | undefined {
   if (typeof out.keywords === 'string') out.keywords = cutBytes(out.keywords, CAP.keywords);
   // Only something a Mac shows as a mode: anything else would be just room.
   if (typeof out.permissionMode === 'string') out.permissionMode = cutBytes(out.permissionMode, 16);
+  // A state's name: anything longer is nothing an app draws.
+  if (typeof out.waitState === 'string') out.waitState = cutBytes(out.waitState, 32);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}) };
   // The card waiting on Mike is cut, never dropped: the phone shows the
   // thread waiting, and its push goes, with shorter text.
@@ -769,6 +771,8 @@ function fitIndexRow<T extends Record<string, any>>(r: T): T | undefined {
   if (typeof out.keywords === 'string') out.keywords = cutBytes(out.keywords, CAP.keywords);
   // Only something a Mac shows as a mode: anything else would be just room.
   if (typeof out.permissionMode === 'string') out.permissionMode = cutBytes(out.permissionMode, 16);
+  // A state's name: anything longer is nothing an app draws.
+  if (typeof out.waitState === 'string') out.waitState = cutBytes(out.waitState, 32);
   if (out.startedBy) out.startedBy = { ...out.startedBy, label: cutBytes(String(out.startedBy.label ?? ''), 100), ...(out.startedBy.why !== undefined ? { why: cutBytes(String(out.startedBy.why), 300) } : {}), ...(out.startedBy.threadTitle !== undefined ? { threadTitle: cutBytes(String(out.startedBy.threadTitle), 200) } : {}) };
   return docBytes(out) <= CAP.indexRow ? (out as T) : undefined;
 }
@@ -3960,6 +3964,7 @@ const indexDoc = v.object({
   recap: v.optional(v.string()), // since API 70
   keywords: v.optional(v.string()), // since API 74
   permissionMode: v.optional(v.string()), // since API 88
+  waitState: v.optional(v.string()), // since API 99
 });
 
 // Rows made or changed, and threads gone. With `keep`, every row of the

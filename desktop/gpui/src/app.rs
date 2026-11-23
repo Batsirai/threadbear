@@ -1918,6 +1918,8 @@ impl Threadbear {
         let before = self.threads.get(&id).cloned();
         if let Some(t) = self.threads.get_mut(&id).map(std::sync::Arc::make_mut) {
             change(t);
+            // As `update_thread`: the app's own rule draws the guess.
+            t.wait_state = None;
         }
         let guess = self.threads.get(&id).cloned();
         // A folder, login or pool change isn't guessed, so its chip spins.

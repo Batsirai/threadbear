@@ -39,6 +39,8 @@ export type IndexRow = {
   // Its access mode (API 88), so another Mac's composer shows what it
   // really is; left out by an older runner, and that Mac says it can't tell.
   permissionMode?: string;
+  // What it's waiting on (API 99), so another Mac sorts it as this one does.
+  waitState?: string;
 };
 
 // What the Mac app gets (docs/protocol/runners.md, "Other runners' threads").
@@ -104,7 +106,7 @@ export function boxReachable(state: unknown): boolean {
 const WATCH_CHECK_MS = 15_000;
 const UNWATCH_AFTER_MS = 2 * 60_000;
 
-export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true, withMode = true): IndexRow {
+export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = true, withAsked = true, withKeywords = true, withMode = true, withWaitState = true): IndexRow {
   const row: IndexRow = {
     threadId: t.id,
     title: t.title,
@@ -129,6 +131,8 @@ export function toIndexRow(t: ThreadSummary, withStartedBy = true, withStars = t
   if (withKeywords && t.keywords) row.keywords = t.keywords;
   // Changes only when Mike picks another (or a plan ends), so rarely.
   if (withMode && t.permissionMode) row.permissionMode = t.permissionMode;
+  // Moves with the status, mostly, and the sections need it.
+  if (withWaitState && t.waitState && !t.archivedAt) row.waitState = t.waitState;
   if (withStartedBy && t.startedBy) {
     // Not the thread's id: only the row's tooltip uses this, by that title.
     const { kind, label, icon, threadTitle, why } = t.startedBy;
@@ -164,6 +168,8 @@ export class ThreadIndex {
     takesKeywords?: () => boolean;
     // Whether it knows `permissionMode` (API 88).
     takesMode?: () => boolean;
+    // Whether it knows `waitState` (API 99).
+    takesWaitState?: () => boolean;
     // Whether the backend can answer with only the rows changed since the
     // last answer (API 29). Without it, every re-run reads every row.
     takesSince?: () => boolean;
@@ -534,7 +540,7 @@ export class ThreadIndex {
   }
 
   private mark(t: ThreadSummary): void {
-    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true, this.deps.takesMode?.() ?? true);
+    const row = toIndexRow(t, this.deps.takesStartedBy?.() ?? true, this.deps.takesStars?.() ?? true, this.deps.takesAsked?.() ?? true, this.deps.takesKeywords?.() ?? true, this.deps.takesMode?.() ?? true, this.deps.takesWaitState?.() ?? true);
     if (this.sent.get(t.id) === writeKey(row)) {
       this.dirty.delete(t.id);
       return;

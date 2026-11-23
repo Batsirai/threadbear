@@ -171,6 +171,13 @@ pub struct ThreadSummary {
     pub moving: Option<Value>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub asked: Option<String>,
+    /// What it's waiting on, as its runner worked it out (protocol "Wait
+    /// state", runner/src/wait-state.ts). Read with `wait_state()`. Absent
+    /// from a runner before 23 Nov 2026, and cleared by an optimistic change
+    /// here (`Sidebar::update_thread`), so the app's own rule draws it until
+    /// the runner's next summary.
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub wait_state: Option<String>,
     #[serde(default, deserialize_with = "crate::wire::field")]
     pub preview: String,
     /// The librarian's search words, for finding a thread by what it's about
@@ -362,6 +369,14 @@ impl ThreadSummary {
         })
     }
 
+    /// The runner's wait state, a value this build knows (an unknown one
+    /// is drawn as done), or None for a summary without one: the app's own
+    /// rule (`section_of_legacy`) decides then.
+    pub fn wait_state(&self) -> Option<&str> {
+        let s = self.wait_state.as_deref()?;
+        Some(if WAIT_STATES.contains(&s) { s } else { "done" })
+    }
+
     /// Newer events than Mike has seen.
     pub fn unread(&self) -> bool {
         self.last_seq > self.last_seen_seq
@@ -425,7 +440,10 @@ impl ThreadSummary {
     /// question, ask_secret), which runs out if he doesn't: first in the
     /// Inbox whatever order it's in (`sort_sections`).
     pub fn on_card(&self) -> bool {
-        self.needs_answer() && !self.is_archived()
+        match self.wait_state() {
+            Some(s) => s == "card" && !self.is_archived(),
+            None => self.needs_answer() && !self.is_archived(),
+        }
     }
     /// The last turn ended asking Mike for something and he hasn't done it
     /// all yet (Swift `waitingOnMike`, whose comments say why sub-agents
@@ -445,6 +463,9 @@ impl ThreadSummary {
     /// before landing showed Done, and Mike archived it with nothing landed.
     /// The runner only sends either while the thread is hibernating.
     pub fn waiting_on_work(&self) -> bool {
+        if let Some(s) = self.wait_state() {
+            return !self.is_archived() && matches!(s, "onThreads" | "landing" | "appRestart");
+        }
         if self.is_archived()
             || (self.snoozed_until.is_none() && self.snoozed_until_restart != Some(true))
         {
@@ -463,6 +484,9 @@ impl ThreadSummary {
     /// land, so still working. One Mike hibernated himself isn't. Gives the
     /// loose end's words ("1 commit on … isn't on main").
     pub fn waiting_to_land(&self) -> Option<String> {
+        if self.wait_state().is_some_and(|s| s != "landing") {
+            return None;
+        }
         let wake = self.wake_when.as_ref()?;
         // Watching for something to happen, not just a time in its words.
         if wake.get("agent").and_then(Value::as_bool) != Some(true)
@@ -488,6 +512,17 @@ impl ThreadSummary {
     /// cases are shared with the phone and the website (and tested below).
     pub fn urgency(&self) -> u8 {
         let broken = self.status == "error" || self.status == "stopped";
+        if let Some(s) = self.wait_state() {
+            // The runner's `urgencyOf`, from the state alone: a read thread
+            // still asking counts as much as an unread one (Mike, 23 Nov).
+            return match s {
+                "card" | "review" => 0,
+                "needsYou" if broken => 1,
+                "needsYou" | "limit" => 2,
+                "done" if broken => 3,
+                _ => 4,
+            };
+        }
         if self.review_waiting() || self.needs_answer() {
             0
         } else if self.needs_you {
@@ -711,6 +746,9 @@ pub fn needs_you_count<'a>(
             if t.is_starred() {
                 return t.snoozed_until_ms().is_none();
             }
+            if let Some(state) = t.wait_state() {
+                return wait_section(state) == "inbox";
+            }
             if t.snoozed(now_ms) {
                 return false;
             }
@@ -870,7 +908,50 @@ pub fn section_of(t: &ThreadSummary, now_ms: i64, wakes: &HashMap<String, Wake>)
         "archived"
     } else if t.is_starred() {
         "starred"
-    } else if t.snoozed(now_ms) && t.waiting_on_work() {
+    } else if let Some(state) = t.wait_state() {
+        wait_section(state)
+    } else {
+        section_of_legacy(t, now_ms, wakes)
+    }
+}
+
+/// The states a runner sends (runner/src/wait-state.ts `WAIT_STATES`).
+pub const WAIT_STATES: [&str; 14] = [
+    "working",
+    "job",
+    "onThreads",
+    "landing",
+    "appRestart",
+    "sending",
+    "card",
+    "review",
+    "needsYou",
+    "limit",
+    "done",
+    "scheduled",
+    "hibernating",
+    "archived",
+];
+
+/// The section a wait state is drawn under (the runner's `WAIT_STATES`).
+pub fn wait_section(state: &str) -> &'static str {
+    match state {
+        "working" | "job" | "onThreads" | "landing" | "appRestart" | "sending" => "running",
+        "scheduled" | "hibernating" => "hibernating",
+        "archived" => "archived",
+        _ => "inbox",
+    }
+}
+
+/// The app's own rule, for a summary with no wait state: a runner from
+/// before 23 Nov 2026, or a row this app has just changed itself. Goes once
+/// every runner sends one and optimistic changes set the state they guess.
+fn section_of_legacy(
+    t: &ThreadSummary,
+    now_ms: i64,
+    wakes: &HashMap<String, Wake>,
+) -> &'static str {
+    if t.snoozed(now_ms) && t.waiting_on_work() {
         "running"
     } else if t.snoozed(now_ms) {
         "hibernating"
@@ -908,6 +989,7 @@ pub fn as_sending(t: &ThreadSummary) -> ThreadSummary {
     }
     t.needs_you = false;
     t.needs = None;
+    t.wait_state = Some("sending".into());
     t
 }
 
@@ -1292,9 +1374,10 @@ mod tests {
         parse_ms("2026-11-06T12:00:00Z").unwrap()
     }
 
-    /// The runner's wait states (`shared/cases/wait-states.json`): until
-    /// this app draws the runner's `waitState`, its own rule puts every case
-    /// in the same section the runner's state does.
+    /// The runner's wait states (`shared/cases/wait-states.json`): drawn
+    /// from the state, every case goes in its section with its urgency and
+    /// badge; and with no state (an older runner), the app's own rule puts
+    /// it in the same section.
     #[test]
     fn sections_match_the_shared_wait_states() {
         let path = concat!(
@@ -1316,9 +1399,19 @@ mod tests {
                     },
                 );
             }
+            let section = case["section"].as_str().unwrap();
+            assert_eq!(section_of(&t, now, &wakes), section, "legacy: {name}");
+            let mut drawn = t.clone();
+            drawn.wait_state = case["state"].as_str().map(str::to_owned);
+            assert_eq!(section_of(&drawn, now, &HashMap::new()), section, "{name}");
             assert_eq!(
-                section_of(&t, now, &wakes),
-                case["section"].as_str().unwrap(),
+                u64::from(drawn.urgency()),
+                case["urgency"].as_u64().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                needs_you_count([&drawn], now) == 1,
+                case["counted"].as_bool().unwrap(),
                 "{name}"
             );
         }

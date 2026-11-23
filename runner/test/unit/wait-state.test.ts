@@ -4,9 +4,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { WAIT_MOVES, WAIT_STATES, allowed, autoArchive, sectionOf, waitStateOf, type WaitInputs, type WaitState } from '../../src/wait-state.ts';
+import { makeHarness, tmpDir } from '../helpers/fakes.ts';
+import { PATIENCE_MS } from '../helpers/patience.ts';
+import type { Schedule } from '../../src/protocol.ts';
+import { WAIT_MOVES, WAIT_STATES, allowed, autoArchive, countsForMike, sectionOf, urgencyOf, waitStateOf, type WaitInputs, type WaitState } from '../../src/wait-state.ts';
 
-type Case = { name: string; thread: Partial<WaitInputs> & { starredAt?: string }; scheduled?: boolean; state: WaitState; section: string };
+type Case = { name: string; thread: Partial<WaitInputs> & { starredAt?: string }; scheduled?: boolean; state: WaitState; section: string; urgency: number; counted: boolean };
 const file = JSON.parse(fs.readFileSync(new URL('../../../shared/cases/wait-states.json', import.meta.url), 'utf8')) as { now: string; cases: Case[] };
 const now = Date.parse(file.now);
 
@@ -16,6 +19,8 @@ for (const c of file.cases) {
     const state = waitStateOf(t, { now, scheduled: Boolean(c.scheduled) });
     assert.equal(state, c.state);
     assert.equal(sectionOf(state, Boolean(c.thread.starredAt)), c.section);
+    assert.equal(urgencyOf(state, t.status), c.urgency);
+    assert.equal(countsForMike(state, t.status), c.counted);
   });
 }
 
@@ -44,4 +49,42 @@ test('a few moves the table refuses', () => {
   assert.equal(allowed('done', 'card'), false, 'a card needs a turn');
   assert.equal(allowed('scheduled', 'landing'), false);
   assert.equal(allowed('hibernating', 'job'), false);
+});
+
+// ------------------------------------------------------------ on a real runner
+
+const END_TURN = 'mcp__threadbear__end_turn';
+
+async function until(check: () => boolean, what: string): Promise<void> {
+  const end = Date.now() + PATIENCE_MS;
+  while (!check()) {
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+test('a thread summary says what it waits on, from its first turn to done, and a schedule booked re-sends it', async () => {
+  const h = makeHarness(tmpDir());
+  let schedules: Schedule[] = [];
+  h.runner.schedulesFor = () => schedules;
+  const sent: { id: string; state?: string }[] = [];
+  h.runner.onNotification((n) => {
+    if (n.method === 'thread.updated') sent.push({ id: n.params.thread.id, state: n.params.thread.waitState });
+  });
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  assert.equal(thread.waitState, 'working');
+  const s = h.adapter.sessions.at(-1)!;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Done.');
+  s.result('completed');
+  await until(() => h.runner.get(thread.id).waitState === 'done', 'done');
+  sent.length = 0;
+  schedules = [{ id: 's1', title: 'Check in', text: 'look again', whenText: 'tomorrow', threadId: thread.id, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
+  h.runner.publish({ method: 'schedules.updated', params: { schedules } });
+  await until(() => sent.some((x) => x.id === thread.id && x.state === 'scheduled'), 'the re-sent summary');
+  // A change that moves nothing marks nothing to send.
+  await until(() => !h.runner.dirty.has(thread.id), 'the re-send flushed');
+  h.runner.publish({ method: 'schedules.updated', params: { schedules } });
+  assert.equal(h.runner.dirty.has(thread.id), false);
 });

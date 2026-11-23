@@ -540,15 +540,24 @@ final class AppModel {
         if commands[.star(id)].holdsChange, let on = commands.value(.star(id)) {
             t.starredAt = on == "on" ? (t.starredAt ?? now) : nil
         }
+        // Read here: it stops wanting Mike unless asks are still open, as
+        // the runner will say. Woken or brought back: the runner's wait
+        // state is from before, so the phone's own rule draws it until the
+        // runner sends the new one (InboxSections.legacySection).
         if commands[.markSeen(id)].holdsChange {
             t.unread = false
             t.needsYou = false
+            if t.wait == .needsYou, !t.waitingOnMike { t.waitState = WaitState.done.rawValue }
         }
         if commands[.wake(id)].holdsChange {
             t.snoozedUntil = nil
             t.snoozedUntilRestart = nil
+            t.waitState = nil
         }
-        if commands[.unarchive(id)].holdsChange { t.archivedAt = nil }
+        if commands[.unarchive(id)].holdsChange {
+            t.archivedAt = nil
+            t.waitState = nil
+        }
         if commands[.rename(id)].holdsChange, let title = commands.value(.rename(id)) { t.title = title }
         return t
     }

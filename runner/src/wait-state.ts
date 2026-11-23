@@ -169,3 +169,32 @@ export function sectionOf(state: WaitState, starred: boolean): Section | 'starre
   if (state !== 'archived' && starred) return 'starred';
   return WAIT_STATES[state].section;
 }
+
+// How much a thread wants Mike, lowest first, for the Inbox's Needs you
+// order: 0 stuck on him (a card, a review), 1 asking him after a failed or
+// stopped turn, 2 asking him (read or not: Mike, 23 Nov) or out of usage, 3
+// done after a failed or stopped turn, 4 done or not in the Inbox. `status`
+// is the summary's turn status.
+export function urgencyOf(state: WaitState, status: string): number {
+  const broken = status === 'error' || status === 'stopped';
+  switch (state) {
+    case 'card':
+    case 'review':
+      return 0;
+    case 'needsYou':
+      return broken ? 1 : 2;
+    case 'limit':
+      return 2;
+    case 'done':
+      return broken ? 3 : 4;
+    default:
+      return 4;
+  }
+}
+
+// Whether it counts in the badge and the Needs you filter: it wants Mike, and
+// it's in view (not archived, and not put away unless it's starred, which
+// is drawn as awake). Out of usage counts: Mike may want to switch logins (23 Nov).
+export function countsForMike(state: WaitState, status: string): boolean {
+  return urgencyOf(state, status) <= 2;
+}
