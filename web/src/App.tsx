@@ -17,7 +17,7 @@ import { splitEdited } from './draft';
 import { ReplyButton } from './reply-button';
 import { OutLink } from './link-confirm';
 import { CommandNote, useCommand } from './command-state';
-import { unqueued } from './command';
+import { STOP_HOLD_MS, unqueued } from './command';
 import { withFailed, withoutSent } from './composer-draft';
 import { previewOf, ShareControl, SharePage } from './share';
 import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar';
@@ -402,11 +402,21 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   const send = useMutation(api.phone.send);
   const interrupt = useMutation(api.phone.interrupt);
   const [text, setText] = useState('');
-  // Stop pressed: a spinner in its place until its runner has stopped the
-  // turn, or a note saying why it couldn't.
-  const stopCmd = useCommand(token);
+  // Stop pressed: a spinner in its place, taking no more clicks, until the
+  // turn is over (or STOP_HOLD_MS after its runner said done, as the iPhone
+  // lets go), or a note saying why it couldn't. The runner says done as soon
+  // as it has asked the CLI to stop, and the turn can run on for seconds
+  // after: settling then showed Stop again while it ran, and a second press
+  // sent a second interrupt.
+  const stopCmd = useCommand(token, { settleMs: STOP_HOLD_MS });
   const stop = () => void stopCmd.run(() => interrupt({ token, threadId: t.threadId }), undefined);
   // Picks on the card of asks: ask index to choice index, for one card.
+  const running = busy(t);
+  const stopOver = stopCmd.over;
+  useEffect(() => {
+    if (!running) stopOver();
+  }, [running, stopOver]);
+  const stopping = stopCmd.spinning || stopCmd.state.kind === 'done';
   const [picks, setPicks] = useState<Draft['picks']>({ by: {} });
   const [ticked, setTicked] = useState<Draft['ticked']>({ set: new Set() });
   // The composer keeps what's typed and picked until the backend has the
@@ -604,7 +614,7 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
             // Stop only while nothing's typed, as on the Mac: a message
             // typed during a turn goes into it.
             <button type="button" className="send" disabled={stopCmd.busy} onClick={stop} aria-label={stopCmd.busy ? 'Stopping' : 'Stop'} title={stopCmd.busy ? 'Stopping' : 'Stop'}>
-              {stopCmd.spinning ? <span className="spinner" /> : <Icon.Stop />}
+              {stopping ? <span className="spinner" /> : <Icon.Stop />}
             </button>
           ) : (
             <button className="send" disabled={!ready || holding} aria-label={holding ? 'Sending' : 'Send'} title={holding ? 'Sending' : 'Send'}>
