@@ -15,6 +15,10 @@
 #                                     once everything in it is on main: back
 #                                     in the pool for the next thread, and its
 #                                     borrow branch deleted
+#   ./borrow-worktree.sh --help       this list, borrowing nothing
+#
+# Anything else is refused, borrowing nothing: on 23 Nov `--help`, which
+# it didn't know then, borrowed a slot.
 #
 # A borrow nobody gives back is taken back by the runner once it's safe
 # (runner/src/borrows.ts): clean, everything on main, nothing running in
@@ -36,6 +40,16 @@
 # and on 23 Nov the Canvas thread's next turn committed on the branch of the
 # borrower slot-32 went to next.
 set -euo pipefail
+
+# The usage lines above, from the first `./borrow-worktree.sh` to the `#` after them.
+usage() { sed -n '/^#   \.\/borrow-worktree\.sh/,/^#$/{/^#$/d;s/^# //;p;}' "${BASH_SOURCE[0]}"; }
+refuse() { echo "borrow-worktree.sh: $1" >&2; usage >&2; exit 2; }
+case "${1:-}" in
+  -h | --help) usage; exit 0 ;;
+  --give-back) [ $# -le 2 ] || refuse "--give-back takes one folder" ;;
+  "") [ $# -eq 0 ] || refuse "an empty argument" ;;
+  *) refuse "unknown argument: $1" ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAIN="$(git -C "$ROOT" worktree list --porcelain | awk '

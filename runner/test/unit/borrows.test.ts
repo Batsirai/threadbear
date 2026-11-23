@@ -4,6 +4,7 @@
 // borrow one to check in, so main wasn't pushed.
 import { test as nodeTest } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { BORROW_FILE, readBorrower, sweepBorrows, type SweepOptions } from '../../src/borrows.ts';
@@ -38,6 +39,32 @@ test('borrow-worktree.sh records who borrowed, and --give-back clears it', () =>
   const a = admin(wt);
   assert.match(sh(main, `./borrow-worktree.sh --give-back ${wt}`), /is a spare again/);
   assert.ok(!fs.existsSync(path.join(a, BORROW_FILE)));
+});
+
+// On 23 Nov `./borrow-worktree.sh --help` borrowed a slot: it read no
+// argument but --give-back.
+test('borrow-worktree.sh --help prints its usage and borrows nothing; any other argument is refused, borrowing nothing', () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  const worktrees = () => sh(main, 'git worktree list --porcelain | grep -c ^worktree');
+  const before = worktrees();
+  for (const flag of ['--help', '-h']) {
+    const r = spawnSync('bash', ['./borrow-worktree.sh', flag], { cwd: main, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /^ {2}\.\/borrow-worktree\.sh {14}prints the worktree's path/);
+    assert.match(r.stdout, /--give-back DIR\n/);
+    assert.doesNotMatch(r.stdout, /^#/m);
+  }
+  for (const args of [['--hepl'], ['-x'], ['help'], [''], ['--give-back', 'a', 'b']]) {
+    const r = spawnSync('bash', ['./borrow-worktree.sh', ...args], { cwd: main, encoding: 'utf8' });
+    assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout}`);
+    assert.match(r.stderr, /^borrow-worktree\.sh: /);
+    assert.match(r.stderr, /--give-back DIR/, 'with the usage');
+    assert.equal(r.stdout, '');
+  }
+  assert.equal(worktrees(), before);
+  assert.ok(!fs.existsSync(path.join(root, 'proj-threads')));
+  assert.equal(sh(main, 'git branch --list "thread/borrow-*"'), '');
 });
 
 test('borrow-worktree.sh has no cap on slots: it takes the first free one past any number', () => {
