@@ -14,6 +14,8 @@ Feature: Quietly archived threads
 
   @sidebar.quiet @swift-pending
   Scenario: A quietly archived row offers Should Have Shown Me
+    Given the "archived" section is unfolded
+    And the "inbox" section is folded away
     When I right-click the row "Morning brief"
     Then the row's menu offers "Should Have Shown Me | Unarchive"
 
