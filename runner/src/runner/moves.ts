@@ -19,7 +19,7 @@ import { normaliseRecord, type ThreadRecord } from '../store.ts';
 import type { RunnerPart } from './part.ts';
 import { providerName } from '../providers.ts';
 import { paths } from '../config.ts';
-import { isDirectory } from '../fsutil.ts';
+import { atomicWriteFileSync, isDirectory } from '../fsutil.ts';
 import { readTree, writeTree, type PackEntry } from '../move-pack.ts';
 import { changedFiles, cloneRepo, cloneableUrl, originUrl, packGit, repoKey, repoTop, unpackGit, withoutCredentials, type GitMeta } from '../move-git.ts';
 import { moveInfoFrom, movedSchedules, type MoveInfo, type MovePlan, type MovePreview, type MoveRow, type MovedSchedule, type ThreadMoving } from '../moves.ts';
@@ -37,8 +37,10 @@ import { writeSlot } from '../slot.ts';
 
 // What T placed for a move, so adopting after a restart and throwing it
 // away after a failure both know (<home>/moves/<moveId>/placed.json).
-// whole: placeMove got to the end, so all that's left is the claim (movePlaced).
-type Placed = { whole?: true; cwd: string; worktree?: WorktreeRecord; patchFile?: string; patchName?: string; transcript: string[]; leftBehind: string[]; fromName: string; schedules?: unknown[]; gitTips?: string[] };
+// whole: placeMove got to the end, so all that's left is the claim
+// (movePlaced); expect: the preview binding of the row it placed, so a later
+// row can only resume the same move as it was checked.
+type Placed = { whole?: true; expect?: string; cwd: string; worktree?: WorktreeRecord; patchFile?: string; patchName?: string; transcript: string[]; leftBehind: string[]; fromName: string; schedules?: unknown[]; gitTips?: string[] };
 
 // A moved thread's old folder is kept this long on S, in case.
 const KEPT_MS = 7 * 24 * 60 * 60_000;
@@ -1035,7 +1037,9 @@ export const movesPart = {
     await this.discardMove(row);
     fs.mkdirSync(stage, { recursive: true, mode: 0o700 });
     const placed: Placed = { cwd: plan.cwd, transcript: [], leftBehind: [...plan.leftBehind], fromName: this.moveRunnerName(row.from) };
-    const save = () => fs.writeFileSync(path.join(stage, 'placed.json'), JSON.stringify(placed));
+    // Whole or not at all: a write cut short would lose the only record of
+    // what to undo (Codex's review, 23 Nov 2026).
+    const save = () => atomicWriteFileSync(path.join(stage, 'placed.json'), JSON.stringify(placed));
     try {
       writeTree(entries, 'thread', path.join(stage, 'thread'));
       const recFile = path.join(stage, 'thread', 'thread.json');
@@ -1155,6 +1159,7 @@ export const movesPart = {
       writeSlot(rec, { kind: 'arrived', ...(placed.worktree ? { worktree: placed.worktree } : {}) }, Date.now());
       fs.writeFileSync(recFile, JSON.stringify(rec, null, 2));
       placed.whole = true;
+      if (row.expect) placed.expect = row.expect;
       save();
     } catch (e) {
       await this.discardMove(row);
@@ -1167,10 +1172,18 @@ export const movesPart = {
   // (moves.ts). Placing it again would empty its staging folder, and a
   // worktree that came with git work (which cleanUpWorktree won't remove)
   // would then block the new one (Grok's review, 23 Nov 2026).
+  // Only for the row it was placed from: the same preview binding (which
+  // names the thread, both runners and the plan), and the staged record the
+  // same thread, so a row the backend changed since can't claim what's
+  // staged (Codex's review, 23 Nov 2026). Otherwise it's placed afresh,
+  // with every check.
   movePlaced(this: Runner, row: MoveRow): boolean {
     try {
-      const placed = JSON.parse(fs.readFileSync(path.join(stageOf(this.cfg.home, row.moveId), 'placed.json'), 'utf8')) as Placed;
-      return placed.whole === true && !this.threads.has(row.threadId);
+      const stage = stageOf(this.cfg.home, row.moveId);
+      const placed = JSON.parse(fs.readFileSync(path.join(stage, 'placed.json'), 'utf8')) as Placed;
+      if (placed.whole !== true || !placed.expect || placed.expect !== row.expect || this.threads.has(row.threadId)) return false;
+      const rec = JSON.parse(fs.readFileSync(path.join(stage, 'thread', 'thread.json'), 'utf8')) as { id?: unknown };
+      return rec.id === row.threadId;
     } catch {
       return false;
     }

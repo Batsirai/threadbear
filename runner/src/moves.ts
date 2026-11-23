@@ -657,7 +657,11 @@ export class Moves {
         const backend = this.backend();
         // Placed already, its claim tried again (step), or placed whole
         // before this runner restarted: only the claim is left.
-        if (this.placed.has(row.moveId) || host.placed?.(row)) {
+        // The main Mac's runner still has to have started it (vouches),
+        // as when it was placed; one restarted since places afresh and
+        // fails there, as before.
+        const resumed = !this.placed.has(row.moveId) && !!host.placed?.(row) && (!this.d.vouches || (!!row.expect && this.d.vouches(row.expect, row.moveId)));
+        if (this.placed.has(row.moveId) || resumed) {
           this.placed.add(row.moveId);
           await backend.call('moveClaim', { moveId: row.moveId });
           return;

@@ -624,7 +624,7 @@ test('a move placed whole is known after a restart, and placing again after a pa
   s.adapter.last.init();
   s.adapter.last.result('completed');
   await tick();
-  const r = row(id, { info: (await s.runner.describeForMove(id, 0))! });
+  const r = row(id, { info: (await s.runner.describeForMove(id, 0))!, expect: 'binding-1' });
   const plan = await t.runner.planMove(r);
   assert.ok(!('problem' in plan));
   r.plan = plan as Exclude<typeof plan, { problem: string }>;
@@ -632,6 +632,8 @@ test('a move placed whole is known after a restart, and placing again after a pa
   assert.equal(t.runner.movePlaced(r), false, 'nothing placed yet');
   await t.runner.placeMove(r, entries);
   assert.equal(t.runner.movePlaced(r), true, 'placed whole: a restarted runner only asks for the claim');
+  assert.equal(t.runner.movePlaced({ ...r, expect: 'binding-2' }), false, 'a row whose binding changed places afresh');
+  assert.equal(t.runner.movePlaced({ ...r, threadId: 'f'.repeat(36) }), false, 'nor one naming another thread');
   // An earlier placing that stopped partway, and what it left, as its
   // placed.json records it.
   const placedFile = path.join(tHome, 'moves', r.moveId, 'placed.json');
