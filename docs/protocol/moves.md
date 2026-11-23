@@ -46,7 +46,11 @@ being updated" (a deploy's stepping stone, for a minute) is asked again,
 only that call, rather than failing the move: 20 seconds later, then
 longer each time, up to 5 minutes, for about 20 minutes in all. T's adopt
 and `moveDone` at `claimed`, where there's nothing to fail, are tried again
-the same way whatever went wrong. Older runners failed the move, or left
+the same way whatever went wrong. So is T's `moveClaim` once it has
+placed the thread (never the placing): a claim whose reply was lost may
+have gone through, and a `claimed` move can't fail; `moveClaim` answers a
+claimed move as done, and one that never goes through ends at the thirty
+minutes. Older runners failed the move, or left
 it `claimed` until T restarted, so while the stepping stone is up
 `moveDone` and `moveFailed` still go through as they did before the
 machine.

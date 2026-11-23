@@ -405,6 +405,9 @@ export class Moves {
   // back from its end, so it's left alone (security review, 17 Nov 2026: a
   // cancelled move's row put back at unpacking).
   private ended = new Set<string>();
+  // Moves whose thread T has placed (asTarget, unpacking): from then on only
+  // the claim is asked again, never the thread placed twice.
+  private placed = new Set<string>();
   private stop?: () => void;
   private idleTimer?: { cancel(): void };
   // Steps to try again (see `retry`), by move, with how many tries so far.
@@ -470,8 +473,10 @@ export class Moves {
     const me = this.d.self();
     const key = `${row.moveId}:${row.state}`;
     if (this.done.has(key)) return;
-    if (ENDED.includes(row.state)) this.ended.add(row.moveId);
-    else if (this.ended.has(row.moveId)) return;
+    if (ENDED.includes(row.state)) {
+      this.ended.add(row.moveId);
+      this.placed.delete(row.moveId);
+    } else if (this.ended.has(row.moveId)) return;
     // A step is running: the row it's on may be stale by the time it ends
     // (cancelled while packing), and the backend says nothing more unless
     // the row changes again, so the newest one goes once it does.
@@ -494,7 +499,15 @@ export class Moves {
       // nothing to fail, and a move left claimed would keep the thread from
       // ever moving again: the same step again shortly (adopt can run
       // again), not the move given up.
-      if (row.state === 'claimed') {
+      // T's claim not going through after it placed the thread: asked again,
+      // not the move failed. Its reply may only have been lost (a POST
+      // timeout, a reset) with the claim made, and a claimed move can't
+      // fail: taken as ended here, its claimed row was dropped and the
+      // thread was on neither runner until T restarted (review, 23 Nov
+      // 2026). moveClaim answers a claimed move as done, so asking again is
+      // safe either way, and one that never goes through ends at the
+      // backend's thirty minutes (TOO_SLOW), whose failed row discards it.
+      if (row.state === 'claimed' || (row.state === 'unpacking' && this.placed.has(row.moveId))) {
         this.d.log.warn('a move step will be tried again', { moveId: row.moveId, state: row.state, error: note });
         this.retry(row);
         return;
@@ -638,12 +651,17 @@ export class Moves {
         return;
       }
       case 'unpacking': {
+        const backend = this.backend();
+        // Placed already, its claim tried again (step).
+        if (this.placed.has(row.moveId)) {
+          await backend.call('moveClaim', { moveId: row.moveId });
+          return;
+        }
         // Again before anything comes: placing plans afresh from the same
         // description (runner/moves.ts placeMove), never from the row's plan.
         const plan = await host.plan(row);
         if ('problem' in plan) throw new Error(plan.problem);
         this.mustMatchPreview(row, plan);
-        const backend = this.backend();
         const urls = (await backend.call('moveChunks', { moveId: row.moveId })) as string[];
         const parts: Buffer[] = [];
         for (const url of urls) parts.push(await backend.download(url));
@@ -653,6 +671,7 @@ export class Moves {
         // Cancelled while it downloaded: nothing placed.
         if (this.ended.has(row.moveId)) throw new Error('The move ended while its thread was on its way.');
         await host.place(row, entries);
+        this.placed.add(row.moveId);
         await backend.call('moveClaim', { moveId: row.moveId });
         return;
       }
