@@ -18,7 +18,8 @@
 # still waiting, and it only runs when something it checks changed (the paths
 # below: the runner, Convex, the website, the relay and scripts/ that the
 # runner's tests cover, check.sh that runs them, the root packages, and
-# this file).
+# this file). The runner tests that guard files outside these paths
+# (workflows, desktop/, app/, ios/) run on every push in guards.yml too.
 #
 # tb land holds a landing that changes what this checks while its last run
 # on main failed (runner/src/land-gate.ts, docs/thread-worktrees.md "Red on

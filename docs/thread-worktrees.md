@@ -222,7 +222,10 @@ and the Xcode 26 builds (`xcode-26.yml`) hold too since 19 Nov: `runner.yml`
 was red on Windows from 16 to 19 Nov, and as the daily release waits for
 every workflow to pass on one commit, none went out. And the TypeScript
 lint (`lint.yml`) since 22 Nov, after a merged PR left main failing
-check.sh's lint and ten landings waited behind it.
+check.sh's lint and ten landings waited behind it. And the repo guards
+(`guards.yml`) since 23 Nov: the runner's tests of files outside its own
+paths (the workflows' pins, desktop.yml's paths, the frozen Swift app's
+folders, shared/'s copies), on every push, so they hold every landing.
 
 A workflow opts in with a line of its own in its file:
 
