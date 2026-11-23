@@ -513,6 +513,33 @@ test("a branch's next tb land takes over from its carried entry", async () => {
   assert.ok(fs.existsSync(path.join(main, 'b.txt')));
 });
 
+// Rewritten since, it asks for something no check has seen: it earns its
+// own mark (Codex's review).
+test("a branch's next tb land with something new doesn't take over its carried entry's mark", async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [b] = branches(main, ['b']);
+  const base = sh(main, 'git rev-parse main');
+  const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check: 'true', checkFrom: '' });
+  writeEntry(common, { ...old, inCheckAt: Date.now() });
+  deadPid(common, old.id);
+  commit(b.path, { 'more.txt': 'more\n' }, 'More');
+  const drop = await lockHeld(root, common);
+  const c = capture();
+  let landing: Promise<number> | undefined;
+  try {
+    landing = land({ ...b, check: 'true' }, c.opts);
+    await until(() => c.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
+    const now = waiting(common);
+    assert.equal(now.length, 1);
+    assert.notEqual(now[0].id, old.id);
+    assert.equal(now[0].inCheckAt, undefined);
+  } finally {
+    await drop();
+  }
+  assert.equal(await landing, 0, c.err.join('\n'));
+});
+
 // One in the check running now is left to that check, which may land or
 // refuse it (Gemini's review).
 test("a branch's next tb land leaves its carried entry alone while that one is in the running check", async () => {

@@ -536,7 +536,14 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
         for (const other of waiting(common)) {
           if (other.id === entry.id || other.branch !== t.branch || inRunning.includes(other.id) || (await ownerWaiting(common, other))) continue;
           const mine = readEntry(common, entry.id);
-          if (mine && isCarried(other)) {
+          // Only when it asks for just what was checked: the same commits,
+          // as they were or rebased (stillAsked), and nothing more. A
+          // rewritten branch, or more on top, hasn't been in a check, so
+          // it earns its own mark (Codex's review).
+          const count = async (e: QueueEntry): Promise<string | undefined> => gitOut(t.path, ['rev-list', '--count', `${e.base}..${e.commit}`]);
+          const same = !!mine && (mine.commit === other.commit ||
+            ((await stillAsked(t.path, other)) && (await count(mine)) === (await count(other))));
+          if (mine && same && isCarried(other)) {
             const kept = { inCheckAt: other.inCheckAt, limit: other.limit, limitAt: other.limitAt, ordinaryAt: other.ordinaryAt };
             entry = { ...mine, ...Object.fromEntries(Object.entries(kept).filter(([, v]) => v !== undefined)) };
             writeEntry(common, entry);
