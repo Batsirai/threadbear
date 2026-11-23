@@ -2429,8 +2429,23 @@ export class Runner {
     // work. Asked after every wait above (it may have moved, or the slot
     // been lent meanwhile), and a live CLI there goes too: a give-back in its
     // own session, a Codex session moved in with setCwd.
-    let lent = !this.leavesRemovedWorktree(rec) && this.slotFolderOf(rec) ? await this.lentFolder(rec).catch(() => undefined) : undefined;
+    const inSlot = !this.leavesRemovedWorktree(rec) && Boolean(this.slotFolderOf(rec));
+    let lent = inSlot ? await this.lentFolder(rec).catch(() => undefined) : undefined;
     if (gone()) return;
+    // Its look was taken before that wait: looked at again.
+    if (inSlot && forStart && !lent) {
+      forStart = await look();
+      if (forStart === 'gone') return;
+      if (forStart && !looksCover(forStart, rec, true)) forStart = undefined;
+      if (gone()) return;
+    }
+    // A slash command would reach the CLI as words with the move's notice in
+    // front of it, as a thread brought back to a removed worktree's would
+    // (runCommandPlan): it waits for a message, which makes the move.
+    if (lent && command && rt.turn) {
+      this.runCommandPlan(st, msg, { kind: 'note', text: `This thread's folder ${lent.slot} ${lent.went}, so it moves to a fresh worktree with your next message. Send one first, then ${msg.text.trim().split(/\s/)[0]} again.` });
+      return;
+    }
     if (lent && runningSession(rt)) {
       this.releaseSession(st);
       while (rt.closing) await rt.closing;
@@ -2462,10 +2477,7 @@ export class Runner {
       const left = this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
     }
-    // Not in front of a slash command, which it would turn into words (one
-    // reaches here when its thread had to leave a lent slot): the notice
-    // waits on the record for the next message.
-    if (!rt.session && typeof rec.agentNotice === 'string' && !command) {
+    if (!rt.session && typeof rec.agentNotice === 'string') {
       text = `${rec.agentNotice}\n\n${text}`;
       delete rec.agentNotice;
       this.markDirty(st);

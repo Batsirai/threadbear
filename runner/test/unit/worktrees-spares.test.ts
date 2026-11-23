@@ -573,6 +573,11 @@ test('a thread brought back to a slot it moved into, lent to another borrower si
   const theirs = sh(other, 'git rev-parse --abbrev-ref HEAD');
   h.runner.update({ threadId: t.id, archived: false });
   const before = h.adapter.sessions.length;
+  // A slash command waits for a message, which makes the move: in front of
+  // the notice it would reach the agent as words.
+  h.runner.send(t.id, '/compact');
+  await until(() => notes(h, t.id).some((n) => n.includes('Send one first, then /compact again')), 'the note');
+  assert.equal(h.adapter.sessions.length, before, 'no CLI for it in the lent slot');
   h.runner.send(t.id, 'More please');
   await until(() => h.adapter.sessions.length === before + 1, 'its next CLI');
   const w = h.runner.get(t.id).worktree!;
