@@ -18,6 +18,7 @@ import { ReplyButton } from './reply-button';
 import { OutLink } from './link-confirm';
 import { CommandNote, useCommand } from './command-state';
 import { STOP_HOLD_MS, unqueued } from './command';
+import { holdStop, releaseStop, stopHeldFor } from './stop-hold';
 import { withFailed, withoutSent } from './composer-draft';
 import { previewOf, ShareControl, SharePage } from './share';
 import { busy, Lists, ResizeHandle, type Row, useSidebarWidth } from './sidebar';
@@ -409,14 +410,36 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   // after: settling then showed Stop again while it ran, and a second press
   // sent a second interrupt.
   const stopCmd = useCommand(token, { settleMs: STOP_HOLD_MS });
-  const stop = () => void stopCmd.run(() => interrupt({ token, threadId: t.threadId }), undefined);
-  // Picks on the card of asks: ask index to choice index, for one card.
-  const running = busy(t);
+  const threadId = t.threadId;
+  const stop = () => {
+    holdStop(threadId, Date.now());
+    void stopCmd.run(() => interrupt({ token, threadId }), undefined);
+  };
+  // A Stop pressed before this page was made (Mike opened another thread and
+  // came back) still holds, for what's left of it (stop-hold.ts).
+  const [carried, setCarried] = useState(() => stopHeldFor(threadId, Date.now()));
+  useEffect(() => {
+    if (!carried) return;
+    const timer = setTimeout(() => setCarried(0), carried);
+    return () => clearTimeout(timer);
+  }, [carried]);
+  const stopDone = stopCmd.state.kind === 'done';
+  useEffect(() => {
+    if (stopDone) holdStop(threadId, Date.now());
+  }, [stopDone, threadId]);
+  // Over once the turn has ended, not while it waits on a card: the runner's
+  // interrupt takes the card away and the same turn runs on (Codex's review).
+  const turnOn = busy(t) || t.status === 'waiting';
   const stopOver = stopCmd.over;
   useEffect(() => {
-    if (!running) stopOver();
-  }, [running, stopOver]);
-  const stopping = stopCmd.spinning || stopCmd.state.kind === 'done';
+    if (turnOn) return;
+    stopOver();
+    releaseStop(threadId);
+    setCarried(0);
+  }, [turnOn, stopOver, threadId]);
+  const stopping = stopCmd.spinning || stopDone || (carried > 0 && stopCmd.state.kind === 'idle');
+  const stopLocked = stopCmd.busy || (carried > 0 && stopCmd.state.kind === 'idle');
+  // Picks on the card of asks: ask index to choice index, for one card.
   const [picks, setPicks] = useState<Draft['picks']>({ by: {} });
   const [ticked, setTicked] = useState<Draft['ticked']>({ set: new Set() });
   // The composer keeps what's typed and picked until the backend has the
@@ -613,7 +636,7 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
           {busy(t) && !ready ? (
             // Stop only while nothing's typed, as on the Mac: a message
             // typed during a turn goes into it.
-            <button type="button" className="send" disabled={stopCmd.busy} onClick={stop} aria-label={stopCmd.busy ? 'Stopping' : 'Stop'} title={stopCmd.busy ? 'Stopping' : 'Stop'}>
+            <button type="button" className="send" disabled={stopLocked} onClick={stop} aria-label={stopLocked ? 'Stopping' : 'Stop'} title={stopLocked ? 'Stopping' : 'Stop'}>
               {stopping ? <span className="spinner" /> : <Icon.Stop />}
             </button>
           ) : (

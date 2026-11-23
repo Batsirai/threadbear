@@ -224,5 +224,19 @@ test('the turn ending before the runner answers lets Stop go too, but a refusal 
 test("the website's Stop holds for its turn: STOP_HOLD_MS and over, wired in the Dock", () => {
   const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
   assert.match(app, /useCommand\(token, \{ settleMs: STOP_HOLD_MS \}\)/);
-  assert.match(app, /if \(!running\) stopOver\(\)/);
+  assert.match(app, /if \(turnOn\) return;\s*stopOver\(\);/);
+  // A card waiting on Mike mid-turn isn't the turn's end.
+  assert.match(app, /const turnOn = busy\(t\) \|\| t\.status === 'waiting'/);
+});
+
+test("a Stop pressed before the thread's page was made again still holds, until it runs out or the turn ends", async () => {
+  const { holdStop, releaseStop, stopHeldFor } = await import('./stop-hold.ts');
+  holdStop('t1', 1000);
+  assert.equal(stopHeldFor('t1', 1000), STOP_HOLD_MS);
+  assert.equal(stopHeldFor('t1', 6000), STOP_HOLD_MS - 5000, 'opened again 5 s later: 5 s left');
+  assert.equal(stopHeldFor('t2', 6000), 0, 'another thread has none');
+  assert.equal(stopHeldFor('t1', 1000 + STOP_HOLD_MS), 0, 'run out');
+  holdStop('t1', 0);
+  releaseStop('t1');
+  assert.equal(stopHeldFor('t1', 1), 0, 'the turn ended');
 });
