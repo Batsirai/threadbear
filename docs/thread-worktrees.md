@@ -331,7 +331,16 @@ their own.
   red, main's checkout was busy, another's branch was rewritten) never
   loses it: on 23 Nov one killed by its agent's two-hour limit was in a
   group that passed and was then held for red, and the next holder landed
-  the rest without it.
+  the rest without it. Its branch's next `tb land` takes its place in the
+  line (one entry per branch). Commits count as the same across a rebase
+  only with the same author, message and change (not git's patch id,
+  which ignores whitespace), and a moved branch with a commit made empty
+  on purpose counts as rewritten, as its next rebase would land that
+  commit again. One that leaves the line after a holder stacked it, before
+  the check starts, is left out and the rest stacked again. Older `tb`s
+  (before 23 Nov) don't know `inCheckAt` and drop such an entry when they
+  read the line, so until every queued landing runs this version, one may
+  still be lost that way.
 - A tb killed during a group check leaves its worktree detached at the
   stack (its branch is untouched) and a marker in the worktree's git dir;
   the next `tb land` there checks the branch out again. Commits made on

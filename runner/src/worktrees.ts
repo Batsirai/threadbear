@@ -523,6 +523,14 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
         });
         entryHeld = await holdLock(entryLockFile(common, entry.id), false);
         if (!entryHeld) throw new Error('entry lock taken');
+        // An earlier tb land of this branch whose tb has gone, carried since
+        // a check of it started, is this one's now: one entry for a branch,
+        // so it can't land twice or be checked after this one failed
+        // (Gemini's review). One in a check running now may still land:
+        // this one's recoverLandedFor or rebase then finds it on main.
+        for (const other of waiting(common)) {
+          if (other.id !== entry.id && other.branch === t.branch && !(await ownerWaiting(common, other))) leaveQueue(common, other.id);
+        }
       } catch {
         if (entry) leaveQueue(common, entry.id);
         entry = undefined; // it still lands, by itself
@@ -541,9 +549,10 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // whose group has landed has: it says which (Codex's review).
     const stopped = (signal: NodeJS.Signals): void => {
       const now = entry && readEntry(common, entry.id);
-      const inCheck = !!now && (now.inCheckAt !== undefined || !!readRunning(common)?.entries?.includes(now.id));
+      const running = !!now && !now.result && !now.refused && !now.alone && !!readRunning(common)?.entries?.includes(now.id);
+      const inCheck = !!now && (isCarried(now) || running);
       // Marked here too, in case the holder hasn't yet.
-      if (now && inCheck && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
+      if (now && running && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
       const said = now?.result
         ? `it had already landed with its group (${now.result.landed.slice(0, 9)} on ${MAIN}); its next tb land moves ${t.branch} there.`
         : inCheck
@@ -563,7 +572,14 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     } finally {
       for (const s of signals) process.removeListener(s, stopped);
     }
-    if (release && opts.onLocked && !opts.onLocked()) {
+    // Its tb gone just as the lock came: it stops before its check, unless
+    // a check of it has already started (carried) or it has landed, which
+    // go on as they would have (Gemini's review).
+    const goesOn = (): boolean => {
+      const now = entry && readEntry(common, entry.id);
+      return !!now && (!!now.result || isCarried(now));
+    };
+    if (release && opts.onLocked && !opts.onLocked() && !goesOn()) {
       await release();
       err(`tb land was stopped just as it got the landing lock, before its check: ${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin.`);
       return 129;
@@ -708,22 +724,28 @@ async function askedCommits(cwd: string, e: QueueEntry): Promise<string[] | unde
 // commits of `range`.
 async function madeAgainIn(cwd: string, asked: string[], range: string): Promise<boolean> {
   if (!asked.length) return false;
-  const list = await gitOut(cwd, ['log', '--no-merges', '--format=%H %s', range]);
-  if (list === undefined) return false;
+  // Subjects as git prints them, untrimmed: only commits with one of the
+  // asked ones are read in full.
+  const listed = await git(cwd, ['log', '--no-merges', '--format=%H%x00%s', range]);
+  if (!listed.ok) return false;
+  const subjects = new Map<string, string>();
+  for (const c of asked) {
+    const s = await git(cwd, ['log', '-1', '--format=%s', c]);
+    if (!s.ok) return false;
+    subjects.set(c, s.stdout.replace(/\n$/, ''));
+  }
+  const wantedSubjects = new Set(subjects.values());
+  const candidates = listed.stdout.split('\n').map((l) => l.split('\0')).filter(([h, sub]) => h && sub !== undefined && wantedSubjects.has(sub)).map(([h]) => h);
+  if (candidates.length < asked.length) return false;
   const wanted = new Map<string, number>();
   for (const c of asked) {
     const made = await asMade(cwd, c);
     if (made === undefined) return false;
     wanted.set(made, (wanted.get(made) ?? 0) + 1);
   }
-  // Only those with a subject among the asked ones are read in full.
-  const subjects = new Set<string>();
-  for (const c of asked) subjects.add((await gitOut(cwd, ['log', '-1', '--format=%s', c])) ?? '');
   let left = asked.length;
-  for (const line of list.split('\n')) {
-    const m = /^([0-9a-f]{40,64}) (.*)$/.exec(line);
-    if (!m || !subjects.has(m[2])) continue;
-    const made = await asMade(cwd, m[1]);
+  for (const c of candidates) {
+    const made = await asMade(cwd, c);
     const n = made === undefined ? 0 : wanted.get(made) ?? 0;
     if (!n) continue;
     wanted.set(made!, n - 1);
@@ -742,7 +764,7 @@ async function landedOn(cwd: string, e: QueueEntry, main: string): Promise<boole
 
 // Whether a landing whose tb has gone still asks for what it asked to land:
 // its branch has those commits, as they were, with more on top, or made
-// again on `main` as they were (asMade). On 23 Nov two passing group checks
+// again as they were (asMade). On 23 Nov two passing group checks
 // landed nothing because a member's agent, its tb killed, ran tb land
 // again, and that rebased the branch before it waited: the same commits on
 // a newer main. One whose branch was rewritten without them (amended,
@@ -750,17 +772,22 @@ async function landedOn(cwd: string, e: QueueEntry, main: string): Promise<boole
 // empty on purpose: its next tb land keeps that commit, as rebase does,
 // and would land it again (Codex's review). Then it's checked again
 // without, as before.
-async function stillAsked(cwd: string, e: QueueEntry, main: string): Promise<boolean> {
+async function stillAsked(cwd: string, e: QueueEntry): Promise<boolean> {
   const tip = await gitOut(cwd, ['rev-parse', '--verify', '-q', `refs/heads/${e.branch}`]);
   if (!tip || !/^[0-9a-f]{40,64}$/.test(tip)) return false;
-  if (tip === e.commit || (await git(cwd, ['merge-base', '--is-ancestor', e.commit, tip])).ok) return true;
+  if (tip === e.commit) return true;
   const asked = await askedCommits(cwd, e);
   if (!asked?.length) return false;
+  // Moved at all, even with only more on top: its next tb land's rebase
+  // keeps an empty commit, and no note finds the new tip (Codex's review).
   for (const c of asked) {
     const tree = await gitOut(cwd, ['rev-parse', `${c}^{tree}`]);
     if (!tree || tree === (await gitOut(cwd, ['rev-parse', `${c}^^{tree}`]))) return false;
   }
-  return madeAgainIn(cwd, asked, `${main}..${tip}`);
+  if ((await git(cwd, ['merge-base', '--is-ancestor', e.commit, tip])).ok) return true;
+  // From its base, so one of them already on main (the branch rebased
+  // onto it since) still counts (Gemini's review).
+  return madeAgainIn(cwd, asked, `${e.base}..${tip}`);
 }
 
 // A group check runs with HEAD detached at the stack (landLocked). This
@@ -1449,11 +1476,12 @@ async function stackWaiting(
     // stacked as it asked, while its branch still has those commits.
     // Dropped once it doesn't, or once they're on main by another way (its
     // next tb land landed them).
-    if (await ownerWaiting(common, e)) {
+    const asking = await ownerWaiting(common, e);
+    if (asking) {
       if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
     } else {
       if (!isCarried(e)) continue;
-      if (!(await stillAsked(t.path, e, main)) || (await landedOn(t.path, e, main))) {
+      if (!(await stillAsked(t.path, e)) || (await landedOn(t.path, e, main))) {
         leaveQueue(common, e.id);
         continue;
       }
@@ -1461,7 +1489,12 @@ async function stackWaiting(
     if (!(await git(t.path, ['merge-base', '--is-ancestor', e.base, main])).ok) continue;
     if ((await gitOut(t.path, ['rev-list', '--merges', `${e.base}..${e.commit}`])) !== '') continue;
     const next = await replayFormatted(t.path, e.base, e.commit, tip, main);
-    if (!next || next === tip) continue;
+    if (!next || next === tip) {
+      // A carried one that won't go onto main itself (a conflict, or
+      // nothing left of it) never will: nobody's tb would hear, so out.
+      if (!asking && tip === main) leaveQueue(common, e.id);
+      continue;
+    }
     // One that would change what format commands main runs lands alone,
     // through its own tb land and its --allow-format, never as a rider.
     const fmt = await formatChanges(t.path, tip, next).catch(() => undefined);
@@ -1894,16 +1927,30 @@ async function landLocked(
         skipCheck = true;
       }
     }
+    // From here each of the others stays in the line if its tb goes, and
+    // lands once a check with it passes (isCarried, land-queue.ts). One that
+    // left the line since it was stacked (stopped: it said nothing of it
+    // landed) is left out: stacked again without it (Codex's and Gemini's
+    // reviews). Read again after the mark, as it may leave just then.
+    if (group.length) {
+      const left: string[] = [];
+      for (const g of group) {
+        const now = readEntry(common, g.entry.id);
+        if (now && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
+        if (!readEntry(common, g.entry.id)) left.push(g.entry.branch);
+      }
+      if (left.length) {
+        const what = `${left.join(', ')} left the line before the check started`;
+        if (!(await back())) return fail(`${what}, so nothing landed. ${stuck}`);
+        if (carried) return fail(committedMeanwhile);
+        out(`${what}, so the others are stacked again without ${left.length > 1 ? 'them' : 'it'}.`);
+        continue;
+      }
+    }
     if (check && !skipCheck) {
       out(group.length
         ? `Running the check, together with ${together.join(', ')}: ${check}`
         : `Running the check: ${check}`);
-      // From here each of the others stays in the line if its tb goes, and
-      // lands once a check with it passes (isCarried, land-queue.ts).
-      for (const g of group) {
-        const now = readEntry(common, g.entry.id);
-        if (now && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
-      }
       setRunning(common, {
         startedAt: Date.now(), branches: [t.branch, ...together], pid: process.pid,
         entries: [...(times.entryId ? [times.entryId] : []), ...group.map((g) => g.entry.id)],
@@ -2102,7 +2149,7 @@ async function landLocked(
       const movedOn = [];
       for (const g of group) {
         if (await ownerWaiting(common, g.entry)) continue;
-        if (!(await stillAsked(t.path, g.entry, main))) {
+        if (!(await stillAsked(t.path, g.entry))) {
           movedOn.push(g.entry.branch);
           leaveQueue(common, g.entry.id);
         }

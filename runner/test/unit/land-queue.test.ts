@@ -381,6 +381,9 @@ const rewrites: Record<string, (cwd: string, base: string, branch: string) => vo
   },
   // Main can't move while the holder has the lock: a commit main doesn't
   // have is enough to rebase it onto.
+  'given one more on top of a commit made empty on purpose': (cwd) => {
+    commit(cwd, { 'more.txt': 'more\n' }, 'More');
+  },
   'rebased with a commit made empty on purpose': (cwd, base, branch) => {
     sh(cwd, `git checkout -q -b scratch ${base}`);
     commit(cwd, { 'n.txt': 'n\n' }, 'Elsewhere');
@@ -479,6 +482,79 @@ test('a carried landing and its next tb land are never stacked together', async 
   }
   assert.match(ca.out.join('\n'), /In the same check, and landed with it: thread\/b0000000\.$/m);
   assert.equal(sh(main, "git log --format=%s main | grep -c '^Empty on purpose$'"), '1');
+});
+
+// A carried entry and its branch's next tb land: the new one is the
+// branch's entry from then on (Gemini's review).
+test("a branch's next tb land takes over from its carried entry", async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [b] = branches(main, ['b']);
+  const base = sh(main, 'git rev-parse main');
+  const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check: 'true', checkFrom: '' });
+  writeEntry(common, { ...old, inCheckAt: Date.now() });
+  deadPid(common, old.id);
+  const drop = await lockHeld(root, common);
+  const c = capture();
+  let landing: Promise<number> | undefined;
+  try {
+    landing = land({ ...b, check: 'true' }, c.opts);
+    await until(() => c.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
+    const now = waiting(common);
+    assert.equal(now.length, 1);
+    assert.notEqual(now[0].id, old.id);
+  } finally {
+    await drop();
+  }
+  assert.equal(await landing, 0, c.err.join('\n'));
+  assert.ok(fs.existsSync(path.join(main, 'b.txt')));
+});
+
+// Its tb gone just as the lock came: a landing a check of which has started
+// goes on, as it would have in someone else's group (Gemini's review).
+test('a carried landing whose tb goes just as it gets the lock still lands', async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [b] = branches(main, ['b']);
+  const drop = await lockHeld(root, common);
+  const c = capture();
+  let landing: Promise<number> | undefined;
+  try {
+    landing = land({ ...b, check: 'true' }, { ...c.opts, onLocked: () => false });
+    await until(() => c.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
+    const [e] = waiting(common);
+    writeEntry(common, { ...e, inCheckAt: Date.now() });
+  } finally {
+    await drop();
+  }
+  assert.equal(await landing, 0, c.err.join('\n'));
+  assert.ok(fs.existsSync(path.join(main, 'b.txt')));
+});
+
+// Stopped after the holder stacked it but before the check (the holder was
+// asking GitHub about the group): it said nothing of it landed, so it's left
+// out (Codex's and Gemini's reviews).
+test('one that leaves the line after being stacked, before the check starts, is left out of it', async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [a, b] = branches(main, ['a', 'b']);
+  const base = sh(main, 'git rev-parse main');
+  const check = groupCheck(root, 'never-there.txt');
+  const sb = await standIn(root, common, b, base, check);
+  // Asked about the group's files (b's among them) once it's stacked.
+  const hold = async (_cwd: string, files: string[]) => {
+    if (files.includes('b.txt')) leaveQueue(common, sb.entry.id);
+    return undefined;
+  };
+  const ca = capture();
+  try {
+    assert.equal(await land({ ...a, check }, { ...ca.opts, hold }), 0, ca.err.join('\n'));
+  } finally {
+    await sb.gone();
+  }
+  assert.match(ca.out.join('\n'), /thread\/b0000000 left the line before the check started, so the others are stacked again without it\./);
+  assert.ok(fs.existsSync(path.join(main, 'a.txt')) && !fs.existsSync(path.join(main, 'b.txt')));
+  assert.deepEqual(fs.readFileSync(path.join(root, 'checks'), 'utf8').trim().split('\n').map((l) => l.trim()), ['a.txt'], 'one check, without b');
 });
 
 test("the line keeps one whose tb has gone only once a check of it started, and not for ever", () => {
