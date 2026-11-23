@@ -1410,11 +1410,16 @@ impl ReviewWindow {
         };
         let cam = c.camera_now();
         c.flight = None;
-        // A mouse's wheel (lines) zooms round the pointer, as Mike asked
-        // (22 Nov); a trackpad's two fingers (pixels) move, and zoom with ⌘
-        // or Control held, or by pinching.
+        // A mouse's wheel zooms round the pointer, as Mike asked (22 Nov),
+        // whether it counts notches (lines) or pixels like his Razer; a
+        // trackpad's two fingers move, and zoom with ⌘ or Control held, or by
+        // pinching.
+        let wheel = ev.source == ScrollSource::Wheel;
         c.camera = match ev.delta {
-            ScrollDelta::Lines(l) => cam.zoom_at(at, (l.y * 0.18).exp()),
+            ScrollDelta::Lines(l) => cam.zoom_at(at, board::wheel_zoom(l.y)),
+            ScrollDelta::Pixels(p) if wheel => {
+                cam.zoom_at(at, board::smooth_wheel_zoom(f32::from(p.y)))
+            }
             ScrollDelta::Pixels(p) if ev.modifiers.platform || ev.modifiers.control => {
                 cam.zoom_at(at, (f32::from(p.y) * 0.01).exp())
             }

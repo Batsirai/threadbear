@@ -496,6 +496,30 @@ pub const STOP_ZOOM: f32 = 1.4;
 /// as a share of the window's width.
 pub const PEEK_AT: f32 = 0.9;
 
+/// How much one turn of a mouse's wheel zooms, given the lines macOS says it
+/// moved. A slow notch can come as a fraction of a line, so each event counts
+/// as at least one notch; a fast spin counts up to three, so one flick can't
+/// fly off the board.
+pub fn wheel_zoom(lines: f32) -> f32 {
+    if lines == 0. || !lines.is_finite() {
+        return 1.;
+    }
+    (lines.signum() * lines.abs().clamp(1., 3.) * WHEEL_STEP).exp()
+}
+
+/// The log of the zoom one wheel notch gives: about 1.2 times.
+const WHEEL_STEP: f32 = 0.18;
+
+/// How much a wheel that reports pixels zooms, as Mike's Razer does: macOS
+/// sends it as many small events, 1 to 45 pixels each, so they add up rather
+/// than each counting as a notch. Capped per event like a notch.
+pub fn smooth_wheel_zoom(pixels: f32) -> f32 {
+    if !pixels.is_finite() {
+        return 1.;
+    }
+    (pixels.clamp(-60., 60.) * WHEEL_STEP / 25.).exp()
+}
+
 impl Default for Camera {
     fn default() -> Self {
         Camera {
@@ -908,6 +932,25 @@ pub fn pen_reach(screen_width: f32, camera: &Camera) -> f32 {
 mod tests {
     use super::*;
     use crate::reducer::{ImageRef, MarkInk, ReviewDraft, ReviewShot};
+
+    #[test]
+    fn every_wheel_notch_zooms_a_step_however_small_macos_says_it_was() {
+        let notch = wheel_zoom(1.);
+        assert!((notch - 1.197).abs() < 0.01, "{notch}");
+        assert_eq!(wheel_zoom(0.1), notch);
+        assert!((wheel_zoom(-0.05) * notch - 1.).abs() < 1e-5);
+        assert_eq!(wheel_zoom(40.), wheel_zoom(3.));
+        assert_eq!(wheel_zoom(0.), 1.);
+    }
+
+    #[test]
+    fn a_smooth_wheel_zooms_by_the_pixels_it_turned() {
+        // About a notch's zoom for a typical event, a little for a slow one.
+        assert!((smooth_wheel_zoom(25.) - wheel_zoom(1.)).abs() < 1e-5);
+        assert!(smooth_wheel_zoom(1.) > 1. && smooth_wheel_zoom(1.) < 1.01);
+        assert!((smooth_wheel_zoom(-25.) * smooth_wheel_zoom(25.) - 1.).abs() < 1e-5);
+        assert_eq!(smooth_wheel_zoom(500.), smooth_wheel_zoom(60.));
+    }
 
     fn image(w: i64, h: i64) -> ImageRef {
         ImageRef {
