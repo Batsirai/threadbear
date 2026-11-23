@@ -71,7 +71,8 @@ Feature: The thread's bar, banners and notes
     And the row "Check the photo library backup" is on the runner "On mac-mini"
     And the composer is on the runner "mac-mini"
     When mac-mini lists "Check the photo library backup" again
-    Then the share popover says the thread is shared with a link
+    Then the share button stays lit
+    And the share popover says the thread is shared with a link
     And the row "Check the photo library backup" is on the runner "On mac-mini"
 
   # The Swift app's is an NSPopover, which closes on Escape by itself; its

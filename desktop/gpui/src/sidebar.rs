@@ -724,14 +724,45 @@ pub(crate) fn icon_button(
 impl Threadbear {
     /// `threads.update` for any thread, changing the summary here first:
     /// anything clicked shows at once, and the runner's answer (or its
-    /// thread.updated) puts it right or rolls it back. Always the thread
-    /// named, never the main panel's: a box in a thread's own panel changed
-    /// whichever thread the main panel had open (23 Nov review).
+    /// thread.updated) puts it right or rolls it back.
     pub(crate) fn update_thread(
         &mut self,
         id: &str,
         change: impl FnOnce(&mut ThreadSummary),
         params: Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_thread_with(id, change, params, None, cx);
+    }
+
+    /// The same for a box's chips: the box's own thread, never the main
+    /// panel's (a box in a thread's own panel changed whichever thread the
+    /// main panel had open, 23 Nov review). A folder, login or pool change
+    /// isn't guessed, so its chip spins until the runner answers
+    /// (composer_chips.rs `chips_busy`).
+    pub(crate) fn update_thread_from_box(
+        &mut self,
+        id: &str,
+        change: impl FnOnce(&mut ThreadSummary),
+        params: Value,
+        cx: &mut Context<Self>,
+    ) {
+        let busy = if params.get("cwd").is_some() {
+            Some(format!("movingFolder/{id}"))
+        } else if params.get("accountId").is_some() || params.get("poolId").is_some() {
+            Some(format!("moving/{id}"))
+        } else {
+            None
+        };
+        self.update_thread_with(id, change, params, busy, cx);
+    }
+
+    fn update_thread_with(
+        &mut self,
+        id: &str,
+        change: impl FnOnce(&mut ThreadSummary),
+        params: Value,
+        busy: Option<String>,
         cx: &mut Context<Self>,
     ) {
         let before = self.threads.get(id).cloned();
@@ -742,15 +773,6 @@ impl Threadbear {
             t.wait_state = None;
         }
         let guess = self.threads.get(id).cloned();
-        // A folder, login or pool change isn't guessed, so its chip spins
-        // until the runner answers (composer_chips.rs `chips_busy`).
-        let busy = if params.get("cwd").is_some() {
-            Some(format!("movingFolder/{id}"))
-        } else if params.get("accountId").is_some() || params.get("poolId").is_some() {
-            Some(format!("moving/{id}"))
-        } else {
-            None
-        };
         if let Some(key) = &busy {
             self.chip_busy.insert(key.clone());
         }

@@ -141,7 +141,7 @@ impl Composer {
         )
     }
 
-    /// `threads.update` for this box's thread, shown at once (`update_thread`);
+    /// `threads.update` for this box's thread, shown at once (`update_thread_from_box`);
     /// on the new-thread page's box, the draft's settings instead. The box's
     /// own thread, never the main panel's: in a thread's own panel they
     /// differ (23 Nov review).
@@ -154,7 +154,7 @@ impl Composer {
         let thread = self.thread_id.clone();
         if let Some(app) = self.app.upgrade() {
             app.update(cx, |app, cx| match thread {
-                Some(id) => app.update_thread(&id, change, params, cx),
+                Some(id) => app.update_thread_from_box(&id, change, params, cx),
                 None => app.change_new_draft(&params, cx),
             });
         }

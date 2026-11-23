@@ -295,8 +295,10 @@ pub fn roll_back<T: Borrow<ThreadSummary>>(
 ///   until a summary says otherwise. Once made a share never goes back to
 ///   none (off keeps its slug).
 ///
-/// A thread moved here from another runner is this Mac's own list's word,
-/// which sets `runner_id` itself; that path doesn't come through here.
+/// A thread moved here from another runner keeps the old runner (and its
+/// share) only until this Mac's own list says it has arrived: thread.updated
+/// asks for that list (app.rs, `arriving`), whose rows don't come through
+/// here, and the other runners' table never takes a row of this Mac's.
 pub fn keep_local_marks(new: &mut ThreadSummary, old: Option<&ThreadSummary>) {
     let Some(old) = old.filter(|old| old.id == new.id) else {
         return;
