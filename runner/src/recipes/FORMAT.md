@@ -51,6 +51,9 @@ The fields:
 - `color`: the header's colour, `#rrggbb`, when there's no picture.
 - `experiment`: the id of a Threadbear experiment this recipe switches. Its
   switch in Recipes is that experiment's, and "Each run" isn't needed.
+- `runsFrom`: for an experiment that starts threads of its own, the label it
+  gives them (what a thread's row says started it, such as `Email`). Those
+  threads count as the recipe's runs, as its schedules' threads do.
 
 ## The header picture
 

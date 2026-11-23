@@ -40,6 +40,9 @@ export type RecipeFile = {
   when?: string;
   color?: string;
   experiment?: string;
+  // The label the runner gives threads its feature starts (startedBy): they
+  // count as its runs, as a schedule's threads do. The email watcher's is Email.
+  runsFrom?: string;
   about: string;
   example?: string;
   setup?: string;
@@ -97,7 +100,7 @@ export type RecipesDeps = {
     update(p: UpdateScheduleParams): Promise<Schedule>;
     delete(id: string): Promise<unknown>;
   };
-  // The threads a schedule started since then (ms), archived ones too.
+  // The threads a schedule or the runner started since then (ms), archived ones too.
   threads: (since: number) => ThreadSummary[];
   // Starts a thread.
   start: (p: { text: string; title: string; cwd: string }) => ThreadSummary;
@@ -132,6 +135,7 @@ export function parseRecipe(text: string, file: string): Omit<RecipeFile, 'id' |
     when: opt(fields.when),
     color: /^#[0-9a-fA-F]{6}$/.test(fields.color ?? '') ? fields.color : undefined,
     experiment: opt(fields.experiment),
+    runsFrom: opt(fields.runsfrom),
     about: sections.about ?? '',
     example: opt(sections.example),
     setup: opt(sections['setting it up']),
@@ -219,7 +223,7 @@ export class Recipes {
     const f = this.file(id);
     const threads = this.recentThreads();
     const s = this.summary(f, threads);
-    return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), file: f.file, runs: this.runs(s, threads) };
+    return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), file: f.file, runs: this.runs(f, s, threads) };
   }
 
   add(id: string): { threadId: string; thread: ThreadSummary } {
@@ -321,8 +325,7 @@ export class Recipes {
     else if (!k) state = 'add';
     else if (!schedules.length) state = 'settingUp';
     else state = k.on ? 'on' : 'off';
-    const ids = new Set(schedules.map((s) => s.id));
-    const runs = threads.filter((t) => t.schedule && ids.has(t.schedule.id));
+    const runs = threads.filter(isRun(f, schedules));
     const last = runs[0];
     return {
       id: f.id,
@@ -348,19 +351,18 @@ export class Recipes {
     };
   }
 
-  private runs(s: RecipeSummary, threads: ThreadSummary[]): RecipeRun[] {
-    const ids = new Set(s.schedules.map((x) => x.id));
+  private runs(f: RecipeFile, s: RecipeSummary, threads: ThreadSummary[]): RecipeRun[] {
     return threads
-      .filter((t) => t.schedule && ids.has(t.schedule.id))
+      .filter(isRun(f, s.schedules))
       .slice(0, MAX_RUNS)
       .map((t) => ({ threadId: t.id, title: t.title, at: t.createdAt, ...(t.preview ? { headline: t.preview } : {}), needsYou: t.needs === 'you', seen: seen(t), archived: !!t.archivedAt }));
   }
 
-  // Threads a schedule started in the last 30 days, newest first.
+  // Threads a schedule or the runner started in the last 30 days, newest first.
   private recentThreads(): ThreadSummary[] {
     const since = this.deps.now() - WINDOW_MS;
     return this.deps.threads(since)
-      .filter((t) => t.schedule && Date.parse(t.createdAt) >= since)
+      .filter((t) => (t.schedule || t.startedBy?.kind === 'runner') && Date.parse(t.createdAt) >= since)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
@@ -436,4 +438,12 @@ export function recipeMethods(r: Recipes): Record<string, (p: Record<string, unk
     'recipes.remove': gate((p) => r.remove(id(p))),
     'recipes.create': gate((p) => r.create({ text: optStr(p, 'text'), fromThreadId: optStr(p, 'fromThreadId'), editId: optStr(p, 'editId') })),
   };
+}
+
+// A recipe's runs: the threads its schedules started, and for one whose
+// feature starts its own (runsFrom), the threads the runner started under
+// that label.
+function isRun(f: RecipeFile, schedules: { id: string }[]): (t: ThreadSummary) => boolean {
+  const ids = new Set(schedules.map((s) => s.id));
+  return (t) => (!!t.schedule && ids.has(t.schedule.id)) || (!!f.runsFrom && t.startedBy?.kind === 'runner' && t.startedBy.label === f.runsFrom);
 }

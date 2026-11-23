@@ -1677,13 +1677,14 @@ export class Runner {
     return sortByActivity(out);
   }
 
-  // Threads a schedule started since `since` (ms), archived ones too, for
-  // Recipes' run counts (recipes.ts): only those are summarised, as it looks
-  // every 30 seconds and a runner can have thousands of threads.
-  scheduledSince(since: number): ThreadSummary[] {
+  // Threads a schedule or the runner itself started since `since` (ms),
+  // archived ones too, for Recipes' run counts (recipes.ts): only those are
+  // summarised, as it looks every 30 seconds and a runner can have thousands
+  // of threads.
+  recipeRunsSince(since: number): ThreadSummary[] {
     const out: ThreadSummary[] = [];
     for (const st of this.threads.values()) {
-      if (st.rec.schedule && Date.parse(st.rec.createdAt) >= since) out.push(this.summary(st));
+      if ((st.rec.schedule || st.rec.startedBy?.kind === 'runner') && Date.parse(st.rec.createdAt) >= since) out.push(this.summary(st));
     }
     return out;
   }

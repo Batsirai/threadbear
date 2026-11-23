@@ -6,6 +6,7 @@ by: Mike
 when: Every few minutes
 color: #3f63c4
 experiment: mailWatch
+runsFrom: Email
 ---
 
 ## About

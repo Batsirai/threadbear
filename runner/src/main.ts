@@ -1188,7 +1188,7 @@ async function main(): Promise<void> {
     experimentOn: (id) => experimentOn(cfg.home, id),
     setExperiment: (id, on) => settings.update({ experiments: { [id]: on } }),
     schedules: { list: () => scheduler.list(), update: (p) => scheduler.update(p), delete: (id) => scheduler.delete(id) },
-    threads: (since) => runner.scheduledSince(since),
+    threads: (since) => runner.recipeRunsSince(since),
     start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread,
     log: (msg, extra) => log.warn(msg, extra),
   });

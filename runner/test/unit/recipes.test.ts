@@ -224,6 +224,25 @@ test('recipes: its numbers count the threads its schedules started in the last 3
   assert.deepEqual(r.runs.map((x) => [x.threadId, x.needsYou, x.seen, x.archived]), [['a', true, true, false], ['b', false, false, true]]);
 });
 
+test('recipes: one whose feature starts its own threads counts those as its runs, by the label it starts them under', () => {
+  const w = world();
+  writeRecipe(w.builtin, 'email-watcher', { name: 'Email watcher', icon: '✉️', description: 'Wakes threads.', experiment: 'mailWatch', runsFrom: 'Email' }, { About: 'Why.' });
+  writeRecipe(w.builtin, 'other', { name: 'Other', icon: '🧪', description: 'Another.', experiment: 'feed' }, { About: 'Why.' });
+  w.experiments.mailWatch = true;
+  w.experiments.feed = true;
+  w.threads.push(
+    thread('list', { startedBy: { kind: 'runner', label: 'Email', why: 'Email list' }, createdAt: new Date(NOW - DAY).toISOString(), needs: 'you', preview: '3 emails to look at' }),
+    thread('act', { startedBy: { kind: 'runner', label: 'Email', why: 'Act on an email' }, createdAt: new Date(NOW - 2 * DAY).toISOString() }),
+    thread('old', { startedBy: { kind: 'runner', label: 'Email', why: 'Email list' }, createdAt: new Date(NOW - 40 * DAY).toISOString() }),
+    thread('else', { startedBy: { kind: 'runner', label: 'Threadbear', why: 'x' } }),
+    thread('typed', { startedBy: { kind: 'tool', label: 'Email' } as ThreadSummary['startedBy'] }),
+  );
+  const r = w.recipes.get('email-watcher');
+  assert.deepEqual(r.runs.map((x) => x.threadId), ['list', 'act']);
+  assert.deepEqual(r.stats, { runs: 2, neededYou: 1, seen: 2, lastRunAt: new Date(NOW - DAY).toISOString(), lastHeadline: '3 emails to look at' });
+  assert.equal(w.recipes.get('other').stats.runs, 0, 'without runsFrom, the runner\'s other threads are not its runs');
+});
+
 test('recipes: removing one deletes its schedules and forgets it, leaving its files', async () => {
   const w = world();
   writeRecipe(w.builtin, 'daily-brief', { name: 'Daily brief', icon: '☀️', description: 'A short note.' });
