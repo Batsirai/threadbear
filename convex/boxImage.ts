@@ -29,6 +29,7 @@ import { v } from 'convex/values';
 import { httpAction, internalMutation, type QueryCtx } from './_generated/server';
 import { internal } from './_generated/api';
 import { isPinnedImage } from './boxProviders/types';
+import { readCapped } from './uploads';
 
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 const JWKS_URL = `${GITHUB_ISSUER}/.well-known/jwks`;
@@ -147,13 +148,16 @@ const reply = (status: number, body: Record<string, unknown>) => new Response(JS
 export const promoteRoute = httpAction(async (ctx, request) => {
   const repo = process.env.BOX_IMAGE_REPO?.trim();
   const app = process.env.FLY_APP?.trim();
-  const audience = process.env.CONVEX_SITE_URL?.trim();
+  const audience = process.env.CONVEX_SITE_URL?.trim().replace(/\/+$/, '');
   if (!repo || !app || !audience) return reply(403, { error: 'This deployment promotes no box images: BOX_IMAGE_REPO and FLY_APP must be set on it.' });
   const auth = request.headers.get('authorization') ?? '';
   const token = /^Bearer ([A-Za-z0-9_.-]{1,8192})$/.exec(auth)?.[1];
   if (!token) return reply(401, { error: 'no token' });
-  const raw = await request.text();
-  if (raw.length > 1024) return reply(400, { error: 'too long' });
+  // Read no further than 1 KB, before anything else: the route answers anyone.
+  const body = await readCapped(request, 1024);
+  if (body === 'tooBig') return reply(413, { error: 'too long' });
+  if (body === 'broken') return reply(400, { error: 'unreadable' });
+  const raw = await body.text();
   let image: unknown;
   try {
     image = (JSON.parse(raw) as { image?: unknown }).image;

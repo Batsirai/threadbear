@@ -146,6 +146,16 @@ jobs:
           docker push "$IMAGE:$SHA" | tee "$RUNNER_TEMP/push.log"
           digest=$(sed -n 's/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' "$RUNNER_TEMP/push.log" | tail -1)
           [ -n "$digest" ] || { echo "::error::docker push didn't report a digest"; exit 1; }
+          # That digest is only what the registry answered. The manifest it
+          # names must hash to it and name this build's own config (whose
+          # layer list containerd checks each layer against when a box
+          # unpacks it), or a registry that lies gets nothing promoted
+          # (Daybreak 171's second review).
+          docker buildx imagetools inspect --raw "$IMAGE@$digest" > "$RUNNER_TEMP/manifest.json"
+          [ "sha256:$(sha256sum < "$RUNNER_TEMP/manifest.json" | cut -d' ' -f1)" = "$digest" ] || { echo "::error::The registry's manifest for $digest doesn't hash to it"; exit 1; }
+          config=$(jq -r .config.digest "$RUNNER_TEMP/manifest.json")
+          built=$(docker image inspect --format '{{.Id}}' "$IMAGE:$SHA")
+          [ "$config" = "$built" ] || { echo "::error::The manifest at $digest names config $config, not this build's $built"; exit 1; }
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "Pushed $IMAGE@$digest"
           for tag in $TAGS; do
@@ -226,7 +236,7 @@ jobs:
         run: |
           # Without it nothing is promoted: new boxes keep the image promoted
           # before, or, with none, aren't made. Never a tag in its place.
-          URL="${URL%/}"
+          while [ "${URL%/}" != "$URL" ]; do URL="${URL%/}"; done
           case "$URL" in
             https://*) ;;
             "") echo "::warning::The repo variable BOX_PROMOTE_URL isn't set, so this image isn't promoted for new boxes. Set it to the backend's CONVEX_SITE_URL once virtual runners are on (docs/virtual-runners.md)."; exit 0 ;;
@@ -236,20 +246,30 @@ jobs:
             sha256:*) ;;
             *) echo "::error::The image job reported no digest."; exit 1 ;;
           esac
-          head=$(gh api "repos/$REPO/commits/heads/main" --jq .sha)
-          if [ "$head" != "$SHA" ]; then
-            echo "::notice::main is at ${head:0:8} now, not ${SHA:0:8}, so this older image isn't promoted."
-            exit 0
-          fi
+          # Main may have moved on with commits that don't change the image
+          # (this workflow only runs for those that do): fine. One that does
+          # is a newer image's to promote, so this one stays out.
+          status=$(gh api "repos/$REPO/compare/$SHA...heads/main" --jq .status)
+          case "$status" in
+            identical) ;;
+            ahead)
+              newer=$(gh api "repos/$REPO/compare/$SHA...heads/main" --jq '[.files[].filename] | (length >= 300), (map(select(test("^(runner/(src|bin)/|runner/(package\\.json|package-lock\\.json|\\.npmrc|\\.dockerignore)$|runner/box/(Dockerfile|entrypoint\\.sh|smoke\\.sh)$|\\.github/workflows/box-image\\.yml$)"))) | length)')
+              if [ "$(sed -n 1p <<<"$newer")" != false ] || [ "$(sed -n 2p <<<"$newer")" != 0 ]; then
+                echo "::notice::main has newer changes to the image since ${SHA:0:8}, so this older image isn't promoted."
+                exit 0
+              fi ;;
+            *) echo "::notice::${SHA:0:8} is $status of main, so it isn't promoted."; exit 0 ;;
+          esac
           token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$(jq -rn --arg a "$URL" '$a|@uri')" | jq -r .value)
           echo "::add-mask::$token"
           body=$(jq -cn --arg image "$IMAGE@$DIGEST" '{image: $image}')
           for try in 1 2 3 4 5 6; do
-            code=$(curl -sS -o "$RUNNER_TEMP/promote.json" -w '%{http_code}' -X POST \
+            rm -f "$RUNNER_TEMP/promote.json"
+            code=$(curl -sS --max-time 30 -o "$RUNNER_TEMP/promote.json" -w '%{http_code}' -X POST \
               -H "Authorization: Bearer $token" -H 'Content-Type: application/json' \
               --data "$body" "$URL/box-image/promote") || code=000
-            cat "$RUNNER_TEMP/promote.json"; echo
+            [ ! -s "$RUNNER_TEMP/promote.json" ] || { cat "$RUNNER_TEMP/promote.json"; echo; }
             [ "$code" = 200 ] && { echo "Promoted $IMAGE@$DIGEST"; exit 0; }
             # 404 or 503: the backend with the route may still be deploying.
             case "$code" in 404|503|000|5*) sleep 30 ;; *) exit 1 ;; esac

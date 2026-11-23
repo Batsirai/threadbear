@@ -185,8 +185,11 @@ test('the workflow promotes the digest its own push reported, with an OIDC token
   // Promoted only while this commit is main's head, by GitHub's account,
   // never by anything read from the registry; and the build takes no cache
   // from it, and pushes no `latest` (Daybreak 171's second review).
-  assert.match(latestJob, /gh api "repos\/\$REPO\/commits\/heads\/main"/);
-  assert.match(latestJob, /\[ "\$head" != "\$SHA" \]/);
+  assert.match(latestJob, /gh api "repos\/\$REPO\/compare\/\$SHA\.\.\.heads\/main" --jq \.status/);
+  assert.match(latestJob, /\*\) echo "::notice::\$\{SHA:0:8\} is \$status of main, so it isn't promoted\."; exit 0 ;;/);
+  // The digest the registry answered is checked against the manifest and this build's config.
+  assert.match(wf, /imagetools inspect --raw "\$IMAGE@\$digest"/);
+  assert.match(wf, /\[ "\$config" = "\$built" \]/);
   const code = wf.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   assert.doesNotMatch(code, /--cache-from|BUILDKIT_INLINE_CACHE|:latest/);
   assert.doesNotMatch(latestJob, /docker (pull|inspect)/);
@@ -202,4 +205,28 @@ test('the same promotion sent again (its answer lost) is done already, an older 
   assert.equal((await ctx.runMutation('internal.boxImage.promote', { ...a, issuedAt: 4000 })).ok, false);
   assert.equal(b.rows('boxImages').length, 1);
   assert.equal(b.rows('boxImages')[0].image, IMAGE);
+});
+
+test('a big body is refused after 1 KB, before the token is looked at, and a site URL with a slash still matches', async () => {
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      pulled++;
+      c.enqueue(new Uint8Array(64 * 1024));
+      if (pulled > 1000) c.close();
+    },
+  });
+  const was = { ...process.env };
+  Object.assign(process.env, { BOX_IMAGE_REPO: REPO, FLY_APP: 'tb-boxes', CONVEX_SITE_URL: SITE });
+  try {
+    const b = memoryBackend();
+    const req = new Request(`${SITE}/box-image/promote`, { method: 'POST', headers: { authorization: 'Bearer a' }, body, duplex: 'half' } as RequestInit);
+    const res: Response = await (boxImage.promoteRoute as (ctx: unknown, r: Request) => Promise<Response>)(actionCtx(b), req);
+    assert.equal(res.status, 413);
+    assert.ok(pulled < 5, `read ${pulled} chunks`);
+  } finally {
+    process.env = was;
+  }
+  const r = await route(await sign(goodClaims()), { image: IMAGE }, { CONVEX_SITE_URL: `${SITE}/` });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
 });
