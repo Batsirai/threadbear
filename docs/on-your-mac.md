@@ -365,6 +365,17 @@ File references are where to look.
   that login's own config folder. It reads only whether the login is signed
   in and when its sign-in ends. The CLI answers from its own files without
   going online, and the runner never reads the Keychain or the tokens.
+- **Extra Codex logins share `~/.codex`** (`runner/src/codex-home-share.ts`):
+  before each Codex thread starts on a login other than `~/.codex` itself
+  (`codex-1`...), the runner links that login's `AGENTS.md`, `hooks.json`,
+  `config.toml` and each of `skills/`'s folders to `~/.codex`'s, so the
+  thread has your instructions, hooks, skills and MCP servers. It never
+  replaces a file the login has of its own, except a `config.toml` holding
+  only Codex's own project trust, which it renames to
+  `config.toml.before-share-<date>` beside the link. `auth.json` and the
+  login's sessions are left alone. The thread is also told, as config
+  overrides, that the hooks you trusted in `~/.codex` are trusted there too
+  (read from `~/.codex/config.toml`'s `hooks.state`).
 - **A Claude login's year-long token, if you make one**
   (`runner/src/year-token.ts`, `desktop/core/src/claude_token.py`): Year-long
   token… on a Claude login's row in Usage opens Terminal on `claude

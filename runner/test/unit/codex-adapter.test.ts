@@ -299,6 +299,38 @@ test('a thread that is gone ends the session with SessionNotFoundError', async (
   await h.conn.closed;
 });
 
+test("an extra login's home is readied before its process starts, and its overrides sent on start and resume", async () => {
+  const seen: string[] = [];
+  const homeConfig = (a: typeof account) => {
+    seen.push(a.id);
+    return { 'hooks.state': { '/x/hooks.json:stop:0:0': { trusted_hash: 'sha256:1' } } };
+  };
+  const h = await open({ deps: { homeConfig } });
+  assert.deepEqual(seen, [account.id]);
+  const req = await h.conn.request('thread/start');
+  const config = req.params.config as Record<string, unknown>;
+  assert.deepEqual(config['hooks.state'], { '/x/hooks.json:stop:0:0': { trusted_hash: 'sha256:1' } });
+  assert.equal(config['shell_environment_policy.set.THREADBEAR_THREAD_ID'], 'tb-1');
+  h.conn.respond(req.id, threadResult('th-1'));
+  await h.session.end();
+  const r = await open({ resume: true, sessionId: 'th-old', deps: { homeConfig } });
+  const resume = await r.conn.request('thread/resume');
+  assert.ok((resume.params.config as Record<string, unknown>)['hooks.state']);
+  await r.session.end();
+  // A setup that throws doesn't stop the thread.
+  const t = await open({
+    deps: {
+      homeConfig: () => {
+        throw new Error('no links here');
+      },
+    },
+  });
+  const start = await t.conn.request('thread/start');
+  assert.equal((start.params.config as Record<string, unknown>)['hooks.state'], undefined);
+  t.conn.respond(start.id, threadResult('th-2'));
+  await t.session.end();
+});
+
 test('traffic before thread/start answers is routed once the id is known', async () => {
   const h = await open();
   const req = await h.conn.request('thread/start');

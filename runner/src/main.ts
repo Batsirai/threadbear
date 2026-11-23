@@ -59,6 +59,7 @@ import { startOwnThread } from './own-threads.ts';
 import { heldBackBrief, heldBackTitle } from './updates/held-thread.ts';
 import { ConvexUseTally } from './convex-use.ts';
 import { CodexAdapter } from './adapters/codex/adapter.ts';
+import { hookTrust, shareCodexHome } from './codex-home-share.ts';
 import { AcpAdapter } from './adapters/acp/adapter.ts';
 import { ACP_AGENTS, ACP_PROVIDERS, type AcpProvider } from './adapters/acp/agents.ts';
 import { acpAsker } from './models/acp-oneshot.ts';
@@ -457,6 +458,14 @@ async function main(): Promise<void> {
     log,
     toolsFor: codexStyleTools,
     mcpServers: archiveServers,
+    // An extra Codex login gets ~/.codex's instructions, hooks, skills and
+    // config.toml, linked, and the trust its hooks have there.
+    homeConfig: (account) => {
+      const report = shareCodexHome(cfg.codexMainDir, account.configDir);
+      if (report.changes.length) log.info('codex login shared with the main one', { account: account.id, changes: report.changes });
+      if (report.skipped.length) log.debug('codex login: left as it was', { account: account.id, skipped: report.skipped });
+      return hookTrust(cfg.codexMainDir, account.configDir);
+    },
     onNotice: (text) => runner.notice('warning', text),
     extraGuidance: () => RICH_BLOCKS_LINE,
   });

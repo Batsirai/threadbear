@@ -88,6 +88,10 @@ export type CodexAdapterDeps = {
   // MCP servers a thread gets besides config.toml's, read at each start or
   // resume (Agent Archive's, with its experiment on).
   mcpServers?: () => Record<string, { command: string; args: string[] }>;
+  // Readies the account's CODEX_HOME before its process starts and returns
+  // config overrides for it: what an extra login shares with ~/.codex
+  // (codex-home-share.ts). Never stops a session: a throw is logged.
+  homeConfig?: (account: Account) => Record<string, unknown>;
   // Section B's CodexNormalizer unless a test passes its own.
   normalizer?: NormalizerFactory;
   // A runner.notice warning (configWarning: a broken config.toml).
@@ -562,6 +566,12 @@ export class CodexSession implements AgentSession {
 
   private async boot(): Promise<void> {
     const { opts } = this;
+    let home: Record<string, unknown> = {};
+    try {
+      home = this.deps.homeConfig?.(opts.account) ?? {};
+    } catch (e) {
+      this.deps.log.warn('codex login setup failed', { threadId: opts.threadId, account: opts.account.id, error: errText(e) });
+    }
     await this.proc.start();
     if (this.state !== 'starting') {
       // Ended while the process started: finish() may have found nothing to
@@ -575,7 +585,7 @@ export class CodexSession implements AgentSession {
       ...threadPolicy(this.mode),
       // The thread's projects, as developer instructions: config.toml's
       // own key, set per thread like the rest of threadConfig.
-      config: { ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...mcpServerConfig(this.deps.mcpServers?.()), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
+      config: { ...home, ...threadConfig(opts.threadId, opts.env?.THREADBEAR_THREAD_KEY), ...mcpServerConfig(this.deps.mcpServers?.()), ...(opts.instructions ? { developer_instructions: opts.instructions } : {}) },
     };
     let res: ThreadStartResponse;
     if (opts.resume) {

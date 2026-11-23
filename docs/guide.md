@@ -1479,7 +1479,9 @@ CLAUDE_CONFIG_DIR=~/Library/Application\ Support/Threadbear/accounts/claude-1 cl
 ```
 
 then type `/login` (for Codex, `CODEX_HOME=<the folder> codex login`). It
-shows up in the account menu within a few seconds.
+shows up in the account menu within a few seconds. A Codex login's threads
+get the same instructions, hooks, skills and settings as `~/.codex`: the
+runner links them in before its first thread starts.
 
 To drop a login you no longer use, such as one whose plan has lapsed, add
 its id to `hiddenLogins` in `runner.json` (`"hiddenLogins": ["claude-main"]`)
