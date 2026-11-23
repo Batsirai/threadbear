@@ -1026,6 +1026,18 @@ export function holdAllowIfScrubbed(doc: ThreadDoc, scrub: (text: string) => str
   return { ...doc, pendingApproval: { ...p, title: `${p.title}. ${remoteAllowRefused(runnerName)}`, options: p.options.filter((o) => o !== 'allow' && o !== 'allowAlways') } };
 }
 
+// The phone's needsYou: the thread needs Mike and he hasn't put it away. One
+// he archived or hibernated isn't waiting on him, by his own say: no push
+// for it, a held one isn't sent when he leaves, and one already on his
+// phone comes down (convex/sync.ts upsertThreads, needsYou going false). A
+// hibernated thread's wake writes the row again, so it pushes then if it
+// still needs him (docs/protocol/needs-you.md, "Put away"; review, 23 Nov
+// 2026). The Mac's own summary keeps needsYou as it was: its lists sort
+// put-away threads by archivedAt and snoozedUntil themselves.
+export function phoneNeedsYou(t: Pick<ThreadSummary, 'needsYou' | 'archivedAt' | 'snoozedUntil'>, now: number): boolean {
+  return t.needsYou && !t.archivedAt && !(t.snoozedUntil && Date.parse(t.snoozedUntil) > now);
+}
+
 export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pending?: PendingApproval, earliestSeq?: number, next?: string[], scrub?: (text: string) => string, review?: LabReviewLedger, cardTurn?: string): ThreadDoc {
   const doc: ThreadDoc = {
     threadId: t.id,
@@ -1035,7 +1047,7 @@ export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pen
     accountId: t.accountId,
     provider: t.provider,
     status: t.status,
-    needsYou: t.needsYou,
+    needsYou: phoneNeedsYou(t, now),
     unread: t.lastSeq > t.lastSeenSeq,
     preview: t.preview,
     createdAt: t.createdAt,

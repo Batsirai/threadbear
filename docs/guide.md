@@ -2011,7 +2011,10 @@ from the Mac by default. Threadbear counts you as at the Mac when the app is ope
 used the keyboard or mouse in the last two minutes, and as away when the Mac
 is asleep. On the iPhone, Settings > Notify me changes it to Always or Never. A
 notification goes away by itself once its thread no longer needs you: when
-you open it on the phone, deal with it on the Mac, or archive it.
+you open it on the phone, deal with it on the Mac, or archive or hibernate
+it. A thread you've archived or hibernated sends none, even one held back
+while you were at the Mac; a hibernated one that still needs you when it
+wakes sends one then.
 
 Ask on the iPhone: press the Action button, say a question, and hear the
 answer from an archive server of your own, one that knows your past

@@ -4504,3 +4504,33 @@ test("sharing: a thread moving away while a picture goes up leaves the others' p
   assert.ok(added.includes(b!.t.id), "B's picture still went up");
   await sync.stop();
 });
+
+// Review, 23 Nov 2026: an archived or hibernated thread's row still said it
+// needed Mike, so its held push reached his phone when he left the Mac and
+// one already delivered stayed. Put away, the row says it doesn't; a
+// hibernation ending writes the row again, so the thread can push then.
+test("a thread Mike puts away doesn't need him on the phone's row, and does again when its hibernation ends", async () => {
+  const { h, sync, docs } = setup({ answer: (fn) => (fn === 'sync:heartbeat' ? { apiVersion: BACKEND_API_VERSION } : null) });
+  const a = h.runner.create({ text: 'one', cwd: h.cfg.defaults.cwd, accountId: 'claude-3' }).thread;
+  h.adapter.last.init();
+  h.adapter.last.result();
+  sync.start();
+  await tick(20);
+  await sync.flushNow();
+  const last = () => docs().filter((d) => d.threadId === a.id).at(-1)!;
+  assert.equal(last().needsYou, true, 'an unread finished turn');
+  h.runner.update({ threadId: a.id, snoozedUntil: new Date(h.clock.now() + 60_000).toISOString() });
+  await tick();
+  await sync.flushNow();
+  assert.deepEqual([last().view, last().needsYou], ['hibernating', false]);
+  assert.equal(h.runner.get(a.id).needsYou, true, "the Mac's own summary is as it was");
+  h.clock.advance(60_000);
+  await tick(20);
+  await sync.flushNow();
+  assert.deepEqual([last().view, last().needsYou], ['inbox', true], 'woken by its time, it needs him again');
+  h.runner.update({ threadId: a.id, archived: true });
+  await tick();
+  await sync.flushNow();
+  assert.deepEqual([last().view, last().needsYou], ['den', false]);
+  await sync.stop();
+});

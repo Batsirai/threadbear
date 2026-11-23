@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { call, load, memoryBackend, THREAD_BASICS } from '../helpers/convex-memory.ts';
+import { toThreadDoc } from '../../src/sync.ts';
 
 const sync = load('sync');
 const devices = load('devices');
@@ -125,4 +126,37 @@ test('a runner past its push allowance keeps its alert to clear later', async (t
   await put('T', true);
   await put('T', false);
   assert.equal(scheduled(b, 'push.clear').length, 1, 'cleared the next minute');
+});
+
+// Review, 23 Nov 2026: archiving or hibernating a thread didn't change its
+// row's needsYou, so a push held while Mike was at the Mac still reached his
+// phone when he left, and one already delivered stayed. The runner's row
+// now says a put-away thread doesn't need him (runner/src/sync.ts
+// phoneNeedsYou), which the backend's push rules then follow.
+test('a thread put away sends no push, its held push stays home, a delivered one comes down, and waking pushes again', async () => {
+  const b = memoryBackend();
+  const now = Date.now();
+  await b.ctx.db.insert('runners', { runnerId: 'mac1', name: 'mac1', version: '1', lastSeenAt: now, startedAt: new Date(now).toISOString(), draining: false, threadCount: 2, atMac: true, atMacAt: now });
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const summary = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, title: id, cwd: '/w', accountId: 'claude-3', provider: 'claude' as const, permissionMode: 'full' as const, status: 'idle' as const, live: false, needsYou: true,
+    createdAt: iso(now - 60_000), updatedAt: iso(now), lastActivityAt: iso(now), preview: 'p', lastSeq: 3, lastSeenSeq: 1, ...extra,
+  });
+  const put = (id: string, extra: Record<string, unknown> = {}) => call(b.ctx, sync.upsertThreads, { key: OWNER, threads: [toThreadDoc(summary(id, extra), 'mac1', now)] });
+  // Archived after a push reached the phone: it comes down.
+  await put('A', { needsYou: false });
+  await put('A');
+  assert.deepEqual(scheduled(b, 'push.notify'), [{ threadId: 'A' }]);
+  await delivered(b, 'A');
+  await put('A', { archivedAt: iso(now) });
+  assert.deepEqual(scheduled(b, 'push.clear'), [{ threadId: 'A' }]);
+  // Hibernated with its push held while he's at the Mac: leaving sends nothing.
+  await put('H', { needsYou: false });
+  await b.ctx.db.patch((b.rows('threads') as { _id: string; threadId: string }[]).find((t) => t.threadId === 'H')!._id, { pushHeldAt: now - 1000 });
+  await put('H', { snoozedUntil: iso(now + 3_600_000) });
+  await call(b.ctx, sync.setPresence, { key: OWNER, runnerId: 'mac1', atMac: false });
+  assert.deepEqual((scheduled(b, 'push.notify') as { threadId: string }[]).filter((a) => a.threadId === 'H'), [], 'hibernated: no push');
+  // Woken (the runner clears snoozedUntil and writes the row): it pushes.
+  await put('H');
+  assert.deepEqual((scheduled(b, 'push.notify') as { threadId: string }[]).filter((a) => a.threadId === 'H'), [{ threadId: 'H' }]);
 });

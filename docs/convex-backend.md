@@ -40,7 +40,8 @@ dashboard panel.
 - `convex/push.ts` (Node action) and `convex/devices.ts`: APNs over
   HTTP/2 with the team's token-based key, copied from Poddle's `apns.ts`.
   `sync:upsertThreads` schedules `push:notify` when a thread's `needsYou`
-  goes from false to true (at most once per thread every 30 seconds,
+  goes from false to true (the runner writes it false for a thread Mike
+  archived or hibernated: docs/protocol/needs-you.md, "Put away") (at most once per thread every 30 seconds,
   `pushedAt` on the row); the action re-reads the row, skips it if the
   Mac has seen it meanwhile, and sends `pushText`'s title and body
   (`convex/pushText.ts`: the question, the approval and its input line,

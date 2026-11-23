@@ -666,7 +666,8 @@ export function buildThreadbearTools(
 
   const line = (t: ThreadSummary): string => {
     const where = t.archivedAt ? `archived${archivedHow(t)}` : t.snoozedUntil ? `snoozed until ${snoozeEnd(t)}` : 'inbox';
-    const flags = [t.status, where, t.needsYou ? 'needs the user' : '', t.id === selfId ? 'this thread' : ''].filter(Boolean).join(', ');
+    // Put away (archived or hibernating), it isn't waiting on them, whatever it last asked.
+    const flags = [t.status, where, t.needsYou && where === 'inbox' ? 'needs the user' : '', t.id === selfId ? 'this thread' : ''].filter(Boolean).join(', ');
     return `${t.id.slice(0, 8)}  ${t.title}  [${flags}]  ${t.cwd}  ${t.accountId}  ${relativeTime(t.lastActivityAt, now())}`;
   };
 
@@ -674,7 +675,7 @@ export function buildThreadbearTools(
     t.archivedAt ? 'archived' : t.snoozedUntil && Date.parse(t.snoozedUntil) > now() ? 'snoozed' : 'inbox';
   const remoteLine = (t: RemoteThread, runner: string): string => {
     const where = remoteWhere(t) === 'snoozed' ? `snoozed until ${t.snoozedUntil}` : remoteWhere(t);
-    const flags = [t.status, where, t.needsYou ? 'needs the user' : '', `on ${runner}`].filter(Boolean).join(', ');
+    const flags = [t.status, where, t.needsYou && where === 'inbox' ? 'needs the user' : '', `on ${runner}`].filter(Boolean).join(', ');
     return `${t.threadId.slice(0, 8)}  ${t.title}  [${flags}]  ${t.cwd}  ${t.accountId}  ${relativeTime(t.lastActivityAt, now())}`;
   };
   const describeRemote = (t: RemoteThread, runner: string): string =>
@@ -682,7 +683,7 @@ export function buildThreadbearTools(
       `id: ${t.threadId}`,
       `title: ${t.title}`,
       `runner: ${runner} (read through Convex: messages and one line per tool call; tool output stays on that runner)`,
-      `status: ${t.status}${t.needsYou ? ' (needs the user)' : ''}`,
+      `status: ${t.status}${t.needsYou && remoteWhere(t) === 'inbox' ? ' (needs the user)' : ''}`,
       `folder: ${t.cwd} (on ${runner})`,
       `account: ${t.accountId} (${providerName(t.provider)})`,
       `model: ${t.model ?? 'default'}`,
@@ -697,7 +698,7 @@ export function buildThreadbearTools(
     [
       `id: ${t.id}`,
       `title: ${t.title}`,
-      `status: ${t.status}${t.needsYou ? ' (needs the user)' : ''}`,
+      `status: ${t.status}${t.needsYou && !t.archivedAt && !t.snoozedUntil ? ' (needs the user)' : ''}`,
       `folder: ${t.cwd}`,
       `account: ${t.accountId} (${providerName(t.provider)})`,
       `pool: ${t.poolId ?? 'none (pinned to its account)'}`,

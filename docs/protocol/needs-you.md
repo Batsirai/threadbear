@@ -822,6 +822,20 @@ the thread if a sub-agent stalls, so an ask can't stay hidden for good.
 - **What decides `needsYou`**, in order: an approval or question waiting;
   a thread marked unread; then a finished turn after `lastSeenSeq`,
   unless that turn said `nothing`.
+- **Put away.** A thread Mike archived or hibernated isn't waiting on him,
+  by his own say, so the phone's row for it (`sync:upsertThreads`, the
+  row's `needsYou`) says false while it's archived or its `snoozedUntil`
+  is still to come, whatever the summary says, a waiting approval
+  included. So no push goes for it, one held while he was at the Mac
+  isn't sent when he leaves, and one already on his phone comes down
+  (`push:clear`), as for a thread he'd seen. A hibernated thread waking
+  (its time, a message, Wake) writes its row again, so it pushes then if
+  it still needs him; unarchiving one does the same. The summary's own
+  `needsYou` is unchanged, as the Mac's lists sort put-away threads by
+  `archivedAt` and `snoozedUntil` themselves (and `list_threads` says
+  "needs the user" only for one that isn't put away). Until 23 Nov 2026
+  an archived or hibernated unread thread's held push still reached the
+  phone when he left, and a delivered one stayed.
 - **Only completed turns.** An interrupted or failed turn says nothing.
   A sub-agent's `end_turn` (Claude's are never in the thread's events;
   Codex's carry the child's prefix, `<child>/<id>`) is ignored.
