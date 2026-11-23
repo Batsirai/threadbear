@@ -299,36 +299,47 @@ test('a thread that is gone ends the session with SessionNotFoundError', async (
   await h.conn.closed;
 });
 
-test("an extra login's home is readied before its process starts, and its overrides sent on start and resume", async () => {
-  const seen: string[] = [];
-  const homeConfig = (a: typeof account) => {
-    seen.push(a.id);
-    return { 'hooks.state': { '/x/hooks.json:stop:0:0': { trusted_hash: 'sha256:1' } } };
-  };
-  const h = await open({ deps: { homeConfig } });
-  assert.deepEqual(seen, [account.id]);
+test("an extra login: ~/.codex is asked about once, the login linked, and its hooks' trust sent on start", async () => {
+  const root = fs.realpathSync(tmp());
+  const main = path.join(root, '.codex');
+  const login = path.join(root, 'codex-1');
+  fs.mkdirSync(main);
+  fs.mkdirSync(login);
+  fs.writeFileSync(path.join(main, 'hooks.json'), '{"hooks":{}}');
+  fs.writeFileSync(path.join(main, 'config.toml'), 'model = "x"\n');
+  fs.writeFileSync(path.join(main, 'AGENTS.md'), '# Mike\n');
+  const f = await fake();
+  const adapter = new CodexAdapter({
+    codexBinary: () => f.bin,
+    registry: new ProcessRegistry(tmp(), nullLogger),
+    log: nullLogger,
+    codexMainDir: main,
+    timings: { finishWaitMs: 500, closeWaitMs: 2000, terminateMs: 500, spawnRetryForMs: PATIENCE_MS },
+  });
+  const extra: Account = { ...account, id: 'codex-1', configDir: login };
+  const hooks = [{ key: `${main}/hooks.json:pre_tool_use:0:0`, trustStatus: 'trusted', currentHash: 'sha256:aaa' }];
+  const h = await (async () => {
+    const opening = open({ adapter, account: extra });
+    // First the short-lived process on ~/.codex.
+    const probe = await f.next();
+    await probe.init();
+    const read = await probe.request('config/read');
+    probe.respond(read.id, { config: { model: 'x' }, origins: {} });
+    const list = await probe.request('hooks/list');
+    probe.respond(list.id, { data: [{ cwd: '/tmp', hooks, warnings: [], errors: [] }] });
+    return opening;
+  })();
   const req = await h.conn.request('thread/start');
-  const config = req.params.config as Record<string, unknown>;
-  assert.deepEqual(config['hooks.state'], { '/x/hooks.json:stop:0:0': { trusted_hash: 'sha256:1' } });
-  assert.equal(config['shell_environment_policy.set.THREADBEAR_THREAD_ID'], 'tb-1');
+  assert.deepEqual((req.params.config as Record<string, unknown>)['hooks.state'], { [`${login}/hooks.json:pre_tool_use:0:0`]: { trusted_hash: 'sha256:aaa' } });
+  assert.equal(fs.readlinkSync(path.join(login, 'AGENTS.md')), path.join(main, 'AGENTS.md'));
+  assert.equal(fs.readlinkSync(path.join(login, 'config.toml')), path.join(main, 'config.toml'));
   h.conn.respond(req.id, threadResult('th-1'));
   await h.session.end();
-  const r = await open({ resume: true, sessionId: 'th-old', deps: { homeConfig } });
+  // Nothing changed in ~/.codex: the next session asks nothing more.
+  const r = await open({ adapter, account: extra, resume: true, sessionId: 'th-old' });
   const resume = await r.conn.request('thread/resume');
   assert.ok((resume.params.config as Record<string, unknown>)['hooks.state']);
   await r.session.end();
-  // A setup that throws doesn't stop the thread.
-  const t = await open({
-    deps: {
-      homeConfig: () => {
-        throw new Error('no links here');
-      },
-    },
-  });
-  const start = await t.conn.request('thread/start');
-  assert.equal((start.params.config as Record<string, unknown>)['hooks.state'], undefined);
-  t.conn.respond(start.id, threadResult('th-2'));
-  await t.session.end();
 });
 
 test('traffic before thread/start answers is routed once the id is known', async () => {

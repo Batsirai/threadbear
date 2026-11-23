@@ -374,8 +374,11 @@ File references are where to look.
   only Codex's own project trust, which it renames to
   `config.toml.before-share-<date>` beside the link. `auth.json` and the
   login's sessions are left alone. The thread is also told, as config
-  overrides, that the hooks you trusted in `~/.codex` are trusted there too
-  (read from `~/.codex/config.toml`'s `hooks.state`).
+  overrides, that the hooks you trusted in `~/.codex` are trusted there too.
+  To know which, and where `~/.codex` keeps its sign-in (`config.toml` isn't
+  linked if that's the Keychain), it starts `codex app-server` on `~/.codex`
+  for a moment and asks (`config/read`, `hooks/list`; no thread, no model),
+  again only when `~/.codex`'s `config.toml` or `hooks.json` changes.
 - **A Claude login's year-long token, if you make one**
   (`runner/src/year-token.ts`, `desktop/core/src/claude_token.py`): Year-long
   token… on a Claude login's row in Usage opens Terminal on `claude

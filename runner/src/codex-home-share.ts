@@ -18,12 +18,14 @@
 // keeps that trust in config.toml under the hooks.json's own path
 // ("<CODEX_HOME>/hooks.json:pre_tool_use:0:0"), so the main login's trust
 // doesn't cover the same file reached through another login. hookTrust gives
-// the session the main login's entries under the login's path, as config
-// overrides: the same hashes, so only hooks trusted in ~/.codex run, and one
-// changed since shows as changed there too.
+// the session the hooks Codex says ~/.codex trusts, under the login's path,
+// as config overrides: their own hashes, so only hooks trusted in ~/.codex
+// run, and one changed since stays untrusted until it's trusted there.
+// Where the sign-in lives and what's trusted come from Codex itself
+// (config/read and hooks/list on ~/.codex, the Codex adapter's mainHome), as
+// reading config.toml by hand was fooled by text inside a multi-line string.
 import fs from 'node:fs';
 import path from 'node:path';
-import { readCodexConfig } from './accounts.ts';
 
 export type ShareReport = { changes: string[]; skipped: string[] };
 
@@ -96,14 +98,15 @@ export function onlyProjectTrust(text: string): boolean {
   });
 }
 
-function shareConfig(mainDir: string, loginDir: string, report: ShareReport, stamp: string): void {
+function shareConfig(mainDir: string, loginDir: string, report: ShareReport, stamp: string, store: string | undefined): void {
   const target = path.join(mainDir, CONFIG);
   const link = path.join(loginDir, CONFIG);
   if (!exists(target)) return linkTo(target, link, report);
+  // Not known (Codex couldn't be asked): left as it is.
+  if (store === undefined) return;
   // The main home keeping its tokens in the Keychain would send the login
   // there too, away from its own auth.json.
-  const store = readCodexConfig(target).credentialsStore;
-  if (store && store !== 'file') {
+  if (store !== 'file') {
     if (isLink(link) && fs.readlinkSync(link) === target) {
       fs.unlinkSync(link);
       report.changes.push(`removed ${link}: ${target} now keeps its sign-in in the ${store} store`);
@@ -176,8 +179,11 @@ function shareSkills(mainDir: string, loginDir: string, report: ShareReport): vo
 }
 
 // Links what the login is missing. Safe to run before every session: once
-// shared, it only looks. `stamp` names a moved-aside config.toml.
-export function shareCodexHome(mainDir: string, loginDir: string, stamp = new Date().toISOString().slice(0, 10)): ShareReport {
+// shared, it only looks. `store` is where the main home keeps its sign-in
+// (cli_auth_credentials_store as Codex's config/read has it, "file" when
+// unset); config.toml is linked only when that's "file", and left alone when
+// it isn't known. `stamp` names a moved-aside config.toml.
+export function shareCodexHome(mainDir: string, loginDir: string, store: string | undefined, stamp = new Date().toISOString().slice(0, 10)): ShareReport {
   const report: ShareReport = { changes: [], skipped: [] };
   if (!fs.existsSync(mainDir) || !fs.existsSync(loginDir) || sameHome(mainDir, loginDir)) return report;
   // Each step on its own: two threads starting on one login at once race
@@ -185,7 +191,7 @@ export function shareCodexHome(mainDir: string, loginDir: string, stamp = new Da
   // fails leaves the rest to do theirs.
   const steps = [
     ...FILES.map((name) => () => linkTo(path.join(mainDir, name), path.join(loginDir, name), report)),
-    () => shareConfig(mainDir, loginDir, report, stamp),
+    () => shareConfig(mainDir, loginDir, report, stamp, store),
     () => shareSkills(mainDir, loginDir, report),
   ];
   for (const step of steps) {
@@ -198,120 +204,27 @@ export function shareCodexHome(mainDir: string, loginDir: string, stamp = new Da
   return report;
 }
 
-// The lines of a TOML file that start outside a multi-line string, trimmed
-// (null for the rest), so text inside a """...""" or '''...''' value (a
-// developer_instructions, say) is never read as a table or a key.
-export function tomlLines(text: string): (string | null)[] {
-  const out: (string | null)[] = [];
-  let open: '"""' | "'''" | null = null;
-  for (const line of text.split(/\r?\n/)) {
-    out.push(open ? null : line.trim());
-    let i = 0;
-    let single: '"' | "'" | null = null;
-    while (i < line.length) {
-      if (open) {
-        const at = line.indexOf(open, i);
-        if (at < 0) break;
-        let slashes = 0;
-        for (let j = at - 1; j >= 0 && line[j] === '\\'; j--) slashes++;
-        i = at + 3;
-        if (open === '"""' && slashes % 2) continue;
-        // Up to two more quotes can end the string's own text.
-        while (line[i] === open[0] && i < at + 5) i++;
-        open = null;
-        continue;
-      }
-      const c = line[i];
-      if (single) {
-        if (c === '\\' && single === '"') i++;
-        else if (c === single) single = null;
-        i++;
-        continue;
-      }
-      if (c === '#') break;
-      const three = line.slice(i, i + 3);
-      if (three === '"""' || three === "'''") {
-        open = three;
-        i += 3;
-        continue;
-      }
-      if (c === '"' || c === "'") single = c;
-      i++;
-    }
-  }
-  return out;
-}
+type HookState = { trusted_hash: string; enabled?: false };
 
-type HookState = { trusted_hash?: string; trusted_content_hash?: string; enabled?: boolean };
+// A hook as Codex's hooks/list reports it, for the main home.
+export type MainHook = { key: string; trustStatus: string; currentHash: string; enabled?: boolean };
 
-const QUOTED = String.raw`"((?:[^"\\]|\\.)*)"|'([^']*)'`;
-const unquote = (basic: string | undefined, literal: string | undefined) => (basic !== undefined ? basic.replace(/\\(["\\])/g, '$1') : literal!);
-const STATE_KV = /^(trusted_hash|trusted_content_hash|enabled)\s*=\s*(?:"([^"\\]*)"|'([^']*)'|(true|false))$/;
-
-function setState(state: HookState, kv: RegExpExecArray): void {
-  const text = kv[2] ?? kv[3];
-  if (kv[1] === 'enabled') {
-    if (kv[4]) state.enabled = kv[4] === 'true';
-  } else if (text !== undefined) state[kv[1] as 'trusted_hash' | 'trusted_content_hash'] = text;
-}
-
-// The hook states in a config.toml: the [hooks.state."<key>"] tables Codex
-// writes (toml_edit, a table per hook), or "<key>" = { ... } lines under
-// [hooks.state], each with the three keys a state has. Anything else is
-// passed over, which leaves that hook untrusted on the login: never more
-// trusted than in ~/.codex.
-export function readHookStates(text: string): Map<string, HookState> {
-  const out = new Map<string, HookState>();
-  let current: HookState | undefined;
-  let inStateTable = false;
-  const header = new RegExp(String.raw`^\[\s*hooks\s*\.\s*state\s*\.\s*(?:${QUOTED})\s*\]\s*(?:#.*)?$`);
-  const inline = new RegExp(String.raw`^(?:${QUOTED})\s*=\s*\{(.*)\}\s*(?:#.*)?$`);
-  for (const line of tomlLines(text)) {
-    if (line === null) continue;
-    if (line.startsWith('[')) {
-      const m = header.exec(line);
-      current = m ? {} : undefined;
-      if (m) out.set(unquote(m[1], m[2]), current!);
-      inStateTable = /^\[\s*hooks\s*\.\s*state\s*\]\s*(?:#.*)?$/.test(line);
-      continue;
-    }
-    if (current) {
-      const kv = STATE_KV.exec(line.replace(/\s+#.*$/, ''));
-      if (kv) setState(current, kv);
-    } else if (inStateTable) {
-      const m = inline.exec(line);
-      if (!m) continue;
-      const state: HookState = {};
-      for (const part of m[3].split(',')) {
-        const kv = STATE_KV.exec(part.trim());
-        if (kv) setState(state, kv);
-      }
-      out.set(unquote(m[1], m[2]), state);
-    }
-  }
-  return out;
-}
-
-// Config overrides that trust the login's hooks.json as far as the main
-// login trusts its own, when the two are the same file. Codex keys a hook by
-// its file's path under CODEX_HOME made real, so that's the path used here.
-export function hookTrust(mainDir: string, loginDir: string): Record<string, unknown> {
+// Config overrides that trust the login's hooks.json as far as Codex itself
+// says the main home trusts its own (hooks/list on ~/.codex, so nothing here
+// reads config.toml's trust by hand), when the two are the same file. Codex
+// keys a hook by its file's path under CODEX_HOME made real, so that's the
+// path used for both.
+export function hookTrust(hooks: MainHook[], mainDir: string, loginDir: string): Record<string, unknown> {
   if (sameHome(mainDir, loginDir)) return {};
   const mainHooks = path.join(mainDir, 'hooks.json');
   const loginHooks = path.join(loginDir, 'hooks.json');
   if (!exists(mainHooks) || !exists(loginHooks) || realOr(mainHooks) !== realOr(loginHooks)) return {};
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(mainDir, CONFIG), 'utf8');
-  } catch {
-    return {};
-  }
-  const prefixes = [...new Set([mainHooks, path.join(realOr(mainDir), 'hooks.json')])].map((p) => `${p}:`);
+  const prefix = `${path.join(realOr(mainDir), 'hooks.json')}:`;
   const loginKey = path.join(realOr(loginDir), 'hooks.json');
   const state: Record<string, HookState> = {};
-  for (const [key, value] of readHookStates(text)) {
-    const prefix = prefixes.find((p) => key.startsWith(p));
-    if (prefix && Object.keys(value).length) state[`${loginKey}:${key.slice(prefix.length)}`] = value;
+  for (const h of hooks) {
+    if (h.trustStatus !== 'trusted' || !h.key.startsWith(prefix) || !h.currentHash) continue;
+    state[`${loginKey}:${h.key.slice(prefix.length)}`] = h.enabled === false ? { trusted_hash: h.currentHash, enabled: false } : { trusted_hash: h.currentHash };
   }
   return Object.keys(state).length ? { 'hooks.state': state } : {};
 }
