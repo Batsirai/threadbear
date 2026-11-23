@@ -137,23 +137,29 @@ draining runner's own server applies all of this too. `tb runner`
 uses this Mac's keys from disk, so the runner never sees them. Before using them
 it looks at its own environment and each parent's (`/bin/ps eww` on a Mac,
 `/proc/<pid>/environ` on Linux, never a `ps` on `PATH`) for thread keys, with
-three answers (Daybreak finding 174). The data dir's `secrets` folder must be its
-own (nothing in it a symlink or a file with another hard link), so a stand-in
-data dir can't borrow the real token or Convex key. Then the runner is asked, at
-the port in its `runner.json` (never `THREADBEAR_URL` or `THREADBEAR_PORT`) and
-proved by that token, whether the connection is a limited thread: if it is,
-refused. Under a thread, the runner must also name the thread, and every thread key
-found on the way up must be one that token makes for a thread id beside it. No
-answer is refused, except from a terminal (under no thread by its parents) when
-nothing at all is listening on that port, as with the runner stopped; a runner
-that's there but busy, or a lookup it couldn't finish, is no answer. Can't tell (a
-look fails; always on Windows, which can't read another process's environment;
-often on Linux over ssh, whose session process can't be read) needs the runner's
-answer too. An `lsof` that exits with anything but 1 (nothing matched) is a failed
-look even if it printed something, and on Linux the runner reads its process table
-from `/proc` as well, so needs neither `lsof` nor `ps`. A parent missing from the
-table (other than on Windows, which keeps dead parents' ids) is no answer either,
-and a connection hears no broadcasts until its lookup is done. A CLI started by a runner older
+three answers (Daybreak finding 174), and looks at its process group's leader and,
+on Linux, its session's leader as well, which a process that left its parents
+behind keeps. A terminal (no thread key in any of them): the runner is asked, at
+the port in its `runner.json` (never `THREADBEAR_URL` or `THREADBEAR_PORT`),
+whether it's a limited thread after all; refused if it says so, allowed if it says
+not or if nothing at all is listening there (the runner stopped); a runner that's
+there and won't answer is refused. Anything else (in a thread, or can't tell: a look
+fails, always on Windows, often on Linux over ssh, whose session process can't be
+read): only with the default data dir (from the account's home in the password
+database, not `$HOME`), and only if its `secrets` folder is as Threadbear made it
+(nothing in it a symlink or a file with another hard link), so a stand-in data dir,
+or a file swapped into one while tb waits, can't take part; then the runner, proved
+by that data dir's token, must place the connection itself and say it isn't
+limited, and with any thread key found (tb's own environment's included) it must
+name the thread, every key being one that token makes for a thread id beside it.
+No answer is refused. A thread's process that sets up a process group and session
+of its own gets past this as it gets past the runner's own look: the same-user
+boundary in `SECURITY.md`. An `lsof` that exits with anything but 1 (nothing
+matched) is a failed look even if it printed something, and on Linux the runner
+reads its process table from `/proc` as well, so needs neither `lsof` nor `ps`. A
+parent missing from the table (other than on Windows, which keeps dead parents'
+ids), or a draining runner's recorded CLI whose start can't be read, is no answer
+either, and a connection hears no broadcasts until its lookup is done. A CLI started by a runner older
 than this has no key and isn't recorded with its thread, so it keeps the old
 `tb` until its next start.
 

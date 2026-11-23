@@ -487,7 +487,7 @@ test('on Linux the process table comes from /proc, with no ps', async (t) => {
     stat(400, 'a) b (c', 300, 400); // brackets and spaces in the name
     fs.mkdirSync(path.join(root, 'self'));
     const rows = (await procTable(root)).sort((a, b) => a.pid - b.pid);
-    assert.deepEqual(rows, [{ pid: 300, ppid: 1, pgid: 300 }, { pid: 400, ppid: 300, pgid: 400 }]);
+    assert.deepEqual(rows, [{ pid: 300, ppid: 1, pgid: 300, sid: 300 }, { pid: 400, ppid: 300, pgid: 400, sid: 400 }]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -884,6 +884,10 @@ test('the registry names a thread only for a live CLI, and sees a draining runne
     assert.equal(await r.threadOfPid(process.pid), 'th2');
     fs.writeFileSync(path.join(dir, 'children-99.json'), JSON.stringify([{ pid: process.pid, command: 'x', startedAt: 'x', lstart: 'some other start', threadId: 'th2' }]));
     assert.equal(await r.threadOfPid(process.pid), undefined, 'a recycled pid');
+    // A draining runner's CLI whose start can't be read: no answer, not "not that thread" (finding 175 reviews).
+    const { StaleProcess } = await import('../../src/proc.ts');
+    fs.writeFileSync(path.join(dir, 'children-99.json'), JSON.stringify([{ pid: 2 ** 22 + 17, command: 'x', startedAt: 'x', lstart, threadId: 'th2' }]));
+    await assert.rejects(r.threadOfPid(2 ** 22 + 17), (e) => e instanceof StaleProcess);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -913,7 +917,7 @@ test('tb runner refuses in a limited thread, whatever its environment says', asy
     const r = await tb(h, url, me.id, key, ['runner']);
     assert.equal(r.code, 1, r.out);
     // (Run from a real thread's shell, that thread's key is found first.)
-    assert.match(r.out, /on auto|Full access|isn't pointed|couldn't tell/);
+    assert.match(r.out, /on auto|Full access|isn't pointed|couldn't tell|own data folder/);
     from = me.id;
     const wiped = await tb(h, url, '', '', ['runner']);
     assert.equal(wiped.code, 1, wiped.out);
@@ -1010,11 +1014,13 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
       setPort(port);
     }
   };
-  // tb's parent (a shell, 400) and above it the thread's CLI (300).
-  const table = async () => [{ pid: 400, ppid: 300 }, { pid: 300, ppid: 1 }];
+  // tb (500), its parent (a shell, 400) and above it the thread's CLI (300).
+  // The harness's data dir stands in for the default one.
+  const table = async () => [{ pid: 500, ppid: 400, pgid: 500 }, { pid: 400, ppid: 300, pgid: 400 }, { pid: 300, ppid: 1, pgid: 300 }];
   const cliOf = (id: string, key = threadKey(token, id)) => (p: number) => (p === 300 ? `node claude THREADBEAR_THREAD_ID=${id} THREADBEAR_THREAD_KEY=${key} X=1` : 'zsh THREADBEAR_THREAD_KEY= X=1');
-  const under = (id: string, key?: string) => ({ table, envOf: cliOf(id, key), ppid: 400, platform: 'darwin' as const });
-  const terminal = { table, envOf: () => 'zsh HOME=/Users/x', ppid: 400, platform: 'darwin' as const };
+  const base = { table, self: 500, ppid: 400, platform: 'darwin' as const, defaultHome: h.home };
+  const under = (id: string, key?: string) => ({ ...base, envOf: cliOf(id, key) });
+  const terminal = { ...base, envOf: () => 'zsh HOME=/Users/x' };
   const wiped = { THREADBEAR_THREAD_KEY: '', THREADBEAR_THREAD_ID: '', THREADBEAR_URL: 'ws://127.0.0.1:1/rpc' };
   try {
     // Can't tell: the process table, a parent's environment, a parent missing.
@@ -1023,7 +1029,7 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
       { ...terminal, envOf: () => { throw new Error('ps exited 1'); } },
       { ...terminal, envOf: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); } },
       { ...terminal, table: async () => [] },
-      { platform: 'win32' as const },
+      { platform: 'win32' as const, defaultHome: h.home },
     ]) {
       assert.equal((await tbCaller(wiped, deps)).kind, 'unresolved');
       // The runner can't be asked: refused.
@@ -1041,9 +1047,31 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
     assert.match((await ownerOnly(cfg, wiped, under(limited.id))) ?? '', /on auto/);
     // The runner unreachable: refused, not waved through.
     assert.match((await down(() => ownerOnly(cfg, wiped, under(limited.id)))) ?? '', /Full access/);
-    // A stand-in data dir with a token of its own: the CLI's key isn't one it made.
+    // A stand-in data dir, from a thread or where tb can't tell: only the default one is used.
     const fake = makeHarness();
-    assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, under(limited.id))) ?? '', /isn't pointed at that thread's own runner/);
+    assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, under(limited.id))) ?? '', /only uses the runner's own data folder/);
+    assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, { platform: 'win32', defaultHome: h.home })) ?? '', /only uses the runner's own data folder/);
+    // Pointed at the default one, but its token isn't the one the CLI's key came from.
+    assert.match((await ownerOnly({ ...cfg, home: fake.home }, wiped, { ...under(limited.id), defaultHome: fake.home })) ?? '', /isn't pointed at that thread's own runner/);
+    // tb's own key, when a parent can't be read: still a thread (Linux over ssh, 23 Nov).
+    const ownKey = { THREADBEAR_THREAD_KEY: threadKey(token, limited.id), THREADBEAR_THREAD_ID: limited.id };
+    const blind = { ...terminal, envOf: () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); } };
+    const caller = await tbCaller(ownKey, blind);
+    assert.deepEqual(caller.kind === 'unresolved' && caller.keys.length, 1);
+    from = undefined; // even if the runner, asked, placed it as nobody's
+    assert.match((await ownerOnly(cfg, ownKey, blind)) ?? '', /Full access/);
+    from = limited.id;
+    // Left its parents behind (its shell gone, tb now under launchd) but still
+    // in the tool command's process group: that group's leader has the key.
+    const orphanTable = async () => [{ pid: 500, ppid: 1, pgid: 400 }, { pid: 400, ppid: 300, pgid: 400 }, { pid: 300, ppid: 1, pgid: 300 }];
+    const orphan = { ...base, table: orphanTable, ppid: 1, envOf: (p: number) => (p === 400 ? `zsh THREADBEAR_THREAD_ID=${limited.id} THREADBEAR_THREAD_KEY=${threadKey(token, limited.id)}` : 'x') };
+    assert.equal((await tbCaller(wiped, orphan)).kind, 'thread');
+    assert.match((await down(() => ownerOnly(cfg, wiped, orphan))) ?? '', /Full access/, 'not a terminal, so the runner being unreachable is no pass');
+    // Its group's leader gone too: can't tell.
+    assert.equal((await tbCaller(wiped, { ...orphan, table: async () => [{ pid: 500, ppid: 1, pgid: 400 }, { pid: 300, ppid: 1, pgid: 300 }] })).kind, 'unresolved');
+    // A new group, but Linux still has its session: the CLI's.
+    const linuxOrphan = { ...base, platform: 'linux' as const, ppid: 1, table: async () => [{ pid: 500, ppid: 1, pgid: 500, sid: 300 }, { pid: 300, ppid: 1, pgid: 300, sid: 300 }], envOf: cliOf(limited.id) };
+    assert.equal((await tbCaller(wiped, linuxOrphan)).kind, 'thread');
     // A stand-in data dir whose secrets link to the real ones, served by a
     // runner of its own (Codex's review): its secrets aren't its own.
     for (const link of ['symlink', 'hardlink', 'dir'] as const) {
@@ -1057,8 +1085,11 @@ test("tb runner's check: can't tell is refused, a thread needs its own runner to
         }
         const standInCfg = { ...cfg, home: standIn };
         from = full.id; // what a runner on the stand-in, with a forged Full record, would say
-        assert.match((await ownerOnly(standInCfg, wiped, under(limited.id))) ?? '', /aren't its own/, link);
-        assert.match((await ownerOnly(standInCfg, wiped, { platform: 'win32' })) ?? '', /aren't its own/, link);
+        assert.match((await ownerOnly(standInCfg, wiped, under(limited.id))) ?? '', /own data folder/, link);
+        assert.match((await ownerOnly(standInCfg, wiped, { platform: 'win32', defaultHome: h.home })) ?? '', /own data folder/, link);
+        // Even were it the default data dir, links in its secrets are refused.
+        assert.match((await ownerOnly(standInCfg, wiped, { ...under(limited.id), defaultHome: standIn })) ?? '', /isn't as Threadbear made it/, link);
+        assert.match((await ownerOnly(standInCfg, wiped, { platform: 'win32', defaultHome: standIn })) ?? '', /isn't as Threadbear made it/, link);
         from = limited.id;
       } finally {
         fs.rmSync(standIn, { recursive: true, force: true });
@@ -1132,7 +1163,7 @@ test("tb runner from a limited thread's CLI, its key wiped, no ps on PATH and TH
         cli.stderr.on('data', (d) => (out += d));
         const code = await new Promise<number | null>((r) => cli.once('exit', r));
         assert.equal(code, 1, `${pathDir || 'no PATH'} ${sub.join(' ')}: ${out}`);
-        assert.match(out, /on auto|Full access|isn't pointed|couldn't tell/, out);
+        assert.match(out, /on auto|Full access|isn't pointed|couldn't tell|own data folder/, out);
       }
     }
     assert.equal(heard, 0, 'the backend heard nothing');

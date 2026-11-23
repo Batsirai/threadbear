@@ -52,7 +52,7 @@ export const threadPeer = (threadId: string): PeerCaller => ({ kind: 'thread', t
 // when it started: Windows keeps a process's parent id after the parent
 // has gone, and gives that id to the next process, so a parent that
 // started after its child isn't its parent.
-export type ProcRow = { pid: number; ppid: number; pgid?: number; created?: bigint };
+export type ProcRow = { pid: number; ppid: number; pgid?: number; sid?: number; created?: bigint };
 
 // The accepted connection, as the runner's side sees it: the client's
 // address and port, and the address and port it reached. All four, because
@@ -143,6 +143,7 @@ export async function procPids(sock: PeerSocket, root = '/proc', until = Infinit
       continue; // gone, or not this user's
     }
     for (const fd of fds) {
+      if (Date.now() > until) throw new Error('reading /proc took too long');
       let target: string;
       try {
         target = await fs.promises.readlink(`${root}/${name}/fd/${fd}`);
@@ -175,7 +176,8 @@ export async function procTable(root = '/proc'): Promise<ProcRow[]> {
     const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
     const ppid = Number(f[1]);
     const pgid = Number(f[2]);
-    if (Number.isInteger(ppid) && Number.isInteger(pgid)) rows.push({ pid: Number(name), ppid, pgid });
+    const sid = Number(f[3]);
+    if (Number.isInteger(ppid) && Number.isInteger(pgid)) rows.push({ pid: Number(name), ppid, pgid, ...(Number.isInteger(sid) ? { sid } : {}) });
   }
   if (rows.length === 0) throw new Error(`no processes in ${root}`);
   return rows;
