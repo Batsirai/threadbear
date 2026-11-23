@@ -699,7 +699,9 @@ File references are where to look.
   spend it on and asks you before starting any. At most twice per week per
   login, and only on the main Mac's runner when there are several.
   Settings › General › Usage, or `"spareWeek": false` in `runner.json`,
-  turns it off. It keeps what it last said in `runner/spare-week.json` in
+  turns it off. Reset readings within a minute of one another count as
+  the same window, so a rounded countdown can't repeat a nudge. It keeps
+  what it last said in `runner/spare-week.json` in
   the data folder. Find work for it in the Usage panel starts the same
   thread by hand.
 - **Your email, if you set it up** (`runner/src/mail-watch.ts`, the

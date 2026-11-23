@@ -39,6 +39,10 @@ export const OLD_READING_H = 6; // older than this, the thread checks it first
 export const CHECK_MS = 30 * 60_000;
 const HOUR_MS = 3_600_000;
 const WEEK_MS = 7 * 24 * HOUR_MS;
+// Providers can reconstruct the same reset from a rounded countdown: live
+// Codex readings have differed by one second. Compare dates, not rounded
+// buckets (which split a reset on the bucket boundary).
+const RESET_JITTER_MS = 60_000;
 
 export type Stage = 'early' | 'last-call';
 
@@ -120,6 +124,17 @@ function windowKey(accountId: string, w: UsageWindow): string {
   return `${accountId}|${w.kind === 'weekly' ? 'weekly' : `${w.kind}:${w.title}`}|${w.resetsAt}`;
 }
 
+function saidStages(accountId: string, w: UsageWindow, done: Record<string, Stage[]>): Stage[] {
+  const key = windowKey(accountId, w);
+  const prefix = key.slice(0, key.lastIndexOf('|') + 1);
+  const reset = Date.parse(w.resetsAt!);
+  // Read the old on-disk keys too, including multiple readings saved before
+  // this fix. Keep their stage history rather than issuing a new nudge.
+  return Object.entries(done).flatMap(([k, stages]) =>
+    k.startsWith(prefix) && Math.abs(Date.parse(k.slice(prefix.length)) - reset) <= RESET_JITTER_MS ? stages : [],
+  );
+}
+
 // The windows due a thread now, and the stage each is at. `done` is each
 // window's stages already said, by windowKey.
 export function dueWindows(accounts: readonly Account[], samples: SamplesFor, done: Record<string, Stage[]>, now: number): SpareWindow[] {
@@ -129,7 +144,7 @@ export function dueWindows(accounts: readonly Account[], samples: SamplesFor, do
     for (const p of projections(a, samples, now)) {
       if (p.hoursLeft > LOOKAHEAD_H) continue;
       const stage: Stage = p.hoursLeft <= LAST_CALL_H ? 'last-call' : 'early';
-      const said = done[windowKey(a.id, p.window)] ?? [];
+      const said = saidStages(a.id, p.window, done);
       if (said.includes(stage) || (stage === 'early' && said.includes('last-call'))) continue;
       if (p.leftAtReset < (stage === 'last-call' ? MIN_LEFTOVER_LAST : MIN_LEFTOVER)) continue;
       out.push({ ...p, accountId: a.id, stage });

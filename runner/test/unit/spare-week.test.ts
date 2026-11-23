@@ -57,6 +57,36 @@ test('the last call is 8 hours out, at 20%, and an early one is skipped after it
   assert.equal(dueWindows([a], () => [], { [key]: ['last-call'] }, NOW).length, 0);
 });
 
+test('reset readings a second apart keep the stages already said, across a minute boundary', () => {
+  const reset = NOW + 18 * H;
+  const w = { ...week(83, 18), resetsAt: iso(reset - 1_000) };
+  const a = login('codex-1', [w]);
+  const key = `codex-1|weekly|${iso(reset)}`;
+  const done = { [key]: ['early'] as ('early' | 'last-call')[] };
+  assert.deepEqual(dueWindows([a], () => [], done, NOW), []);
+  w.resetsAt = iso(reset + 1_000);
+  assert.deepEqual(dueWindows([a], () => [], done, NOW), []);
+  // An early nudge still leaves one last call, even when another reading
+  // of this same reset differs by a second.
+  assert.equal(dueWindows([a], () => [], done, NOW + 12 * H)[0]?.stage, 'last-call');
+  assert.deepEqual(dueWindows([a], () => [], {
+    [key]: ['early'],
+    [`codex-1|weekly|${iso(reset - 1_000)}`]: ['last-call'],
+  }, NOW + 12 * H), []);
+});
+
+test('one reset history does not silence another account, model or a genuinely different reset', () => {
+  const w = week(83, 18);
+  const said = { [`a|weekly|${w.resetsAt}`]: ['early'] as ('early' | 'last-call')[] };
+  assert.equal(dueWindows([login('b', [w])], () => [], said, NOW).length, 1);
+  assert.equal(dueWindows([login('a', [{ ...w, kind: 'weekly_model', title: 'Weekly Fable' }])], () => [], said, NOW).length, 1);
+  const models = { [`a|weekly_model:Weekly Fable|${w.resetsAt}`]: ['early'] as ('early' | 'last-call')[] };
+  assert.equal(dueWindows([login('a', [{ ...w, kind: 'weekly_model', title: 'Weekly Opus' }])], () => [], models, NOW).length, 1);
+  const nextWeek = { ...w, resetsAt: iso(NOW + (18 + 168) * H) };
+  assert.equal(dueWindows([login('a', [nextWeek])], () => [], said, NOW + 168 * H).length, 1);
+  assert.equal(dueWindows([login('a', [{ ...w, resetsAt: iso(NOW + 20 * H) }])], () => [], said, NOW).length, 1);
+});
+
 test("signed out, ended, blocked or unread logins are passed over", () => {
   const w = [week(60, 18)];
   for (const extra of [{ signedOut: true }, { planEnded: true }] as Partial<Account>[]) {
@@ -105,14 +135,15 @@ test("the brief names the login and its pool, asks before starting, and has noth
   assert.doesNotMatch(text, /Mike|dev\/me|misc/);
 });
 
-function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean } = {}) {
+function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean; home?: string } = {}) {
   const clock = new FakeClock(NOW);
   const started: { text: string; title: string; accountId: string; cwd?: string; why: string }[] = [];
   const sent: { threadId: string; text: string }[] = [];
   const archived = new Set<string>();
   const s = { on: opts.on ?? true, looks: opts.looks ?? true, accounts };
+  const home = opts.home ?? tmpDir('tb-spare-week-');
   const sw = new SpareWeek({
-    home: tmpDir('tb-spare-week-'),
+    home,
     clock,
     log: nullLogger,
     on: () => s.on,
@@ -127,8 +158,28 @@ function rig(accounts: Account[], opts: { on?: boolean; looks?: boolean } = {}) 
     open: (id) => !archived.has(id),
     send: (threadId, text) => sent.push({ threadId, text }),
   });
-  return { sw, clock, started, sent, archived, s };
+  return { sw, clock, started, sent, archived, s, home };
 }
+
+test('an archived suggestion stays said after a restart and a jittered reset reading', () => {
+  const reset = NOW + 20 * H;
+  const first = rig([login('codex-1', [{ ...week(83, 20), resetsAt: iso(reset + 1_000) }])]);
+  assert.equal(first.sw.check().length, 1);
+  first.archived.add('t1');
+  const next = rig([login('codex-1', [week(83, 20)])], { home: first.home });
+  next.archived.add('t1');
+  assert.deepEqual(next.sw.check(), []);
+  assert.equal(next.started.length, 0);
+  next.clock.advance(14 * H);
+  assert.equal(next.sw.check()[0]?.stage, 'last-call');
+  assert.equal(next.started.length, 1);
+  next.s.accounts[0]!.usage!.windows[0]!.resetsAt = iso(reset + 1_000);
+  assert.deepEqual(next.sw.check(), []);
+  assert.equal(next.sent.length, 0);
+  // A deliberate click can still open a fresh suggestion after archiving.
+  next.archived.add('t1');
+  assert.equal(next.sw.findWork('codex-1').started, true);
+});
 
 test('the check starts one thread pinned to the login, and the last call goes to it', () => {
   const { sw, clock, started, sent, s } = rig([login('claude-1', [week(60, 20)])]);
