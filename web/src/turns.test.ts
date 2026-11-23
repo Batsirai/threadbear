@@ -112,3 +112,7 @@ test('folding follows the shared cases', () => {
     assert.deepEqual(fold(rows, c.input.busy).map(shown), c.expect, c.name);
   }
 });
+
+test("a divider whose times won't parse says Moments later, never NaN", () => {
+  assert.equal(gapLabel({ seq: 1, from: '', to: '2026-11-23T08:00:00Z', wokeBy: [], runnerWake: 'Codex answered' }), 'Moments later · Codex answered');
+});

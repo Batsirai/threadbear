@@ -998,6 +998,8 @@ test("wakeReason: a runner's message row says why it sent it, scrubbed and short
   assert.equal(sent('runner', 'Hook sk-secret passed').wakeReason, 'Hook [key] passed');
   assert.equal(sent('runner', `  ${'x'.repeat(500)}  `).wakeReason!.length, 200);
   assert.equal(sent('runner', '   ').wakeReason, undefined);
+  // One line, as the Mac's divider draws it (Gemini's review, 23 Nov).
+  assert.equal(sent('runner', 'Codex answered\nand more').wakeReason, 'Codex answered…');
   // Only the runner's own messages have one.
   assert.equal(sent('phone', 'Codex answered').wakeReason, undefined);
   assert.equal(sent(undefined, 'Codex answered').wakeReason, undefined);

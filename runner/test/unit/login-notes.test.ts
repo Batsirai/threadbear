@@ -45,9 +45,8 @@ test('another Mac plays a note row as the note it was, between the turns', () =>
     'assistant.text:aaaa1111',
     'turn.completed:aaaa1111',
     'note:',
-    // The runner's message before the turn it starts, as on its own runner.
-    'user.message:bbbb2222',
     'turn.started:bbbb2222',
+    'user.message:bbbb2222',
     'assistant.text:bbbb2222',
     'turn.completed:bbbb2222',
   ]);

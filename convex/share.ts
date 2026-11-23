@@ -32,6 +32,10 @@ const message = v.object({
   plan: v.optional(v.boolean()), // a Plan first plan (API 72), kept out of the turn's fold
   planDecision: v.optional(v.union(v.literal('go'), v.literal('revise'))), // what became of it (API 76)
   turn: v.optional(v.string()),
+  // What woke a turn and why the runner sent its own message (API 98), so
+  // the page's dividers say what the Mac's do (Codex's review, 23 Nov).
+  wokeBy: v.optional(v.array(v.object({ kind: v.string(), description: v.string() }))),
+  wakeReason: v.optional(v.string()),
   at: v.string(),
 });
 
@@ -212,6 +216,8 @@ export const view = query({
         ...(m.plan ? { plan: true } : {}),
         ...(m.plan && m.planDecision ? { planDecision: m.planDecision } : {}),
         ...(m.turn ? { turn: m.turn } : {}),
+        ...(m.wokeBy?.length ? { wokeBy: m.wokeBy.map((w) => ({ kind: w.kind, description: w.description })) } : {}),
+        ...(m.role === 'user' && m.origin === 'runner' && m.wakeReason ? { wakeReason: m.wakeReason } : {}),
         at: m.at,
       });
     }

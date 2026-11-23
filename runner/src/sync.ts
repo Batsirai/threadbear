@@ -1272,7 +1272,10 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   // Why the runner sent its own message (a few words, "Codex answered"),
   // scrubbed as its words are: the note's header on every surface.
   if (e.type === 'user.message' && e.origin === 'runner' && e.wakeReason) {
-    const why = scrub(e.wakeReason).trim().slice(0, WAKE_REASON_CHARS);
+    // One line, as the Mac's divider draws it (turn_gap.rs label_line).
+    const clean = scrub(e.wakeReason).trim();
+    const line = clean.split(/\r?\n/)[0]!.trimEnd();
+    const why = (line.length < clean.length ? `${line}…` : line).slice(0, WAKE_REASON_CHARS);
     if (why) doc.wakeReason = why;
   }
   if (e.type === 'assistant.text' && e.summary) doc.summary = true;

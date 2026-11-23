@@ -705,6 +705,26 @@ export function answersInText<A extends { action: string; answer: string }>(text
   return answers.map((a) => ({ action: a.action, answer: a.answer }) as A);
 }
 
+// Only the runner's own message says why it sent it, in a few words on
+// one line as the Mac's divider draws it (turn_gap.rs label_line), from
+// any key, the owner's too (Codex's review, 23 Nov).
+function fitWakeReason(out: Record<string, any>): void {
+  const reason = typeof out.wakeReason === 'string' ? out.wakeReason.trim() : '';
+  if (out.role !== 'user' || out.origin !== 'runner' || !reason) {
+    delete out.wakeReason;
+    return;
+  }
+  const line = reason.split(/\r?\n/)[0]!.trimEnd();
+  out.wakeReason = cutBytes(line.length < reason.length ? `${line}…` : line, 200);
+}
+
+function ownerMessage<T extends Record<string, any>>(m: T): T {
+  if (m.wakeReason === undefined) return m;
+  const out: Record<string, any> = { ...m };
+  fitWakeReason(out);
+  return out as T;
+}
+
 function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   // Only an agent's text can be a plan: a tool row's line never gets the room.
   const plan = isPlanRow(m);
@@ -717,9 +737,7 @@ function fitMessage<T extends Record<string, any>>(m: T): T | undefined {
   for (const f of ['origin', 'toolKind']) if (typeof out[f] === 'string') out[f] = cutBytes(out[f], 100);
   if (Array.isArray(out.wokeBy)) out.wokeBy = out.wokeBy.slice(0, 5).map((w: any) => ({ kind: cutBytes(String(w?.kind ?? ''), 40), description: cutBytes(String(w?.description ?? ''), 200) }));
   if (Array.isArray(out.buttons)) out.buttons = out.buttons.slice(0, MESSAGE_BUTTONS).map((b: any) => fitButton(b));
-  // Only the runner's own message says why it sent it, in a few words.
-  if (out.role !== 'user' || out.origin !== 'runner' || typeof out.wakeReason !== 'string' || !out.wakeReason.trim()) delete out.wakeReason;
-  else out.wakeReason = cutBytes(out.wakeReason.trim(), 200);
+  fitWakeReason(out);
   // Only a user's message answers asks; a card has at most a handful.
   const cap = plan ? CAP.planDoc : CAP.messageDoc;
   // They repeat the start of the text, so they're what goes when the row
@@ -1818,7 +1836,7 @@ export const appendMessages = mutation({
       if (!isSeq(given.seq)) continue;
       // Cut to fit whole rather than refused (CAP): the runner cuts text at 8,000 characters itself.
       // The main Mac's too keeps a turn only of a turn id's shape (isTurnId).
-      const m = caller.owner ? (given.turn === undefined || isTurnId(given.turn) ? given : withoutTurn(given)) : fitMessage(given);
+      const m = caller.owner ? ownerMessage(given.turn === undefined || isTurnId(given.turn) ? given : withoutTurn(given)) : fitMessage(given);
       if (!m) continue;
       let existing = await ctx.db
         .query('messages')

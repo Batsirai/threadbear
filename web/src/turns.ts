@@ -214,7 +214,9 @@ function dividers(body: TurnMessage[], shown: Set<number>): Map<number, TurnGap>
 
 // "6 min later · Mine the repo finished", as the Mac says it.
 export function gapLabel(gap: TurnGap): string {
-  const time = later(Math.max(0, Date.parse(gap.to) - Date.parse(gap.from)) / 1000);
+  // A time that won't parse is no time at all, as on the Mac, never "NaN days" (Gemini's review).
+  const span = Date.parse(gap.to) - Date.parse(gap.from);
+  const time = later(Number.isFinite(span) ? Math.max(0, span) / 1000 : 0);
   const cause = gap.runnerWake?.trim() || wakeCause(gap.wokeBy);
   return cause ? `${time} · ${cause}` : time;
 }

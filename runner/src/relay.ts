@@ -435,12 +435,8 @@ export function relayEvents(threadId: string, rows: RelayRow[], row: RelayThread
     const prev = sorted[i - 1];
     const next = sorted[i + 1];
     const base = r.seq * SCALE;
-    // The runner's own message goes before the turn it starts, as on that
-    // runner (startTurn): the Mac reads its wake reason for the turn's
-    // divider when the turn starts, and drew a bare "Moments later" (23 Nov).
-    const runnerFirst = r.role === 'user' && r.origin === 'runner';
     if (r.turn && (prev ? prev.turn !== r.turn : !olderMore)) {
-      out.push(env(runnerFirst ? base + 2 : base, r, { type: 'turn.started', turnId: r.turn, ...(r.wokeBy ? { wokeBy: r.wokeBy } : {}) }));
+      out.push(env(base, r, { type: 'turn.started', turnId: r.turn, ...(r.wokeBy ? { wokeBy: r.wokeBy } : {}) }));
     }
     if (r.turn && !turnStart.has(r.turn)) turnStart.set(r.turn, r.at);
     if (r.role === 'user') {
