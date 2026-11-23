@@ -492,7 +492,8 @@ test("a branch's next tb land takes over from its carried entry", async () => {
   const [b] = branches(main, ['b']);
   const base = sh(main, 'git rev-parse main');
   const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check: 'true', checkFrom: '' });
-  writeEntry(common, { ...old, inCheckAt: Date.now() });
+  const at = Date.now() - 1000;
+  writeEntry(common, { ...old, inCheckAt: at });
   deadPid(common, old.id);
   const drop = await lockHeld(root, common);
   const c = capture();
@@ -503,11 +504,55 @@ test("a branch's next tb land takes over from its carried entry", async () => {
     const now = waiting(common);
     assert.equal(now.length, 1);
     assert.notEqual(now[0].id, old.id);
+    // Carried in its place, so it isn't lost if this tb goes too.
+    assert.equal(now[0].inCheckAt, at);
   } finally {
     await drop();
   }
   assert.equal(await landing, 0, c.err.join('\n'));
   assert.ok(fs.existsSync(path.join(main, 'b.txt')));
+});
+
+// One in the check running now is left to that check, which may land or
+// refuse it (Gemini's review).
+test("a branch's next tb land leaves its carried entry alone while that one is in the running check", async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [b] = branches(main, ['b']);
+  const base = sh(main, 'git rev-parse main');
+  const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check: 'true', checkFrom: '' });
+  writeEntry(common, { ...old, inCheckAt: Date.now() });
+  deadPid(common, old.id);
+  const drop = await lockHeld(root, common);
+  setRunning(common, { startedAt: Date.now(), branches: ['thread/holder', b.branch], entries: [old.id] });
+  const c = capture();
+  let landing: Promise<number> | undefined;
+  try {
+    landing = land({ ...b, check: 'true' }, c.opts);
+    await until(() => c.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
+    assert.equal(waiting(common).length, 2);
+    assert.ok(readEntry(common, old.id));
+  } finally {
+    setRunning(common, undefined);
+    await drop();
+  }
+  assert.equal(await landing, 0, c.err.join('\n'));
+});
+
+// Halved to one, a carried landing has no tb to be checked by itself: it's
+// still checked with a holder (Gemini's review).
+test('a carried landing halved to one is still checked with a holder', async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [a, b] = branches(main, ['a', 'b']);
+  const base = sh(main, 'git rev-parse main');
+  const check = groupCheck(root, 'never-there.txt');
+  const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check, checkFrom: '' });
+  writeEntry(common, { ...old, inCheckAt: Date.now(), limit: 1, limitAt: base });
+  deadPid(common, old.id);
+  const ca = capture();
+  assert.equal(await land({ ...a, check }, ca.opts), 0, ca.err.join('\n'));
+  assert.match(ca.out.join('\n'), /In the same check, and landed with it: thread\/b0000000\./);
 });
 
 // Its tb gone just as the lock came: a landing a check of which has started

@@ -493,6 +493,7 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
   }
   let entry: QueueEntry | undefined;
   let entryHeld: (() => Promise<void>) | undefined;
+  let keepEntry = false;
   try {
     const unrecovered = await recoverDetached(t, gitDir, out, err);
     if (unrecovered !== undefined) return unrecovered;
@@ -525,11 +526,22 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
         if (!entryHeld) throw new Error('entry lock taken');
         // An earlier tb land of this branch whose tb has gone, carried since
         // a check of it started, is this one's now: one entry for a branch,
-        // so it can't land twice or be checked after this one failed
-        // (Gemini's review). One in a check running now may still land:
-        // this one's recoverLandedFor or rebase then finds it on main.
+        // so it can't be checked after this one failed (Gemini's review).
+        // This one takes over its place as carried, and its limits, so it
+        // isn't lost if this tb goes too (Codex's review). Not one in the
+        // check running now, which may still land it or refuse it: then the
+        // two never go in one group (stackWaiting), and this one's
+        // recoverLandedFor or rebase finds what landed.
+        const inRunning = readRunning(common)?.entries ?? [];
         for (const other of waiting(common)) {
-          if (other.id !== entry.id && other.branch === t.branch && !(await ownerWaiting(common, other))) leaveQueue(common, other.id);
+          if (other.id === entry.id || other.branch !== t.branch || inRunning.includes(other.id) || (await ownerWaiting(common, other))) continue;
+          const mine = readEntry(common, entry.id);
+          if (mine && isCarried(other)) {
+            const kept = { inCheckAt: other.inCheckAt, limit: other.limit, limitAt: other.limitAt, ordinaryAt: other.ordinaryAt };
+            entry = { ...mine, ...Object.fromEntries(Object.entries(kept).filter(([, v]) => v !== undefined)) };
+            writeEntry(common, entry);
+          }
+          leaveQueue(common, other.id);
         }
       } catch {
         if (entry) leaveQueue(common, entry.id);
@@ -579,7 +591,9 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
       const now = entry && readEntry(common, entry.id);
       return !!now && (!!now.result || isCarried(now));
     };
-    if (release && opts.onLocked && !opts.onLocked() && !goesOn()) {
+    let unheard = false;
+    if (release && opts.onLocked && !opts.onLocked()) unheard = true;
+    if (release && unheard && !goesOn()) {
       await release();
       err(`tb land was stopped just as it got the landing lock, before its check: ${t.branch} is out of the line and nothing of it landed. Run tb land again to rejoin.`);
       return 129;
@@ -598,12 +612,17 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
       // An earlier tb of this branch, killed, may have landed while this one
       // waited.
       await recoverLandedFor(t, common, out);
-      return await landLocked(t, opts, { file: timesFile, waitedMs: Date.now() - asked, entryId: entry?.id }, common, gitDir, mine?.limit === undefined ? undefined : { limit: mine.limit, at: mine.limitAt });
+      const code = await landLocked(t, opts, { file: timesFile, waitedMs: Date.now() - asked, entryId: entry?.id }, common, gitDir, mine?.limit === undefined ? undefined : { limit: mine.limit, at: mine.limitAt });
+      // Carried, with nobody to hear, and it didn't land: it stays in the
+      // line for the holders after, as it would have a second earlier
+      // (Gemini's review). A group it fails in refuses it in the end.
+      if (code !== 0 && unheard && entry && isCarried(readEntry(common, entry.id) ?? entry)) keepEntry = true;
+      return code;
     } finally {
       await release();
     }
   } finally {
-    if (entry) leaveQueue(common, entry.id);
+    if (entry && !keepEntry) leaveQueue(common, entry.id);
     await entryHeld?.();
     if (entry) fs.rmSync(entryLockFile(common, entry.id), { force: true });
     await mineOnly();
@@ -630,6 +649,17 @@ function writeLandedFor(common: string, commit: string, landed: string): void {
   } catch {
     // moveGoneBranch still tries.
   }
+}
+
+// Whether a note says `commit` landed, as something now on main.
+async function landedFor(cwd: string, common: string, commit: string, main: string): Promise<boolean> {
+  let landed: string;
+  try {
+    landed = fs.readFileSync(path.join(landedForDir(common), commit), 'utf8').trim();
+  } catch {
+    return false;
+  }
+  return /^[0-9a-f]{40,64}$/.test(landed) && (await git(cwd, ['merge-base', '--is-ancestor', landed, main])).ok;
 }
 
 async function recoverLandedFor(t: LandTarget, common: string, out: (line: string) => void): Promise<void> {
@@ -1462,7 +1492,12 @@ async function stackWaiting(
   for (const e of ordered) {
     if (e.pid === process.pid && e.path === t.path) continue; // this one
     if (e.alone) continue; // its own tb checks it by itself
-    const c = free(e) ? Infinity : Math.min(cap, e.limit !== undefined && e.limitAt === main ? e.limit : Infinity);
+    const asking = await ownerWaiting(common, e);
+    // A carried one has no tb to be checked by itself: halved to one, it's
+    // still checked with one holder, or it waits until main moves
+    // (Gemini's review).
+    const own = e.limit !== undefined && e.limitAt === main ? (asking ? e.limit : Math.max(2, e.limit)) : Infinity;
+    const c = free(e) ? Infinity : Math.min(cap, own);
     if (!free(e) && counted + 2 > c) continue;
     if (!free(e) && !includeOthers) continue;
     if (!free(e) && allowed && !allowed.has(e.id)) continue;
@@ -1476,9 +1511,12 @@ async function stackWaiting(
     // stacked as it asked, while its branch still has those commits.
     // Dropped once it doesn't, or once they're on main by another way (its
     // next tb land landed them).
-    const asking = await ownerWaiting(common, e);
     if (asking) {
       if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
+      // Landed already for an earlier tb of its branch: its own tb moves
+      // it there first (recoverLandedFor), and stacking it again would land
+      // a commit made empty on purpose twice (Gemini's review).
+      if (await landedFor(t.path, common, e.commit, main)) continue;
     } else {
       if (!isCarried(e)) continue;
       if (!(await stillAsked(t.path, e)) || (await landedOn(t.path, e, main))) {
@@ -1933,11 +1971,22 @@ async function landLocked(
     // landed) is left out: stacked again without it (Codex's and Gemini's
     // reviews). Read again after the mark, as it may leave just then.
     if (group.length) {
-      const left: string[] = [];
-      for (const g of group) {
-        const now = readEntry(common, g.entry.id);
-        if (now && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
-        if (!readEntry(common, g.entry.id)) left.push(g.entry.branch);
+      const gone = async (): Promise<string[]> => {
+        const left: string[] = [];
+        for (const g of group) {
+          const now = readEntry(common, g.entry.id);
+          if (!now || (!isCarried(now) && !(await ownerWaiting(common, now)))) left.push(g.entry.branch);
+        }
+        return left;
+      };
+      // None marked unless all are still there: a mark says a check started.
+      let left = await gone();
+      if (!left.length) {
+        for (const g of group) {
+          const now = readEntry(common, g.entry.id);
+          if (now && now.inCheckAt === undefined) writeEntry(common, { ...now, inCheckAt: Date.now() });
+        }
+        left = await gone();
       }
       if (left.length) {
         const what = `${left.join(', ')} left the line before the check started`;

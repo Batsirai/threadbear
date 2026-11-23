@@ -332,7 +332,9 @@ their own.
   loses it: on 23 Nov one killed by its agent's two-hour limit was in a
   group that passed and was then held for red, and the next holder landed
   the rest without it. Its branch's next `tb land` takes its place in the
-  line (one entry per branch). Commits count as the same across a rebase
+  line (one entry per branch), carried as it was, unless it's in the
+  check running then, which decides it. Halved to one, it's still checked
+  with one holder, having no tb to check it alone. Commits count as the same across a rebase
   only with the same author, message and change (not git's patch id,
   which ignores whitespace), and a moved branch with a commit made empty
   on purpose counts as rewritten, as its next rebase would land that
