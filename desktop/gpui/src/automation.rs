@@ -2264,7 +2264,7 @@ mod click_at_tests {
     use gpui_kit::prelude::*;
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{
-        div, px, size, AnyView, AnyWindowHandle, Bounds, MouseButton, Point, TestAppContext,
+        div, px, size, AnyView, AnyWindowHandle, App, Bounds, MouseButton, Point, TestAppContext,
         Window, WindowBounds, WindowOptions,
     };
     use std::cell::Cell;
@@ -2292,6 +2292,11 @@ mod click_at_tests {
     impl Render for Ledger {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let drawn = self.drawn.clone();
+            // GPUI's own tooltip, where the bug was, not the app's `.tip`
+            // (tips_source.rs looks for this written in place).
+            let tip = move |_: &mut Window, cx: &mut App| -> AnyView {
+                cx.new(|_| Tip(drawn.clone())).into()
+            };
             let mut column = div().size_full().flex().flex_col();
             if self.open && self.moves {
                 column = column.child(div().id("above").w_full().h(px(60.)));
@@ -2301,7 +2306,7 @@ mod click_at_tests {
                     .id("heading")
                     .w_full()
                     .h(px(20.))
-                    .tooltip(move |_, cx| -> AnyView { cx.new(|_| Tip(drawn.clone())).into() })
+                    .tooltip(tip)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.open = !this.open;
                         cx.notify();
