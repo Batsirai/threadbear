@@ -163,6 +163,9 @@ jobs:
   # scripts/test-windows.mjs: every unit test file except those in
   # runner/test/windows-known-failing.txt must pass, and those are run as a
   # report. Take a file off the list once it passes; the list only shrinks.
+  # The report times out long before it reaches most of the list, so a test
+  # that must hold on Windows (a security one) goes in a file that isn't on
+  # it, as trust-windows-paths.test.ts did (23 Nov).
   windows:
     if: github.repository == 'mikecann/threadbear' || github.event_name == 'workflow_dispatch'
     name: windows-latest, Node 24
