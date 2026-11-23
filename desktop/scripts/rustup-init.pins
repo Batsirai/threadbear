@@ -1,0 +1,15 @@
+# rustup's installer, rustup-init, pinned by version and SHA-256 for each Mac
+# it runs on (desktop/scripts/switch-from-swift.sh installs Rust with it on a
+# Mac that has no rustup). Never sh.rustup.rs: that's whatever the server
+# hands out today, run unchecked (Daybreak 173, 23 Nov 2026).
+#
+# Moving it on: take the version from
+# https://static.rust-lang.org/rustup/release-stable.toml, then for each
+# target download
+# https://static.rust-lang.org/rustup/archive/<version>/<target>/rustup-init
+# and check `shasum -a 256` of it matches the .sha256 file beside it before
+# changing both lines here in one commit.
+#
+# version target sha256
+1.29.3 aarch64-apple-darwin 63752a1919a3a4793173ec70f8f212621a7ce38ba6a246095984482f4de20f9f
+1.29.3 x86_64-apple-darwin bc107f1fb0228de7fa32413c89c1b305cea9cd256e94b01150cd054128145429

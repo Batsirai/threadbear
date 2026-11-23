@@ -262,23 +262,29 @@ elif [[ -n "$CHECK_HOSTS" ]]; then
 else
   echo "No update build hosts or check hosts in $CONFIG: building here."
   BUILT_ON=""
-  # The newest stable Rust, which is what desktop.yml builds and tests with:
-  # code that needs a recent Rust passes there and then fails partway
-  # through a 20-minute build on an older one (the vendored crates alone
-  # need 1.85). Through rustup when there is one, whatever its default
-  # toolchain is; an update that fails (offline) builds with the stable
-  # that's there. Without rustup (Homebrew's rust), the cargo on PATH.
+  # The exact Rust rust-toolchain.toml pins in the main being built, which
+  # desktop.yml and the check hosts build and test with too, never rustup's
+  # stable: that's whatever Rust's servers call stable today, and the
+  # compiler writes the app this Mac runs next (Daybreak 173, 23 Nov 2026).
+  # A file that doesn't name an exact version (1.x.y) builds nothing. Through
+  # rustup when there is one: it fetches that version the first time, and
+  # one it can't fetch (offline) builds nothing, rather than with whatever
+  # Rust is to hand. Without rustup (Homebrew's rust), the cargo on PATH,
+  # which this Mac already had: nothing is downloaded to build with.
+  channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:space:]]*$/\1/p' "$SRC/rust-toolchain.toml" 2>/dev/null | head -1 || true)"
+  [[ "$channel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Main's rust-toolchain.toml doesn't pin an exact Rust (channel = \"1.x.y\"; it says \"${channel:-nothing}\"), so nothing was built." >&2; exit 1; }
   cargo=(cargo)
   if command -v rustup >/dev/null; then
-    if rustup toolchain install stable --profile minimal --no-self-update >/dev/null 2>&1 || rustup run stable cargo --version >/dev/null 2>&1; then
-      cargo=(rustup run stable cargo)
+    if rustup toolchain install "$channel" --profile minimal --no-self-update >/dev/null 2>&1 || rustup run "$channel" cargo --version >/dev/null 2>&1; then
+      cargo=(rustup run "$channel" cargo)
     else
-      echo "Couldn't get Rust's stable toolchain (rustup toolchain install stable), so building with rustup's default." >&2
+      echo "Couldn't get Rust $channel, the version rust-toolchain.toml pins (rustup toolchain install $channel), so nothing was built; the app tries again later." >&2
+      exit 1
     fi
   fi
   (cd "$SRC/desktop" && CARGO_TARGET_DIR="$CACHE/target" CARGO_HTTP_MULTIPLEXING=false CARGO_NET_RETRY=10 "${cargo[@]}" build --release -p threadbear-gpui --features "$FEATURES") || {
     rc=$?
-    [[ "${cargo[0]}" == rustup ]] || echo "The build failed with $(cargo --version 2>/dev/null || echo "this Mac's cargo"). Threadbear is built and tested on the newest stable Rust: rustup (https://rustup.rs) keeps one, and this build uses it when it's there." >&2
+    [[ "${cargo[0]}" == rustup ]] || echo "The build failed with $(cargo --version 2>/dev/null || echo "this Mac's cargo"). Threadbear is built and tested on Rust $channel (rust-toolchain.toml): rustup (https://rustup.rs) fetches that one, and this build uses it when it's there." >&2
     exit "$rc"
   }
   cp "$CACHE/target/release/threadbear-gpui" "$CACHE/target/release/threadbear-web-helper" "$BINS/"

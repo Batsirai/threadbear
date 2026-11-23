@@ -3,8 +3,9 @@
 # same everywhere. rustup reads it and fetches it the first time. Moving it
 # can change what rustfmt writes: run `cd desktop && cargo fmt --all` with
 # the new one and commit that with it, and fix what the new clippy finds.
-# The installed app's own build (desktop/scripts/stage-update.sh) still asks
-# for rustup's stable, as forks' Macs have that already.
+# The installed app's own build (desktop/scripts/stage-update.sh) builds with
+# exactly this channel too, and switch-from-swift.sh installs it, so keep it
+# an exact version (1.x.y): a moving name like stable builds nothing there.
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]

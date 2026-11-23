@@ -25,8 +25,8 @@ File references are where to look.
 - **Or a self-hosted backend** (`setup --self-hosted`, docs/self-hosting.md;
   Convex cloud is the one we recommend): no Convex login or deploy key.
   Instead two Docker containers, `threadbear-convex` (Convex's open source
-  backend) and `threadbear-convex-dashboard`, from pinned
-  `ghcr.io/convex/*` images, with the data in the Docker volume
+  backend) and `threadbear-convex-dashboard`, from
+  `ghcr.io/convex/*` images pinned by digest (`scripts/self-hosted-plan.mjs`), with the data in the Docker volume
   `threadbear-convex-data`. They listen on this Mac's loopback only
   (ports 13210, 13211 and 16791), and `tailscale serve` puts them on your
   tailnet as `https://<this Mac>.<tailnet>.ts.net` ports 3210 (the API),
@@ -73,9 +73,11 @@ File references are where to look.
   Swift app's Start using the new app starts; that thread is an agent on
   your own login, so it uses your Claude or Codex tokens like any other
   thread): the new app is built on your Mac from your checkout's `main` with the
-  newest stable Rust, so if there's no `rustup` (even with Homebrew's
-  `rust`) it installs Rust first, with rustup's own installer from
-  `https://sh.rustup.rs` (the minimal profile, about 1 GB with the crates
+  exact Rust `rust-toolchain.toml` pins, so if there's no `rustup` (even
+  with Homebrew's `rust`) it installs Rust first, with rustup's own
+  installer, `rustup-init`, downloaded from `https://static.rust-lang.org`
+  at the version `desktop/scripts/rustup-init.pins` names and run only if
+  its SHA-256 matches the one pinned there (the minimal profile, about 1 GB with the crates
   the build fetches, in `~/.rustup` and `~/.cargo`; it doesn't touch your
   shell's startup files). The build runs at background priority, takes
   20 to 40 minutes the first time (31 on a test Mac with no Rust, 15 Nov

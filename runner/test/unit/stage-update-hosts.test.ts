@@ -26,7 +26,7 @@ function write(file: string, text: string, mode = 0o644) {
 // rust: 'rustup' has a stand-in rustup beside cargo, whose `run stable`
 // runs that cargo; 'none' is a Mac with only a cargo (Homebrew's rust).
 // cargoFails: the build fails.
-function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'rustup' | 'none' = 'rustup', cargoFails = false) {
+function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'rustup' | 'none' | 'offline' = 'rustup', cargoFails = false, toolchain: string | null = '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n') {
   const root = tmpDir();
   const home = path.join(root, 'home');
   const marks = path.join(root, 'marks');
@@ -46,6 +46,9 @@ echo BUILT_IN=/mock-target
   // cargo, for a build here: it notes it ran and leaves the two binaries.
   write(path.join(home, '.cargo', 'bin', 'cargo'), `${note('cargo')}[ "$1" = build ] || exit 0\n${cargoFails ? 'exit 101\n' : ''}mkdir -p "$CARGO_TARGET_DIR/release"\ntouch "$CARGO_TARGET_DIR/release/threadbear-gpui" "$CARGO_TARGET_DIR/release/threadbear-web-helper"\n`, 0o755);
   if (rust === 'rustup') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}[ "$1" = run ] || exit 0\nshift 2\nexec "$@"\n`, 0o755);
+  // A rustup that can't reach Rust's servers and hasn't the pinned version.
+  if (rust === 'offline') write(path.join(home, '.cargo', 'bin', 'rustup'), `${note('rustup')}exit 1\n`, 0o755);
+  if (toolchain !== null) write(path.join(checkout, 'rust-toolchain.toml'), toolchain);
   const git = (...args: string[]) => {
     const r = spawnSync('git', ['-C', checkout, ...args], { encoding: 'utf8', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' } });
     assert.equal(r.status, 0, r.stderr);
@@ -191,24 +194,57 @@ test("someone else's copy with neither builds here, and the bundle says so", () 
   }
 });
 
-test('a build here uses the newest stable Rust through rustup, whatever its default, as GitHub builds with', () => {
+// Daybreak 173: the compiler writes the app this Mac runs next, so it's the
+// exact one main's rust-toolchain.toml pins, never whatever rustup's stable
+// is today.
+test("a build here uses exactly the Rust main's rust-toolchain.toml pins, through rustup, never stable", () => {
   const r = setup(null)();
   assert.equal(r.status, 0, r.out);
-  assert.match(r.marked('rustup'), /^toolchain install stable --profile minimal --no-self-update$/m);
-  assert.match(r.marked('rustup'), /^run stable cargo build --release -p threadbear-gpui /m);
+  assert.match(r.marked('rustup'), /^toolchain install 1\.99\.1 --profile minimal --no-self-update$/m);
+  assert.match(r.marked('rustup'), /^run 1\.99\.1 cargo build --release -p threadbear-gpui /m);
+  assert.doesNotMatch(r.marked('rustup'), /stable/);
   assert.match(r.marked('cargo'), /^build --release/m);
 });
 
-test("with only a cargo (Homebrew's rust) it builds with that, and a failed build says where the tested Rust comes from", () => {
+test('a toolchain file that pins no exact version builds nothing', () => {
+  for (const toolchain of [null, '[toolchain]\nchannel = "stable"\n', '[toolchain]\nchannel = "nightly-2026-11-01"\n', '[toolchain]\nchannel = "1.99"\n', '[toolchain]\nchannel = "1.99.1; rm -rf ~"\n']) {
+    const r = setup(null, undefined, 'rustup', false, toolchain)();
+    assert.equal(r.status, 1, `${toolchain}: ${r.out}`);
+    assert.match(r.out, /doesn't pin an exact Rust/);
+    assert.equal(r.marked('cargo'), '', 'nothing built');
+    assert.equal(r.marked('rustup'), '', 'nothing fetched');
+    assert.equal(r.marked('bundle'), '');
+  }
+});
+
+test("a rustup that can't get the pinned Rust builds nothing rather than with its default", () => {
+  const r = setup(null, undefined, 'offline')();
+  assert.equal(r.status, 1, r.out);
+  assert.match(r.out, /Couldn't get Rust 1\.99\.1/);
+  assert.equal(r.marked('cargo'), '');
+  assert.equal(r.marked('bundle'), '');
+});
+
+test('no production build script asks rustup for a floating channel', () => {
+  const scripts = path.join(import.meta.dirname, '..', '..', '..', 'desktop', 'scripts');
+  for (const name of ['stage-update.sh', 'switch-from-swift.sh', 'remote.sh', 'make-bundle.sh']) {
+    const text = fs.readFileSync(path.join(scripts, name), 'utf8').split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    assert.doesNotMatch(text, /rustup[^\n]*\b(stable|beta|nightly)\b/, name);
+    assert.doesNotMatch(text, /--default-toolchain\s+(stable|beta|nightly)/, name);
+    assert.doesNotMatch(text, /sh\.rustup\.rs/, name);
+  }
+});
+
+test("with only a cargo (Homebrew's rust) it builds with that, and a failed build says which Rust it's tested on", () => {
   const ok = setup(null, undefined, 'none')();
   assert.equal(ok.status, 0, ok.out);
   assert.match(ok.marked('cargo'), /^build --release/m);
   const failed = setup(null, undefined, 'none', true)();
   assert.equal(failed.status, 101, failed.out);
-  assert.match(failed.out, /newest stable Rust: rustup \(https:\/\/rustup\.rs\)/);
+  assert.match(failed.out, /tested on Rust 1\.99\.1 \(rust-toolchain\.toml\): rustup \(https:\/\/rustup\.rs\)/);
   const viaRustup = setup(null, undefined, 'rustup', true)();
   assert.equal(viaRustup.status, 101);
-  assert.doesNotMatch(viaRustup.out, /rustup\.rs/, 'already on the stable it tests with');
+  assert.doesNotMatch(viaRustup.out, /rustup\.rs/, 'already on the Rust it tests with');
 });
 
 // An installed app's older stage-update.sh runs from its own bundle but takes
