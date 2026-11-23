@@ -385,12 +385,17 @@ export const worktreesPart = {
     if (!found) return undefined;
     const is = found.is;
     // When the thread came to its folder: a record from before cwdAt says
-    // only when the thread was made.
-    const came = Date.parse(rec.cwdAt ?? rec.createdAt);
-    const since = (at: number | undefined) => at !== undefined && Number.isFinite(at) && (!Number.isFinite(came) || at > came);
+    // only when the thread was made. To the second, as borrows are stamped:
+    // one in the same second counts as after, as the safe side.
+    const came = Math.floor(Date.parse(rec.cwdAt ?? rec.createdAt) / 1000) * 1000;
+    const since = (at: number | undefined) => at !== undefined && Number.isFinite(at) && (!Number.isFinite(came) || at >= came);
+    // When another thread came to its worktree: its own move there (cwdAt,
+    // which a fresh worktree for a thread brought back sets) or its making.
     const madeAt = (id: string) => {
       const other = this.threads.get(id)?.rec;
-      return other ? Date.parse(other.createdAt) : undefined;
+      if (!other) return undefined;
+      const times = [other.createdAt, other.cwdAt].map((t) => (t ? Date.parse(t) : NaN)).filter(Number.isFinite);
+      return times.length ? Math.max(...times) : undefined;
     };
     let went: string;
     switch (is.kind) {

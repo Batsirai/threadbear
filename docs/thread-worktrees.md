@@ -804,9 +804,10 @@ committed on that borrower's branch and left its changes there. Now:
   someone else after it moved there never carries on in it
   (`lentFolder` in `runner/src/runner/worktrees.ts`): a spare or one being
   claimed, a borrow of another's begun since (the borrow record's `at`), or
-  the worktree of a thread made since. The record's `cwdAt` says when it
-  moved there (its `createdAt` for a record from before). Its next turn
-  ends a live CLI there (a give-back in its own session, a Codex session
+  the worktree of a thread that came to it since. The record's `cwdAt`
+  says when it moved there (its `createdAt` for a record from before), to
+  the second as borrows are stamped, a tie counting as since. Its next
+  turn, after any wait, ends a live CLI there (a give-back in its own session, a Codex session
   moved in) and, like a thread brought back to a removed worktree, it
   carries on in a fresh worktree from main (the very slot, when it's a
   spare nobody else is in), or the main checkout if none can be made, and

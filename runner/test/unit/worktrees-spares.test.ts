@@ -614,6 +614,9 @@ test("a thread put in another's worktree or borrow after it was theirs (a Lab re
   const t = await threadInItsBorrow(h, root, main);
   for (const folder of [path.join(a.w.path, 'runner'), t.wt]) {
     const before = h.adapter.sessions.length;
+    // Made the second after: one in the same second as the borrow counts as
+    // before it, as the safe side.
+    await until(() => Math.floor(Date.now() / 1000) * 1000 > t.movedAt, 'a second past the borrow', 5000);
     realTime(h);
     const { thread } = h.runner.create({ text: 'Review it', accountId: 'claude-3', cwd: folder, worktree: false });
     await until(() => h.adapter.sessions.length === before + 1, 'the reviewer CLI');

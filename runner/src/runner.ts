@@ -2353,14 +2353,7 @@ export class Runner {
     // A folder, account or settings change asked for a fresh CLI, or a CLI
     // update came in since this one started. (One already closing goes
     // anyway: the turn waits for it below.)
-    // A slot it works in that has since gone back to the spares or to
-    // someone else (lentFolder): it never carries on there beside their
-    // work, so a live CLI there goes too (a give-back in its own session, a
-    // Codex session moved in).
-    const lentCwd = rec.cwd;
-    let lent = !this.leavesRemovedWorktree(rec) && this.slotFolderOf(rec) ? await this.lentFolder(rec).catch(() => undefined) : undefined;
-    if (gone()) return;
-    if (runningSession(rt) && (lent || rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
+    if (runningSession(rt) && (rt.releaseWhenIdle || rec.handoff || (rt.versionMove && rt.tasks.length === 0))) this.releaseSession(st);
     // The folder's Claude Code hooks were trusted since the CLI started
     // without them, or new ones came that aren't (a pull): a fresh CLI
     // reads the folder's settings again.
@@ -2431,10 +2424,20 @@ export class Runner {
     // Raised above its ceiling while it waited for any of the above: before
     // anything below takes what's kept for the next message (runner/ceiling.ts).
     if (this.heldAtDispatch(st, msg)) return;
-    // Asked again after the waits above: it may have moved, or been lent.
-    if (!rt.session && !this.leavesRemovedWorktree(rec) && (lent || rec.cwd !== lentCwd) && this.slotFolderOf(rec)) lent = await this.lentFolder(rec).catch(() => undefined);
-    else if (rec.cwd !== lentCwd) lent = undefined;
+    // A slot it works in that has since gone back to the spares or to
+    // someone else (lentFolder): it never carries on there beside their
+    // work. Asked after every wait above (it may have moved, or the slot
+    // been lent meanwhile), and a live CLI there goes too: a give-back in its
+    // own session, a Codex session moved in with setCwd.
+    let lent = !this.leavesRemovedWorktree(rec) && this.slotFolderOf(rec) ? await this.lentFolder(rec).catch(() => undefined) : undefined;
     if (gone()) return;
+    if (lent && runningSession(rt)) {
+      this.releaseSession(st);
+      while (rt.closing) await rt.closing;
+      if (gone()) return;
+      lent = !this.leavesRemovedWorktree(rec) && this.slotFolderOf(rec) ? await this.lentFolder(rec).catch(() => undefined) : undefined;
+      if (gone()) return;
+    }
     if (!rt.session && (lent || this.leavesRemovedWorktree(rec))) {
       forStart = undefined;
       // Held as a new thread's worktree is, so an archive that comes
@@ -2459,7 +2462,10 @@ export class Runner {
       const left = this.tellTornDown(st, msg.turnId);
       if (left) text = `${left}\n\n${text}`;
     }
-    if (!rt.session && typeof rec.agentNotice === 'string') {
+    // Not in front of a slash command, which it would turn into words (one
+    // reaches here when its thread had to leave a lent slot): the notice
+    // waits on the record for the next message.
+    if (!rt.session && typeof rec.agentNotice === 'string' && !command) {
       text = `${rec.agentNotice}\n\n${text}`;
       delete rec.agentNotice;
       this.markDirty(st);
