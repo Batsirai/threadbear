@@ -70,15 +70,17 @@ object WaitGuess {
         return if (read.waitState == WaitState.NEEDS_YOU && !read.waitingOnMike) read.copy(waitState = WaitState.DONE) else read
     }
 
-    /** Woken off a snooze: wanting him if he hasn't read it or it asked him, else done. */
+    /**
+     * Woken off a snooze, or unarchived: the state is dropped, so the old rule
+     * draws the row from its fields until the runner says (as the iPhone does).
+     * A guess here can't tell a running turn or an open card from a finished
+     * one (Codex's review, 23 Nov).
+     */
     fun woken(t: PhoneThread): PhoneThread = backFrom(t, PUT_AWAY)
 
     /** Unarchived, the same. */
     fun unarchived(t: PhoneThread): PhoneThread = backFrom(t, setOf(WaitState.ARCHIVED))
 
-    private fun backFrom(t: PhoneThread, from: Set<WaitState>): PhoneThread {
-        if (t.waitState !in from) return t
-        val asked = t.needs == "you" && t.asks.orEmpty().let { asks -> asks.isEmpty() || asks.any { it.ticked != true } }
-        return t.copy(waitState = if (t.needsYou || asked) WaitState.NEEDS_YOU else WaitState.DONE)
-    }
+    private fun backFrom(t: PhoneThread, from: Set<WaitState>): PhoneThread =
+        if (t.waitState in from) t.copy(waitState = null) else t
 }

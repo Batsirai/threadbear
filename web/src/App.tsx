@@ -10,6 +10,7 @@ import { useTranscript } from './transcript';
 import { ConvexError } from 'convex/values';
 import { api } from '../../convex/_generated/api';
 import { go, threadPath, useRoute } from './route';
+import { stillWorking } from './sections';
 import { useSignInNote, useSigningIn, useToken } from './token';
 import { EditedDrafts, MessageText, Pictures, PlanCard, picturesByRow, ToolRun, Worked, type PageMessage } from './messages';
 import { splitEdited } from './draft';
@@ -429,7 +430,9 @@ function Dock({ token, thread: t, lastSeq, onArchive, archiving, linkTo }: { tok
   const holding = unqueued(sending.state);
   const asks = !busy(t) && !t.pendingApproval ? (t.asks ?? []) : [];
   const by = picks.card === t.asksSeq ? picks.by : {};
-  const finished = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working;
+  // Waiting on its own work isn't done, as on the Mac (19 Nov: a thread
+  // waiting for CI before it could land said Done and was archived).
+  const finished = !busy(t) && !t.needsYou && !t.pendingApproval && !asks.length && !t.archivedAt && !t.working && !stillWorking(t);
   const next = finished ? (t.next ?? []) : [];
   // What the runner found still open (docs/protocol/threads.md, "Loose ends"), as
   // on the Mac and the phone: open ones first, then booked check-ins.

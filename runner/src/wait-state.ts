@@ -8,8 +8,8 @@
 //
 // The states and the moves between them are listed once, below. A thread's
 // state is derived from its record, never stored, so a move the table
-// doesn't allow isn't refused: the runner logs it (`checkMove`), and a test
-// keeps the table and the rule in step.
+// doesn't allow isn't refused: the runner logs it (at info, as summaries
+// are made a batch at a time and a quick turn can skip a step).
 
 export type WaitState =
   | 'working'

@@ -669,6 +669,8 @@ struct ThreadView: View {
     /// A finished turn that needs nothing from Mike: the done card's place.
     private func isDone(_ thread: PhoneThread, messages: [PhoneMessage]) -> Bool {
         thread.status == .idle && !thread.needsYou && thread.archivedAt == nil && thread.working == nil
+            // Waiting on its own work isn't done, as on the Mac.
+            && thread.wait?.section != .running
             && Turns.lastShown(messages)?.role == .assistant && nothingOnItsWay
             && (answeredDone == nil || answeredDone != messages.last?.seq)
     }

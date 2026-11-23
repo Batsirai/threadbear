@@ -160,7 +160,7 @@ export async function threeWays(play: (p: Play) => void | Promise<void>) {
     const listed = relay.overlay(remote()).threads.find((t) => t.threadId === id) as { looseEnds?: { seq: number; ends: { text: string }[] } } | undefined;
     const ends = listed?.looseEnds && end && listed.looseEnds.seq === end.seq ? listed.looseEnds.ends.map((e) => e.text) : [];
     // The state as another Mac's sidebar has it: the thread's index row.
-    const indexed = ((await b.ctx.db.query('threadIndex').collect()) as { threadId: string; waitState?: string }[]).find((r) => r.threadId === id);
+    const indexed = ((await b.ctx.db.query('threadIndex').collect()) as unknown as { threadId: string; waitState?: string }[]).find((r) => r.threadId === id);
     return { needs: end?.needs, asks: (end?.asks ?? []) as Ask[], next: (end?.next ?? []) as string[], looseEnds: ends, review: end?.review, plans: plansOf(events), messages: messagesOf(events), notes: loginNotes(events), failed: lastFailed(events), waitState: indexed?.waitState };
   };
   const viaPhone = async (): Promise<View> => {

@@ -560,8 +560,8 @@ type Runtime = {
   // the latest, so an older one finishing late is dropped, and when it began.
   looseEndsRun?: number;
   looseEndsAt?: number;
-  // The wait state its last summary said (wait-state.ts): a move the table
-  // doesn't list is logged, and a schedule change re-sends the threads it moved.
+  // The wait state its last summary said (wait-state.ts), so a move the
+  // table doesn't list is logged.
   waitState?: WaitState;
   // A loose-ends check is running: opening the thread doesn't start another.
   looseEndsBusy?: boolean;
@@ -1558,19 +1558,31 @@ export class Runner {
     if (n.method === 'schedules.updated') this.recheckWaitStates();
   }
 
-  // Re-sends each thread whose wait state has moved without its record
-  // changing (a schedule booked, paused or deleted).
+  // Re-sends each thread a schedule will now message by itself, or no longer
+  // will (booked, paused or deleted): that's part of its wait state, and its
+  // record didn't change. Compared with the last list, not with a summary,
+  // as any summary made meanwhile would already have the new state.
   recheckWaitStates(): void {
-    for (const st of this.threads.values()) {
-      if (st.rt.deleted || st.rt.waitState === undefined) continue;
-      const before = st.rt.waitState;
-      if (this.summary(st).waitState !== before) this.markDirty(st);
+    const now = new Set<string>();
+    for (const st of this.threads.values()) if (this.scheduled(st.rec.id)) now.add(st.rec.id);
+    const before = this.scheduledThreads;
+    this.scheduledThreads = now;
+    for (const id of new Set([...now, ...(before ?? [])])) {
+      if (before && now.has(id) === before.has(id)) continue;
+      const st = this.threads.get(id);
+      if (st && !st.rt.deleted) this.markDirty(st);
     }
   }
 
+  // The threads a schedule would message, as of the last schedules.updated.
+  private scheduledThreads?: Set<string>;
+
+  private scheduled(threadId: string): boolean {
+    return (this.schedulesFor?.(threadId) ?? []).some((x) => x.threadId === threadId && !x.paused && !x.finishedAt && Boolean(x.nextRunAt));
+  }
+
   private waitState(st: ThreadState, sum: ThreadSummary): WaitState {
-    const scheduled = (this.schedulesFor?.(st.rec.id) ?? []).some((x) => x.threadId === st.rec.id && !x.paused && !x.finishedAt && Boolean(x.nextRunAt));
-    return waitStateOf(sum, { now: this.clock.now(), scheduled });
+    return waitStateOf(sum, { now: this.clock.now(), scheduled: this.scheduled(st.rec.id) });
   }
 
   // Turn ends and folder moves, for the librarian.
@@ -4874,7 +4886,9 @@ export class Runner {
     // What it's waiting on, worked out once here for every app
     // (docs/protocol/threads.md, "Wait state").
     const state = this.waitState(st, s);
-    if (rt.waitState && !waitMoveAllowed(rt.waitState, state)) this.log.warn('wait state moved where the table has no move', { threadId: rec.id, from: rt.waitState, to: state });
+    // Info, not a warning (which reaches Sentry): summaries are made a batch
+    // at a time, so a quick turn can skip a step the table lists.
+    if (rt.waitState && !waitMoveAllowed(rt.waitState, state)) this.log.info('wait state moved where the table has no move', { threadId: rec.id, from: rt.waitState, to: state });
     rt.waitState = state;
     s.waitState = state;
     return s;

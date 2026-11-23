@@ -1145,6 +1145,8 @@ impl Threadbear {
             t.wake_when = Some(json!({ "said": said, "pending": true }));
             t.waiting_on = None;
             t.awaiting_app_restart = None;
+            // As `update_thread`: the app's own rule draws the guess.
+            t.wait_state = None;
         }
         let guess = self.threads.get(&id).cloned();
         self.leave_selection(&id, next, window, cx);

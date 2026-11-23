@@ -79,8 +79,13 @@ test('a thread summary says what it waits on, from its first turn to done, and a
   s.text('m1', 'Done.');
   s.result('completed');
   await until(() => h.runner.get(thread.id).waitState === 'done', 'done');
+  h.runner.publish({ method: 'schedules.updated', params: { schedules } });
+  await until(() => !h.runner.dirty.has(thread.id), 'the first list flushed');
   sent.length = 0;
   schedules = [{ id: 's1', title: 'Check in', text: 'look again', whenText: 'tomorrow', threadId: thread.id, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
+  // A summary made before the list goes out (Codex's review, 23 Nov) doesn't
+  // stop the re-send.
+  assert.equal(h.runner.get(thread.id).waitState, 'scheduled');
   h.runner.publish({ method: 'schedules.updated', params: { schedules } });
   await until(() => sent.some((x) => x.id === thread.id && x.state === 'scheduled'), 'the re-sent summary');
   // A change that moves nothing marks nothing to send.

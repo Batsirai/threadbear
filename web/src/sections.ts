@@ -70,6 +70,14 @@ export function waitStateOf(r: ThreadRow): WaitState | undefined {
   return r.waitState in WAIT_SECTION ? (r.waitState as WaitState) : 'done';
 }
 
+// Still at its own work (a turn, a job, waiting on other threads, to land or
+// for the app): drawn under Running, and its card doesn't say Done. False for
+// a row with no state, whose own fields say it.
+export function stillWorking(r: ThreadRow): boolean {
+  const state = waitStateOf(r);
+  return state !== undefined && WAIT_SECTION[state] === 'running';
+}
+
 // How much a state wants Mike, lowest first, as the runner's urgencyOf: 0
 // stuck on him (a card, a review), 1 asking him after a failed or stopped
 // turn, 2 asking him (read or not: Mike, 23 Nov) or out of usage, 3 done

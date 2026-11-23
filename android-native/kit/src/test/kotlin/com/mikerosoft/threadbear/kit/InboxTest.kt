@@ -196,9 +196,13 @@ class InboxTest {
         val asked = unread.copy(needs = "you")
         assertEquals(WaitState.NEEDS_YOU, WaitGuess.seen(asked).waitState)
         val asleep = thread("h", 1, snoozed = true).copy(waitState = WaitState.HIBERNATING)
-        assertEquals(WaitState.DONE, WaitGuess.woken(asleep).waitState)
+        // Woken or unarchived, the state goes and the old rule draws the row:
+        // a guess couldn't tell a running turn or an open card from done.
+        assertNull(WaitGuess.woken(asleep).waitState)
         assertEquals(WaitState.HIBERNATING, WaitGuess.unarchived(asleep).waitState)
-        assertEquals(WaitState.NEEDS_YOU, WaitGuess.unarchived(asked.copy(waitState = WaitState.ARCHIVED)).waitState)
+        assertNull(WaitGuess.unarchived(asked.copy(waitState = WaitState.ARCHIVED)).waitState)
+        val runningAsleep = thread("r", 1, snoozed = true).copy(status = ThreadStatus.RUNNING, waitState = WaitState.HIBERNATING)
+        assertNull(WaitGuess.woken(runningAsleep).waitState)
         assertNull(WaitGuess.woken(thread("old", 1, snoozed = true)).waitState)
     }
 
