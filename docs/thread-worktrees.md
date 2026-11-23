@@ -790,25 +790,32 @@ slot-32 to another thread, and a minute later the Canvas thread's next turn
 committed on that borrower's branch and left its changes there. Now:
 
 - Nothing hands out a slot an open thread's folder is in.
-  `borrow-worktree.sh` asks `runner/src/lived-in.ts`, which reads the
-  thread records in each runner data dir it knows of
-  (`THREADBEAR_RUNNER_HOME`, `THREADBEAR_HOME`, the default), and passes
-  over such a spare, and a slot number whose folder went but that an open
-  thread's record still names. When the records can't be read it takes no
-  spare and makes a new slot. The runner's own `makeWorktree` does the same
-  from its records (`inUse`). An archived thread works nowhere, and a
-  thread still in its own removed or handed-on worktree leaves it at its
-  next turn anyway, so neither holds a slot.
-- A thread with no worktree of its own whose folder is a slot that's
-  someone else's now (a spare, one being claimed, another thread's
-  worktree, or a borrow whose record names another thread or none) never
-  starts a CLI there (`lentFolder` in `runner/src/runner/worktrees.ts`).
-  Like a thread brought back to a removed worktree, it carries on in a
-  fresh worktree from main (the very slot, when it's a spare nobody else
-  is in), or the main checkout if none can be made, and the thread and
-  agent are told. Its own borrow keeps it there, as does a borrow from
-  before 17 Nov, which names nobody. That covers a thread archived in its
+  `borrow-worktree.sh` asks `runner/src/lived-in.ts`, which reads every
+  thread record in each runner data dir it knows of
+  (`THREADBEAR_RUNNER_HOME`, `THREADBEAR_HOME`, the default), following
+  links, and passes over such a spare, and a slot number whose folder went
+  but that an open thread's record still names. When a record can't be
+  read it takes no spare and makes a new slot. The runner's own
+  `makeWorktree` does the same (`inUse`), from its threads as each folder
+  is asked about and from other runners' records. An archived thread works
+  nowhere, and a thread still in its own removed or handed-on worktree
+  leaves it at its next turn anyway, so neither holds a slot.
+- A thread with no worktree of its own whose folder is a slot that went to
+  someone else after it moved there never carries on in it
+  (`lentFolder` in `runner/src/runner/worktrees.ts`): a spare or one being
+  claimed, a borrow of another's begun since (the borrow record's `at`), or
+  the worktree of a thread made since. The record's `cwdAt` says when it
+  moved there (its `createdAt` for a record from before). Its next turn
+  ends a live CLI there (a give-back in its own session, a Codex session
+  moved in) and, like a thread brought back to a removed worktree, it
+  carries on in a fresh worktree from main (the very slot, when it's a
+  spare nobody else is in), or the main checkout if none can be made, and
+  the thread and agent are told. That covers a thread archived in its
   borrow, the borrow taken back and lent again, and the thread brought back.
+- A thread put in someone's slot after it was theirs stays: its own borrow,
+  a Lab review's reviewers and a For everyone panel (made in the thread's
+  folder with `worktree: false`), a helper made there, a move there. So
+  does a borrow from before 17 Nov, which names nobody.
 
 Run in a thread, `tb land` lands the thread's own worktree from that
 worktree, from its repo's main checkout, or from a folder outside git.

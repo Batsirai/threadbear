@@ -202,6 +202,9 @@ export type ThreadRecord = {
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
+  // When the thread last moved to its folder (cwd), if since it was made:
+  // a slot lent out after this was lent from under it (lentFolder).
+  cwdAt?: string;
   snoozedUntil?: string;
   snoozedUntilRestart?: boolean; // snoozedUntil is UNTIL_RESTART; start() wakes it
   untilRelease?: string; // with snoozedUntilRestart: only a start on another release wakes it

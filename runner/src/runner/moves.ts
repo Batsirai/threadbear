@@ -1139,6 +1139,7 @@ export const movesPart = {
       // and on the main Mac no more than Ask (capMovedMode).
       sanitizeMoved(rec, Boolean(this.movedInAtMostAsk?.()), placed.fromName, placed.leftBehind, { threadId: row.threadId, now: path.join(stage, 'thread', 'media'), final: this.store.mediaDir(row.threadId) });
       rec.cwd = placed.cwd;
+      rec.cwdAt = this.isoNow();
       rec.accountId = account.id;
       delete rec.poolId;
       delete rec.worktreePending;

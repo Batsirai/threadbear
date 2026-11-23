@@ -34,37 +34,46 @@ export function runnerHomes(env: NodeJS.ProcessEnv = process.env): string[] {
 // starts elsewhere whatever is there (leavesRemovedWorktree). A record that
 // can't be read is skipped: one being written now is read again by the next
 // borrow, and the runner checks again before a turn (lentFolder).
-export function openThreadFolders(homes: string[], mention?: string[]): string[] {
+//
+// Throws when a runner's records are there but can't be read, so the
+// borrow takes no spare rather than one a thread it couldn't read is in.
+// Every record is parsed, none skipped by its text: a folder reached
+// through a link, or written with JSON's escapes, wouldn't match.
+export function openThreadFolders(homes: string[]): string[] {
   const out: string[] = [];
   for (const home of homes) {
     const dir = path.join(home, 'threads');
     let ids: string[];
     try {
       ids = fs.readdirSync(dir);
-    } catch {
-      continue;
+    } catch (e) {
+      if (missing(e)) continue;
+      throw e;
     }
     for (const id of ids) {
       let text: string;
       try {
         text = fs.readFileSync(path.join(dir, id, 'thread.json'), 'utf8');
-      } catch {
-        continue;
+      } catch (e) {
+        // Deleted as it was read, or a folder with no record.
+        if (missing(e)) continue;
+        throw e;
       }
-      // Two thousand records: only those naming the folder are parsed.
-      if (mention && !mention.some((m) => text.includes(m))) continue;
-      try {
-        const rec = JSON.parse(text) as { cwd?: unknown; archivedAt?: unknown; worktree?: { path?: unknown; removedAt?: unknown } };
-        if (typeof rec.cwd !== 'string' || rec.archivedAt) continue;
-        const w = rec.worktree;
-        if (w?.removedAt && typeof w.path === 'string' && inside(rec.cwd, w.path)) continue;
-        out.push(rec.cwd);
-      } catch {
-        // Half written.
-      }
+      // Written whole (store.ts renames a finished file into place), so one
+      // that doesn't parse is a fault, not a write under way.
+      const rec = JSON.parse(text) as { cwd?: unknown; archivedAt?: unknown; worktree?: { path?: unknown; removedAt?: unknown } };
+      if (typeof rec.cwd !== 'string' || rec.archivedAt) continue;
+      const w = rec.worktree;
+      if (w?.removedAt && typeof w.path === 'string' && inside(rec.cwd, w.path)) continue;
+      out.push(rec.cwd);
     }
   }
   return out;
+}
+
+function missing(e: unknown): boolean {
+  const code = (e as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
 }
 
 function inside(dir: string, parent: string): boolean {
@@ -94,6 +103,5 @@ if (import.meta.main) {
     console.error('usage: node lived-in.ts <repo>-threads');
     process.exit(2);
   }
-  const mention = [...new Set([path.resolve(threads), realPath(path.resolve(threads))])];
-  for (const s of slotsLivedIn(threads, openThreadFolders(runnerHomes(), mention))) console.log(s);
+  for (const s of slotsLivedIn(threads, openThreadFolders(runnerHomes()))) console.log(s);
 }

@@ -11,6 +11,7 @@ import { cleanUpWorktree, clearBuildCaches, mainCheckoutOf, makeWorktree, readPl
 import { isDirectory } from '../fsutil.ts';
 import { CLICKS_ONLY_NOTE } from '../platform.ts';
 import { sweepBorrows } from '../borrows.ts';
+import { openThreadFolders, runnerHomes } from '../lived-in.ts';
 import { claimsOf, readSlots, writeSlot, type SlotEvent, type SlotMove } from '../slot.ts';
 import type { Logger } from '../log.ts';
 import { automaticTrust, findWorktreePatch, isInside, readWorktreePatch, runCommand, type PatchSet, type WorktreePatch, worktreePatchFiles } from '../patches.ts';
@@ -85,6 +86,7 @@ export const worktreesPart = {
     // its cleanup is owed (archiveWhenGone runs it once this is done).
     this.slot(st, { kind: 'made', worktree: made.worktree, owed: Boolean(rec.archivedAt) });
     rec.cwd = made.cwd;
+    rec.cwdAt = this.isoNow();
     rec.updatedAt = this.isoNow();
     this.markDirty(st);
     this.log.info('made a worktree', { threadId: rec.id, path: made.worktree.path, branch: made.worktree.branch });
@@ -364,14 +366,16 @@ export const worktreesPart = {
   },
 
   // The slot a thread with no worktree of its own works in, when that slot
-  // is someone else's now: a spare (or one being claimed), another thread's
-  // worktree, or a borrow that isn't this thread's. A thread gets there by
-  // borrowing a slot and moving itself in (move_thread), and stays after
-  // giving it back. On 23 Nov 2026 the Canvas thread's slot-32, given back
-  // the day before, was lent to another thread, and the Canvas thread's next
-  // turn committed on the borrower's branch (docs/thread-worktrees.md, "A
-  // folder a thread works in is never lent"). undefined for anything else,
-  // its own borrow included.
+  // went to someone else after the thread moved there: a spare (or one being
+  // claimed), a borrow of another's begun since, or the worktree of a thread
+  // made since. A thread gets there by borrowing a slot and moving itself in
+  // (move_thread), and stays after giving it back. On 23 Nov 2026 the Canvas
+  // thread's slot-32, given back the day before, was lent to another thread,
+  // and the Canvas thread's next turn committed on the borrower's branch
+  // (docs/thread-worktrees.md, "A folder a thread works in is never lent").
+  // undefined for anything else: its own borrow, and a thread put in
+  // another's slot on purpose after it was theirs (a Lab review's reviewers,
+  // a For everyone panel, a helper made with worktree: false, a move there).
   async lentFolder(this: Runner, rec: ThreadRecord): Promise<LentFolder | undefined> {
     const slot = this.slotFolderOf(rec);
     if (!slot || !isDirectory(slot)) return undefined;
@@ -380,6 +384,14 @@ export const worktreesPart = {
     const found = (await readSlots(main, claimsOf([...this.threads.values()].map((t) => t.rec))))?.find((s) => realpath(s.checkout.path) === slot);
     if (!found) return undefined;
     const is = found.is;
+    // When the thread came to its folder: a record from before cwdAt says
+    // only when the thread was made.
+    const came = Date.parse(rec.cwdAt ?? rec.createdAt);
+    const since = (at: number | undefined) => at !== undefined && Number.isFinite(at) && (!Number.isFinite(came) || at > came);
+    const madeAt = (id: string) => {
+      const other = this.threads.get(id)?.rec;
+      return other ? Date.parse(other.createdAt) : undefined;
+    };
     let went: string;
     switch (is.kind) {
       case 'spare':
@@ -388,17 +400,17 @@ export const worktreesPart = {
         break;
       case 'borrowed':
         // Borrows from before 17 Nov say nobody: left as they were.
-        if (!is.borrower || is.borrower.thread === rec.id) return undefined;
+        if (!is.borrower || is.borrower.thread === rec.id || !since(is.borrower.at)) return undefined;
         went = 'was lent to another borrower';
         break;
       case 'held':
       case 'landing':
       case 'taken':
-        if (is.thread === rec.id) return undefined;
+        if (is.thread === rec.id || !since(madeAt(is.thread))) return undefined;
         went = "is another thread's worktree now";
         break;
       case 'twoHolders':
-        if (is.threads.includes(rec.id)) return undefined;
+        if (is.threads.includes(rec.id) || !is.threads.some((t) => since(madeAt(t)))) return undefined;
         went = "is another thread's worktree now";
         break;
       default:
@@ -442,14 +454,30 @@ export const worktreesPart = {
   // Whether an open thread other than `except` works in a folder (a
   // realpath), for makeWorktree to pass over: a spare a thread still sits in
   // (lived-in.ts says why). Not a thread still in its own worktree that was
-  // removed or handed on: its next turn starts elsewhere anyway.
+  // removed or handed on: its next turn starts elsewhere anyway. Read as each
+  // folder is asked about, so a thread that moved meanwhile counts, and with
+  // the threads of other runners on this Mac (a dev runner's) from their
+  // records, as borrow-worktree.sh reads them.
   foldersInUse(this: Runner, except?: string): (dir: string) => boolean {
-    const folders: string[] = [];
-    for (const { rec } of this.threads.values()) {
-      if (rec.id === except || rec.archivedAt || this.leavesRemovedWorktree(rec)) continue;
-      folders.push(realpath(rec.cwd));
-    }
-    return (dir) => folders.some((f) => isInside(f, dir));
+    let others: string[] | undefined;
+    return (dir) => {
+      for (const { rec } of this.threads.values()) {
+        if (rec.id === except || rec.archivedAt || this.leavesRemovedWorktree(rec)) continue;
+        if (isInside(realpath(rec.cwd), dir)) return true;
+      }
+      if (!others) {
+        const home = realpath(this.cfg.home);
+        try {
+          others = openThreadFolders(runnerHomes().filter((h) => realpath(h) !== home)).map((f) => realpath(f));
+        } catch (e) {
+          // Its own threads, in memory, still count: answering yes to every
+          // folder would leave no slot number free.
+          this.log.warn("couldn't read other runners' thread records", { error: String(e) });
+          others = [];
+        }
+      }
+      return others.some((f) => isInside(f, dir));
+    };
   },
 
   // Moves the thread from its folder to a fresh worktree made from `main`'s
@@ -487,7 +515,7 @@ export const worktreesPart = {
     // it once this is done, or settleLostCleanups after a restart).
     if (fresh) this.slot(st, { kind: 'made', worktree: fresh.made.worktree, owed: Boolean(rec.archivedAt) });
     rec.cwd = to;
-    rec.updatedAt = this.isoNow();
+    rec.cwdAt = rec.updatedAt = this.isoNow();
     this.markDirty(st);
     this.tellActivity({ kind: 'moved', threadId: rec.id, from, to });
     if (!fresh) {

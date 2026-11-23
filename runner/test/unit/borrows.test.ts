@@ -339,3 +339,21 @@ test('borrow-worktree.sh never lends a slot an open thread works in, nor makes o
   record('canvas-1', path.join(wt, 'desktop'), { archivedAt: new Date().toISOString() });
   assert.equal(borrow(main, `${env} THREADBEAR_THREAD_ID=other-3`), wt);
 });
+
+test("borrow-worktree.sh counts a thread whose folder is a link into the slot, and takes no spare when a record can't be read", () => {
+  const { root, main } = makeRepo();
+  addBorrowScript(main);
+  const home = path.join(root, 'runner-home');
+  const env = `THREADBEAR_RUNNER_HOME='${home}'`;
+  const wt = borrow(main, `${env} THREADBEAR_THREAD_ID=canvas-1`);
+  const link = path.join(root, 'canvas-link');
+  fs.symlinkSync(wt, link);
+  write(home, { 'threads/canvas-1/thread.json': JSON.stringify({ id: 'canvas-1', cwd: link }) });
+  assert.match(sh(main, `./borrow-worktree.sh --give-back ${wt}`), /is a spare again/);
+  assert.notEqual(borrow(main, `${env} THREADBEAR_THREAD_ID=other-1`), wt);
+  write(home, { 'threads/canvas-1/thread.json': JSON.stringify({ id: 'canvas-1', cwd: link, archivedAt: 'x' }), 'threads/broken-1/thread.json': '{"id": "broken' });
+  assert.notEqual(borrow(main, `${env} THREADBEAR_THREAD_ID=other-2`), wt, 'a record it can\'t read might be a thread in the spare');
+  assert.ok(isLocked(main, wt));
+  fs.rmSync(path.join(home, 'threads', 'broken-1'), { recursive: true });
+  assert.equal(borrow(main, `${env} THREADBEAR_THREAD_ID=other-3`), wt);
+});
