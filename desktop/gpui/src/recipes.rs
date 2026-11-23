@@ -1,6 +1,6 @@
 // The Recipes view (the `recipes` experiment, docs/protocol/projects.md "Recipes"):
 // techniques worth keeping that an agent sets up for anyone. The sidebar
-// lists the ones added, each with its switch and its latest runs; the main
+// lists the ones added, each with its switch and how it's going; the main
 // panel shows them all as a gallery of cards, or one recipe's page: what it
 // does, an example of a run, what it set up, its last 30 days and its log.
 //
@@ -53,7 +53,7 @@ pub(crate) struct RecipesState {
     pub(crate) list: Option<Vec<Recipe>>,
     /// The recipe whose page is in the main panel; None for the gallery.
     pub(crate) open: Option<String>,
-    /// `recipes.get` answers, for the pages and the sidebar's runs.
+    /// `recipes.get` answers, for the pages.
     pub(crate) details: HashMap<String, RecipeDetail>,
     /// "add:<id>", "on:<id>", "remove:<id>", "change:<id>", "new" while on
     /// their way.
@@ -103,8 +103,7 @@ impl Threadbear {
     }
 
     /// After hello, on opening the view, and on `recipes.updated`: the list,
-    /// then the pages of the ones added (for the sidebar's runs) and of the
-    /// one open.
+    /// then the page of the one open.
     pub(crate) fn load_recipes(&mut self, cx: &mut Context<Self>) {
         if !self.recipes_on() {
             return;
@@ -115,17 +114,9 @@ impl Threadbear {
                 return;
             };
             this.update(cx, |this, cx| {
-                let list = Recipe::decode_list(&v["recipes"]);
-                let mut wanted: Vec<String> =
-                    rules::added(&list).iter().map(|r| r.id.clone()).collect();
-                if let Some(open) = &this.recipes.open {
-                    if !wanted.contains(open) {
-                        wanted.push(open.clone());
-                    }
-                }
-                this.recipes.list = Some(list);
-                for id in wanted {
-                    this.load_recipe(id, cx);
+                this.recipes.list = Some(Recipe::decode_list(&v["recipes"]));
+                if let Some(open) = this.recipes.open.clone() {
+                    this.load_recipe(open, cx);
                 }
                 cx.notify();
             })
@@ -324,7 +315,7 @@ impl Threadbear {
     // ------------------------------------------------------------ sidebar
 
     /// The sidebar's view: New recipe, Browse recipes, then each one added
-    /// with its switch, how it's going and its latest runs.
+    /// with its switch and how it's going.
     pub(crate) fn render_recipes_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let p = palette(cx);
         let list = self.recipes.list.clone().unwrap_or_default();
@@ -409,8 +400,8 @@ impl Threadbear {
             .into_any_element()
     }
 
-    /// One recipe added: its icon and name with the switch, how it's going,
-    /// then its latest two runs, each opening its thread.
+    /// One recipe added: its icon and name with the switch, and how it's
+    /// going (its runs are on its page). One still setting up links its thread.
     fn render_recipe_row(
         &mut self,
         recipe: &Recipe,
@@ -490,32 +481,11 @@ impl Threadbear {
         if let (RecipeState::SettingUp, Some(thread)) =
             (recipe.state, recipe.setup_thread_id.clone())
         {
-            row = row.child(self.recipe_run_line(
+            row = row.child(self.recipe_setup_line(
                 format!("recipe-setup-{id}"),
                 thread,
                 "Its setup thread".to_owned(),
                 "Open the thread setting it up".to_owned(),
-                None,
-                p,
-                cx,
-            ));
-        }
-        let runs: Vec<_> = self
-            .recipes
-            .details
-            .get(&id)
-            .map(|d| d.runs.iter().take(2).cloned().collect())
-            .unwrap_or_default();
-        for run in runs {
-            let when = threadbear_core::sidebar::relative_short(run.at_ms, &Local::now());
-            let line = run.headline.clone().unwrap_or_else(|| run.title.clone());
-            let mark = run.needs_you.then(|| style::needs_you(cx));
-            row = row.child(self.recipe_run_line(
-                format!("recipe-run-{}", run.thread_id),
-                run.thread_id.clone(),
-                line,
-                format!("Open this run ({})", rules::log_time(run.at_ms)),
-                Some((when, mark)),
                 p,
                 cx,
             ));
@@ -523,18 +493,14 @@ impl Threadbear {
         row.into_any_element()
     }
 
-    /// A run under its recipe in the sidebar, behind a guide line.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "baselined when the lint was turned on (20 Nov 2026); take it off when this is next split up"
-    )]
-    fn recipe_run_line(
+    /// A line under its recipe in the sidebar, behind a guide line: the
+    /// thread setting it up.
+    fn recipe_setup_line(
         &mut self,
         key: String,
         thread: String,
         line: String,
         tip: String,
-        when: Option<(String, Option<Hsla>)>,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -566,15 +532,6 @@ impl Threadbear {
                 .text_color(p.secondary)
                 .child(line),
         )
-        .when_some(when, |s, (when, mark)| {
-            s.child(
-                div()
-                    .flex_none()
-                    .text_size(px(style::size::SIDEBAR_META))
-                    .text_color(mark.unwrap_or(p.faint))
-                    .child(when),
-            )
-        })
         .into_any_element()
     }
 
