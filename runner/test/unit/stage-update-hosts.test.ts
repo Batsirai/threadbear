@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpDir } from '../helpers/fakes.ts';
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'desktop', 'scripts', 'stage-update.sh');
@@ -33,6 +34,8 @@ const PINNED_CARGO = path.join(import.meta.dirname, '..', '..', '..', 'desktop',
 const HOST = 'aarch64-apple-darwin';
 const PINS_LINES = ['rustc', 'cargo', 'rust-std'].map((p, i) => `1.99.1 ${HOST} ${p} ${String(i + 1).repeat(64)} https://static.rust-lang.org/dist/2026-10-15/${p}-1.99.1-${HOST}.tar.xz`);
 const PINS = `# version target part sha256 url\n${PINS_LINES.join('\n')}\n`;
+// pinned-cargo.sh names the toolchain's folder by a hash of its pins.
+const KEY = createHash('sha256').update(PINS_LINES.join('\n')).digest('hex').slice(0, 12);
 
 function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy' | 'slow', rust: 'pinned' | 'none' = 'pinned', cargoFails = false, toolchain: string | null = '[toolchain]\nchannel = "1.99.1"\ncomponents = ["rustfmt", "clippy"]\n', pins: string | null = PINS) {
   const root = tmpDir();
@@ -54,7 +57,7 @@ echo BUILT_IN=/mock-target
   write(path.join(checkout, 'desktop', 'scripts', 'pinned-cargo.sh'), fs.readFileSync(PINNED_CARGO, 'utf8'), 0o755);
   for (const bin of ['cargo', 'rustup']) write(path.join(home, '.cargo', 'bin', bin), `${note(`stray-${bin}`)}exit 1\n`, 0o755);
   if (rust === 'pinned') {
-    const prefix = path.join(home, 'Library', 'Caches', 'Threadbear', 'rust', `1.99.1-${HOST}`);
+    const prefix = path.join(home, 'Library', 'Caches', 'Threadbear', 'rust', `1.99.1-${HOST}-${KEY}`);
     write(path.join(prefix, 'bin', 'cargo'), `${note('cargo')}echo "rustc=$RUSTC" >> '${marks}/cargo'\n[ "$1" = build ] || exit 0\n${cargoFails ? 'exit 101\n' : ''}mkdir -p "$CARGO_TARGET_DIR/release"\ntouch "$CARGO_TARGET_DIR/release/threadbear-gpui" "$CARGO_TARGET_DIR/release/threadbear-web-helper"\n`, 0o755);
     write(path.join(prefix, 'pinned'), `${PINS_LINES.join('\n')}\n`);
   }
@@ -212,7 +215,7 @@ test("a build here uses main's pinned cargo and rustc, never rustup or the PATH'
   const r = setup(null)();
   assert.equal(r.status, 0, r.out);
   assert.match(r.marked('cargo'), /^build --release -p threadbear-gpui /m);
-  assert.match(r.marked('cargo'), new RegExp(`^rustc=.*/rust/1\\.99\\.1-${HOST}/bin/rustc$`, 'm'));
+  assert.match(r.marked('cargo'), new RegExp(`^rustc=.*/rust/1\\.99\\.1-${HOST}-${KEY}/bin/rustc$`, 'm'));
   assert.equal(r.marked('stray-cargo'), '');
   assert.equal(r.marked('stray-rustup'), '');
 });

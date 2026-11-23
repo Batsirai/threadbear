@@ -11,9 +11,8 @@
 # for this kind of Mac. The first time, each is downloaded over https and
 # checked against its pin before anything is unpacked; then the three are
 # put together, as rustup would, in a folder of this Mac's own
-# (~/Library/Caches/Threadbear/rust/<version>-<target>), which later builds
-# reuse. That folder's `pinned` file holds the pins it was made from, so
-# moving the pins makes it again. Nothing from the network runs until its
+# (~/Library/Caches/Threadbear/rust/<version>-<target>-<pins hash>), which
+# later builds reuse. Moving the pins makes a new one. Nothing from the network runs until its
 # hash has matched, and no manifest from Rust's servers is read: rustup
 # reads a channel manifest nobody signs and would run the compiler it got
 # to report its version before anything here could check it (the cross-lab
@@ -41,6 +40,7 @@ channel="$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)"[[:
 
 # This Mac's three lines: version target part sha256 url.
 pins="$(awk -v ch="$channel" -v host="$host" '$0 !~ /^#/ && NF == 5 && $1 == ch && $2 == host' "$root/desktop/scripts/rust-toolchain.pins" 2>/dev/null || true)"
+[[ "$(grep -c . <<<"$pins")" == 3 ]] || { echo "desktop/scripts/rust-toolchain.pins should have exactly rustc, cargo and rust-std for Rust $channel on $host, so nothing was built." >&2; exit 1; }
 for part in rustc cargo rust-std; do
   line="$(awk -v p="$part" '$3 == p' <<<"$pins")"
   [[ "$(wc -l <<<"$line" | tr -d ' ')" == 1 ]] &&
@@ -48,8 +48,14 @@ for part in rustc cargo rust-std; do
     { echo "desktop/scripts/rust-toolchain.pins has no single good pin for Rust $channel's $part on $host, so nothing was built." >&2; exit 1; }
 done
 
+# Named by its pins, and never replaced once there: a build fetching it for
+# the first time beside another (two on an update build host, or an update
+# beside install-app.sh) puts its copy in place in one rename, which fails
+# if the other's got there first, so neither deletes the toolchain the other
+# is compiling with (the second cross-lab review). New pins, a new folder.
 cache="${THREADBEAR_RUST_CACHE:-$HOME/Library/Caches/Threadbear/rust}"
-prefix="$cache/$channel-$host"
+key="$(printf '%s' "$pins" | /usr/bin/shasum -a 256 | cut -c1-12)"
+prefix="$cache/$channel-$host-$key"
 if [[ ! -x "$prefix/bin/cargo" || "$(cat "$prefix/pinned" 2>/dev/null || true)" != "$pins" ]]; then
   echo "Getting Rust $channel for $host, checked against main's pins (about 1 GB unpacked, once)." >&2
   mkdir -p "$cache"
@@ -83,8 +89,11 @@ if [[ ! -x "$prefix/bin/cargo" || "$(cat "$prefix/pinned" 2>/dev/null || true)" 
     rm -rf "${work:?}/$top"
   done <<<"$pins"
   printf '%s\n' "$pins" >"$work/prefix/pinned"
-  rm -rf "$prefix"
-  mv "$work/prefix" "$prefix"
+  # rename(2): atomic, and refused onto a folder that has anything in it.
+  if ! /usr/bin/perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$work/prefix" "$prefix"; then
+    [[ -x "$prefix/bin/cargo" && "$(cat "$prefix/pinned" 2>/dev/null || true)" == "$pins" ]] ||
+      { echo "pinned-cargo.sh: $prefix is there but isn't this toolchain; delete it and build again." >&2; exit 1; }
+  fi
 fi
 
 # Its own rustc for cargo and for build scripts, and none of rustup's
@@ -93,10 +102,12 @@ fi
 # In a remote.sh run (an update build host), through its shared-cargo shim,
 # which shares a few warm target folders between checkouts, told to run this
 # cargo rather than the next one on the PATH.
+# No wrapper around rustc either, from the environment or cargo's config
+# (an empty one overrides the config's).
 shim="$(command -v cargo 2>/dev/null || true)"
-unset RUSTUP_TOOLCHAIN RUSTC RUSTC_WRAPPER RUSTDOC
-export PATH="$prefix/bin:$PATH" RUSTC="$prefix/bin/rustc"
-if [[ -n "${THREADBEAR_SHARED_CARGO_BASE:-}" && "$shim" == */desktop/scripts/shared-cargo/cargo ]]; then
+unset RUSTUP_TOOLCHAIN RUSTC RUSTDOC CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
+export PATH="$prefix/bin:$PATH" RUSTC="$prefix/bin/rustc" RUSTC_WRAPPER="" RUSTC_WORKSPACE_WRAPPER=""
+if [[ -n "${THREADBEAR_SHARED_CARGO_BASE:-}" && "$shim" == "$root/desktop/scripts/shared-cargo/cargo" ]]; then
   export THREADBEAR_SHARED_CARGO_REAL="$prefix/bin/cargo"
   exec "$shim" "$@"
 fi
