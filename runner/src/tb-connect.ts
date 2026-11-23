@@ -165,7 +165,17 @@ export type OwnerOnlyDeps = CallerDeps & { connect?: (url: string, token: string
 // On Windows, without %LOCALAPPDATA% too, which the caller sets (Codex's
 // third review): the account's own AppData\Local.
 export function realDefaultHome(platform: NodeJS.Platform = process.platform): string {
-  return real(dataDirFor({ home: os.userInfo().homedir, env: {}, platform }));
+  return onDisk(dataDirFor({ home: os.userInfo().homedir, env: {}, platform }));
+}
+
+// A path as the disk spells it (case, 8.3 names and links resolved), so the
+// default data dir compares equal however it was written (Gemini's review).
+export function onDisk(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch {
+    return path.resolve(p);
+  }
 }
 
 // Why tb's commands that use this Mac's keys straight from disk (tb runner)
@@ -202,7 +212,7 @@ export async function ownerOnly(cfg: Config, env: NodeJS.ProcessEnv = process.en
     // No token yet: a terminal on a new runner; anything else is refused below.
   }
   if (!terminal) {
-    if (real(cfg.home) !== (deps.defaultHome ? real(deps.defaultHome) : realDefaultHome())) return "From a thread's shell (or where tb can't tell it isn't one), tb runner only uses the runner's own data folder, not one named with THREADBEAR_HOME.";
+    if (onDisk(cfg.home) !== (deps.defaultHome ? onDisk(deps.defaultHome) : realDefaultHome())) return "From a thread's shell (or where tb can't tell it isn't one), tb runner only uses the runner's own data folder, not one named with THREADBEAR_HOME.";
     if (!token || !ownSecrets(cfg.home)) return "The runner's secrets folder isn't as Threadbear made it (missing, or a link in it), so tb runner won't use it from here.";
     if (!keys.every((k) => k.ids.some((id) => isThreadId(id) && sameKey(threadKey(token, id), k.key)))) {
       return "This is a thread's shell and tb isn't pointed at that thread's own runner, so it can't use a runner's keys from here.";

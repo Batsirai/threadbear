@@ -402,6 +402,9 @@ async function threadOfPid(peer: number, table: ProcRow[], deps: PeerDeps, windo
   // in its own), even in a group of its own the registry hasn't seen yet
   // (Codex's third review of finding 175).
   if (row?.sid !== undefined && row.sid > 1 && row.sid !== peer) {
+    // A session whose leader has gone can't be told from a CLI's that was
+    // killed after its child left the tree: no answer (Codex's fourth review).
+    if (!rows.has(row.sid)) throw new UnresolvedPeer(`process ${peer}'s session leader (${row.sid}) has gone`);
     const bySession = await deps.registry.threadOfPid(row.sid, rows.get(row.sid)?.created);
     if (bySession && deps.known(bySession)) return bySession;
   }

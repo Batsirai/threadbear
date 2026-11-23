@@ -517,6 +517,9 @@ test('on Linux a process in a group the registry has not seen is still its CLI\'
   assert.deepEqual(await threadOfSocket(sock, deps), { kind: 'thread', threadId: 'th1' });
   // A terminal's session leader isn't a CLI: the owner.
   assert.deepEqual(await threadOfSocket(sock, { ...deps, registry: { threadOfPid: () => undefined, threadOfGroup: () => undefined } }), { kind: 'owner' });
+  // Its CLI killed after it left (Codex's fourth review): the session's leader is gone, so no answer.
+  const { UnresolvedPeer } = await import('../../src/peer.ts');
+  await assert.rejects(threadOfSocket(sock, { ...deps, registry: { threadOfPid: () => undefined, threadOfGroup: () => undefined }, table: async () => [{ pid: 500, ppid: 1, pgid: 500, sid: 300 }] }), (e) => e instanceof UnresolvedPeer);
 });
 
 test('a thread key whose lookup fails closes too, and a lookup that finds the client still works both ways', async () => {

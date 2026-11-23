@@ -153,9 +153,12 @@ or a file swapped into one while tb waits, can't take part; then the runner, pro
 by that data dir's token, must place the connection itself and say it isn't
 limited, and with any thread key found (tb's own environment's included) it must
 name the thread, every key being one that token makes for a thread id beside it.
-No answer is refused. A thread's process that sets up a process group and session
-of its own gets past this as it gets past the runner's own look: the same-user
-boundary in `SECURITY.md`. An `lsof` that exits with anything but 1 (nothing
+No answer is refused. tb runner resolves the data dir to its path on disk once,
+before the check, and the command uses that path. A thread's process that leaves
+its process tree (a new session; on a Mac or Windows, orphaned and in a process
+group of its own) gets past this as it gets past the runner's own look: the
+same-user boundary in `SECURITY.md`. On Linux a process whose session leader has
+gone is no answer. An `lsof` that exits with anything but 1 (nothing
 matched) is a failed look even if it printed something, and on Linux the runner
 reads its process table from `/proc` as well, so needs neither `lsof` nor `ps`. A
 parent missing from the table (other than on Windows, which keeps dead parents'

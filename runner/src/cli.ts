@@ -4,7 +4,7 @@ import { startedByFlags } from './started-by-flags.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig, runnerUrl, RunnerJsonError } from './config.ts';
-import { connectTb, ownerOnly } from './tb-connect.ts';
+import { connectTb, onDisk, ownerOnly } from './tb-connect.ts';
 import { RunnerClient } from './client.ts';
 import { poolLine, sameEmailWarnings } from './pools.ts';
 import { providerName } from './providers.ts';
@@ -303,6 +303,10 @@ async function main(argv: string[]): Promise<number> {
   // tb runner uses this Mac's keys straight from disk, so the runner never
   // sees them to refuse them (tb-connect.ts).
   if (cmd === 'runner') {
+    // The data dir as the disk has it now, once: the check and the command
+    // both use this path, so a link swapped after the check can't send the
+    // command to another folder's keys (Codex's fourth review).
+    cfg = { ...cfg, home: onDisk(cfg.home) };
     const why = await ownerOnly(cfg);
     if (why) {
       console.error(why);
