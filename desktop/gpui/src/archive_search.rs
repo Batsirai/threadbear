@@ -123,25 +123,29 @@ impl Threadbear {
         if !self.archive_on() || !core::searchable(&query) {
             self.archive.task = None;
             self.archive.asking = None;
-            self.archive.error = None;
             return;
         }
         if self.archive.asking.as_deref() == Some(query.as_str()) {
             return;
         }
-        if self.archive.asking.is_none()
-            && self.archive.error.is_none()
-            && self
+        // Answered already, or failed: asked again only once the words
+        // change, as this runs on every redraw of the box.
+        let answered = self
+            .archive
+            .results
+            .as_ref()
+            .is_some_and(|r| r.query == query)
+            || self
                 .archive
-                .results
+                .error
                 .as_ref()
-                .is_some_and(|r| r.query == query)
-        {
+                .is_some_and(|(q, _)| *q == query);
+        if answered {
             self.archive.task = None;
+            self.archive.asking = None;
             return;
         }
         self.archive.asking = Some(query.clone());
-        self.archive.error = None;
         let client = self.client.clone();
         self.archive.task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()

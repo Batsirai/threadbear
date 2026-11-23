@@ -410,13 +410,15 @@ impl Threadbear {
         crate::key_hints::install(cx.entity().downgrade(), cx);
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search threads"));
         // The filter is worked out at render, so a change only needs a redraw.
-        // The archive's asked once typing pauses (archive_search.rs).
-        let searching = cx.subscribe(&search, |this, _, ev: &InputEvent, cx| {
+        let searching = cx.subscribe(&search, |_, _, ev: &InputEvent, cx| {
             if matches!(ev, InputEvent::Change) {
-                this.archive_search_changed(cx);
                 cx.notify();
             }
         });
+        // The archive's asked once typing pauses (archive_search.rs): on any
+        // change to the box, as one set from code (Clear, a script) sends no
+        // Change event, only a redraw.
+        let archive_watch = cx.observe(&search, |this, _, cx| this.archive_search_changed(cx));
         #[cfg(feature = "automation")]
         crate::automation::serve(cx.entity().downgrade(), window.window_handle(), cx);
         crate::notify::install(cx.entity().downgrade(), window.window_handle(), cx);
@@ -676,6 +678,7 @@ impl Threadbear {
             _subs: vec![
                 appearance,
                 searching,
+                archive_watch,
                 frame,
                 menus,
                 looking,
