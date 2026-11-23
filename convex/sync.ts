@@ -708,19 +708,19 @@ export function answersInText<A extends { action: string; answer: string }>(text
 // Only the runner's own message says why it sent it, in a few words on
 // one line as the Mac's divider draws it (turn_gap.rs label_line), from
 // any key, the owner's too (Codex's review, 23 Nov).
-function fitWakeReason(out: Record<string, any>): void {
+function fitWakeReason(out: Record<string, unknown>): void {
   const reason = typeof out.wakeReason === 'string' ? out.wakeReason.trim() : '';
   if (out.role !== 'user' || out.origin !== 'runner' || !reason) {
     delete out.wakeReason;
     return;
   }
-  const line = reason.split(/\r?\n/)[0]!.trimEnd();
+  const line = reason.split(/[\n\r\u000b\u000c\u0085\u2028\u2029]/)[0]!.trimEnd();
   out.wakeReason = cutBytes(line.length < reason.length ? `${line}…` : line, 200);
 }
 
-function ownerMessage<T extends Record<string, any>>(m: T): T {
+function ownerMessage<T extends Record<string, unknown>>(m: T): T {
   if (m.wakeReason === undefined) return m;
-  const out: Record<string, any> = { ...m };
+  const out: Record<string, unknown> = { ...m };
   fitWakeReason(out);
   return out as T;
 }

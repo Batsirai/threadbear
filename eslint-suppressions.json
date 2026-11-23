@@ -187,7 +187,7 @@
   },
   "convex/sync.ts": {
     "@convex-dev/explicit-table-ids": {
-      "count": 117
+      "count": 113
     },
     "@convex-dev/no-collect-in-query": {
       "count": 17

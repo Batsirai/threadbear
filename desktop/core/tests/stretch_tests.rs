@@ -605,6 +605,18 @@ fn testARelayedRunnerWakeSaysWhatWokeItToo() {
     );
 }
 
+/// One sent into a turn already running didn't wake it: the divider keeps
+/// what did (Codex's review, 23 Nov).
+#[test]
+fn testARunnerMessageMidTurnLeavesTheDividerAlone() {
+    let mut events = runner_woken(Some("The app restarted"), false);
+    let mut late = events.remove(5);
+    late.seq = 20;
+    events.insert(7, late);
+    let model = from_events(events);
+    assert_eq!(gap_label(&model, "gap:t2"), "14 h 14 min later");
+}
+
 /// From a runner too old to say why: still marked, as Threadbear's doing.
 #[test]
 fn testARunnerWakeWithNoReasonSaysThreadbearWokeIt() {

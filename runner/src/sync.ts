@@ -1274,7 +1274,7 @@ export function toMessageDoc(threadId: string, e: PersistedEvent, scrub: (text: 
   if (e.type === 'user.message' && e.origin === 'runner' && e.wakeReason) {
     // One line, as the Mac's divider draws it (turn_gap.rs label_line).
     const clean = scrub(e.wakeReason).trim();
-    const line = clean.split(/\r?\n/)[0]!.trimEnd();
+    const line = clean.split(/[\n\r\u000b\u000c\u0085\u2028\u2029]/)[0]!.trimEnd();
     const why = (line.length < clean.length ? `${line}…` : line).slice(0, WAKE_REASON_CHARS);
     if (why) doc.wakeReason = why;
   }
