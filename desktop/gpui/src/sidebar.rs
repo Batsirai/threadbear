@@ -724,7 +724,9 @@ pub(crate) fn icon_button(
 impl Threadbear {
     /// `threads.update` for any thread, changing the summary here first:
     /// anything clicked shows at once, and the runner's answer (or its
-    /// thread.updated) puts it right or rolls it back.
+    /// thread.updated) puts it right or rolls it back. Always the thread
+    /// named, never the main panel's: a box in a thread's own panel changed
+    /// whichever thread the main panel had open (23 Nov review).
     pub(crate) fn update_thread(
         &mut self,
         id: &str,
@@ -740,6 +742,18 @@ impl Threadbear {
             t.wait_state = None;
         }
         let guess = self.threads.get(id).cloned();
+        // A folder, login or pool change isn't guessed, so its chip spins
+        // until the runner answers (composer_chips.rs `chips_busy`).
+        let busy = if params.get("cwd").is_some() {
+            Some(format!("movingFolder/{id}"))
+        } else if params.get("accountId").is_some() || params.get("poolId").is_some() {
+            Some(format!("moving/{id}"))
+        } else {
+            None
+        };
+        if let Some(key) = &busy {
+            self.chip_busy.insert(key.clone());
+        }
         let mut params = params;
         params["threadId"] = json!(id);
         let client = self.client.clone();
@@ -748,6 +762,9 @@ impl Threadbear {
         cx.spawn(async move |this, cx| {
             let res = going.await;
             this.update(cx, |this, cx| {
+                if let Some(key) = &busy {
+                    this.chip_busy.remove(key);
+                }
                 if let Err(e) = res {
                     this.show_error(e.message, cx);
                     threadbear_core::inbox::roll_back(&mut *this.threads, before, guess.as_deref());
@@ -842,15 +859,16 @@ impl Threadbear {
     /// docs/protocol/threads.md, "Inbox guess"). Either answer archives. Only for a
     /// thread on this Mac's runner: another's wouldn't be sent the answer.
     /// ⌘E, a row's box and a swipe stay one step.
+    ///
+    /// `id` is the card's own thread: in a thread's own panel that isn't the
+    /// main panel's (23 Nov review: it archived the main panel's thread).
     pub(crate) fn archive_from_card(
         &mut self,
+        id: String,
         at: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.selected.clone() else {
-            return;
-        };
         // Only where the thread stands finished with nothing for him: an old
         // done card's Archive, further up a thread that's since asked him
         // something, isn't an answer about this.
@@ -862,7 +880,7 @@ impl Threadbear {
                     && !t.needs_you
             });
         if !asks {
-            return self.toggle_archive(window, cx);
+            return self.toggle_archive_of(id, window, cx);
         }
         let rows = vec![
             MenuRow::item(

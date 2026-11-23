@@ -463,11 +463,13 @@ impl Composer {
     }
 
     /// `at`: where the click was, for the menu Archive opens while the
-    /// inboxGuess experiment is on (`archive_from_card`).
+    /// inboxGuess experiment is on (`archive_from_card`). This box's own
+    /// thread, which in a thread's own panel isn't the main panel's.
     fn archive_thread(&self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(app) = self.app.upgrade() {
-            app.update(cx, |app, cx| app.archive_from_card(at, window, cx));
-        }
+        let (Some(app), Some(id)) = (self.app.upgrade(), self.thread_id.clone()) else {
+            return;
+        };
+        app.update(cx, |app, cx| app.archive_from_card(id, at, window, cx));
     }
 
     /// The box under an ask's "Something else" (AskAnswerBox): its own text

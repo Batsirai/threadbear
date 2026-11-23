@@ -780,14 +780,9 @@ impl Threadbear {
             this.update(cx, |this, cx| {
                 match res {
                     Ok(v) => {
-                        if let Ok(mut t) =
-                            serde_json::from_value::<ThreadSummary>(v["thread"].clone())
+                        if let Ok(t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone())
                         {
-                            t.runner_id = this
-                                .threads
-                                .get(&t.id)
-                                .and_then(|old| old.runner_id.clone());
-                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
+                            this.store_reply_summary(t);
                         }
                     }
                     Err(e) => {

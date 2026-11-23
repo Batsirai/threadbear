@@ -362,7 +362,7 @@ impl Threadbear {
                 match res.map(|v| serde_json::from_value::<ThreadSummary>(v["thread"].clone())) {
                     Ok(Ok(thread)) if !thread.id.is_empty() => {
                         let id = thread.id.clone();
-                        t.threads.insert(id.clone(), std::sync::Arc::new(thread));
+                        t.store_reply_summary(thread);
                         t.open(id, window, cx);
                     }
                     Ok(_) => {

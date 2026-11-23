@@ -1082,9 +1082,8 @@ fn step(
                 }
                 return Ok(json!(app.read(cx).machine_menu_lines(&id)));
             }
-            let Some(composer) = app.read(cx).composer(cx) else {
-                return Err("no thread open".into());
-            };
+            // `thread`: the box of that thread's own panel, not the main one's.
+            let composer = app.read(cx).composer_for_command(cmd, cx)?;
             let data = composer.read(cx).chip_data(cx);
             match text(cmd, "menu") {
                 "permission" => {
@@ -1203,9 +1202,7 @@ fn step(
                 .map(|s| json!(s))
         }
         "ask" => {
-            let Some(composer) = app.read(cx).composer(cx) else {
-                return Err("no thread open".into());
-            };
+            let composer = app.read(cx).composer_for_command(cmd, cx)?;
             composer
                 .update(cx, |c, cx| c.card_action(text(cmd, "action"), window, cx))
                 .map(|_| json!("ok"))

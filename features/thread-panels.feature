@@ -81,6 +81,34 @@ Feature: The panels round the thread
     Then the open thread is "Rename the Settings tabs"
     And "Morning brief" is in a panel of its own, showing its transcript
 
+  # The box in a thread's own panel is that thread's, chips and done card
+  # too: they used to change whichever thread the main panel had open, and
+  # do nothing with none open (23 Nov review). The script reaches a panel's
+  # box by its thread, which only the GPUI app's does.
+  @dock.threadpanel @swift-pending
+  Scenario: A chip in a thread's own panel changes that thread, with nothing open in the main panel
+    When I open "Morning brief" in a new panel
+    And I pick "Ask before edits" from the "permission" menu in the panel of "Morning brief"
+    Then the panel of "Morning brief" says its permission mode is "ask"
+
+  @dock.threadpanel @swift-pending
+  Scenario: A chip in a thread's own panel leaves the main panel's thread alone
+    When I open "Morning brief" in a new panel
+    And I open the thread "Rename the Settings tabs"
+    And I pick "Ask before edits" from the "permission" menu in the panel of "Morning brief"
+    Then the panel of "Morning brief" says its permission mode is "ask"
+    And the composer's permission mode is "full"
+
+  @dock.threadpanel @card.done @swift-pending
+  Scenario: Archive on the done card in a thread's own panel archives that thread
+    When I open "Tidy the imports in the uploader" in a new panel
+    And I open the thread "Rename the Settings tabs"
+    And I press "archive" on the card in the panel of "Tidy the imports in the uploader"
+    Then the "Archived" section lists "Tidy the imports in the uploader"
+    And the runner was told I archived "Tidy the imports in the uploader" as ""
+    And the open thread is "Rename the Settings tabs"
+    And the "Archived" section doesn't list "Rename the Settings tabs"
+
   @dock.threadpanel
   Scenario: Move to Main Panel closes the thread's panel and shows it in the main one
     When I open "Morning brief" in a new panel

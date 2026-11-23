@@ -1104,6 +1104,16 @@ impl Threadbear {
         let Some(id) = self.selected.clone() else {
             return;
         };
+        self.toggle_archive_of(id, window, cx);
+    }
+
+    /// Archives the thread, or takes it out of Archived if it's there.
+    pub(crate) fn toggle_archive_of(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let archived = self.threads.get(&id).is_some_and(|t| t.is_archived());
         if archived {
             self.unarchive_row(&id, cx);

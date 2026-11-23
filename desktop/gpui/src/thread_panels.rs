@@ -563,8 +563,12 @@ impl Threadbear {
             .filter_map(|panel| {
                 let id = pinned_thread(panel)?;
                 let pane = self.thread_panels.panes.get(id);
+                let thread = self.threads.get(id);
                 Some(serde_json::json!({
                     "id": id,
+                    // Its settings as its box's chips show them.
+                    "mode": thread.map(|t| if t.permission_mode.is_empty() { "full" } else { t.permission_mode.as_str() }),
+                    "archived": thread.is_some_and(|t| t.is_archived()),
                     "title": self.thread_panel_title(panel),
                     "showing": self.dock.read(cx).controller.is_showing(panel),
                     "transcript": pane.map(|p| p.pane.read(cx).dump(cx)),

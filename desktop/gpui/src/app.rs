@@ -1093,6 +1093,9 @@ impl Threadbear {
                             });
                         if let Some(old) = self.threads.get(&t.id) {
                             t.runner_id = old.runner_id.clone();
+                            // And another runner's share, which a relayed
+                            // summary can leave out.
+                            threadbear_core::inbox::keep_local_marks(&mut t, Some(old));
                         }
                         // An older runner's relay leaves another runner's
                         // mode out, which the composer would read as Full
@@ -1826,6 +1829,16 @@ impl Threadbear {
             .or_else(|| self.kept.get(id, cx))
     }
 
+    /// Stores a thread summary a call's reply carried (a share's, a project
+    /// change's, a new thread's), keeping what only this app knows about
+    /// the row it replaces: which runner it's on, and another runner's
+    /// share (`keep_local_marks`). Every reply's summary goes in this way.
+    pub(crate) fn store_reply_summary(&mut self, mut t: ThreadSummary) {
+        let old = self.threads.get(&t.id).cloned();
+        threadbear_core::inbox::keep_local_marks(&mut t, old.as_deref());
+        self.threads.insert(t.id.clone(), Arc::new(t));
+    }
+
     /// A thread's message box, kept while others are open so what's typed
     /// stays with it, and made (with its words from before a quit) the first
     /// time it's wanted.
@@ -1918,79 +1931,46 @@ impl Threadbear {
         }
     }
 
-    /// `threads.update` for the open thread, with the summary changed here
-    /// first: anything clicked shows at once, and the runner's answer (or its
-    /// thread.updated) puts it right.
-    pub(crate) fn update_open(
-        &mut self,
-        change: impl FnOnce(&mut ThreadSummary),
-        params: Value,
-        cx: &mut Context<Self>,
-    ) -> Result<(), String> {
-        let Some(id) = self.selected.clone() else {
-            return Err("no thread open".into());
-        };
-        let before = self.threads.get(&id).cloned();
-        if let Some(t) = self.threads.get_mut(&id).map(std::sync::Arc::make_mut) {
-            change(t);
-            // As `update_thread`: the app's own rule draws the guess.
-            t.wait_state = None;
-        }
-        let guess = self.threads.get(&id).cloned();
-        // A folder, login or pool change isn't guessed, so its chip spins.
-        let busy = if params.get("cwd").is_some() {
-            Some(format!("movingFolder/{id}"))
-        } else if params.get("accountId").is_some() || params.get("poolId").is_some() {
-            Some(format!("moving/{id}"))
-        } else {
-            None
-        };
-        if let Some(key) = &busy {
-            self.chip_busy.insert(key.clone());
-        }
-        let mut params = params;
-        params["threadId"] = json!(id);
-        let client = self.client.clone();
-        let remote = before.as_ref().is_some_and(|t| t.runner_id.is_some());
-        let going = crate::call_for_thread(client, remote, "threads.update", params);
-        cx.spawn(async move |this, cx| {
-            let res = going.await;
-            this.update(cx, |this, cx| {
-                if let Some(key) = &busy {
-                    this.chip_busy.remove(key);
-                }
-                if let Err(e) = res {
-                    this.show_error(e.message, cx);
-                    threadbear_core::inbox::roll_back(&mut *this.threads, before, guess.as_deref());
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-        Ok(())
-    }
-
     #[cfg(feature = "automation")]
     pub(crate) fn snooze_open(
         &mut self,
         seconds: i64,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let id = self.selected.clone().ok_or("no thread open")?;
         let until = iso_time(now_ms() + seconds * 1000);
         let local = until.clone();
-        self.update_open(
+        self.update_thread(
+            &id,
             move |t| t.snoozed_until = Some(local),
             json!({ "snoozedUntil": until }),
             cx,
-        )
+        );
+        Ok(())
     }
 
     pub(crate) fn stop_open(&mut self, cx: &mut Context<Self>) {
         if let Some(pane) = &self.pane {
             pane.update(cx, |p, cx| p.stop(cx));
         }
+    }
+
+    /// A script's command's box: with `thread` (its id, or its start), that
+    /// thread's own (in a panel of its own, say); otherwise the main panel's.
+    #[cfg(feature = "automation")]
+    pub(crate) fn composer_for_command(
+        &self,
+        cmd: &Value,
+        cx: &App,
+    ) -> Result<Entity<Composer>, String> {
+        let Some(start) = cmd["thread"].as_str() else {
+            return self.composer(cx).ok_or_else(|| "no thread open".into());
+        };
+        let id = self.thread_id_from(start)?;
+        self.composers
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("{id} has no message box yet"))
     }
 
     /// The open thread's message box, or the new-thread page's: ⇧⌘A's, and

@@ -1053,7 +1053,9 @@ impl ThreadPane {
         };
         let mut body = v_flex().w_full();
         if asks.is_done() {
-            let app = self.app.clone();
+            // This transcript's thread, which in a panel of its own isn't
+            // the main panel's.
+            let (app, id) = (self.app.clone(), self.summary.id.clone());
             body = body.child(
                 h_flex()
                     .w_full()
@@ -1080,8 +1082,8 @@ impl ThreadPane {
                         )
                         .on_click(move |ev, window, cx| {
                             if let Some(app) = app.upgrade() {
-                                let at = ev.position();
-                                app.update(cx, |app, cx| app.archive_from_card(at, window, cx));
+                                let (at, id) = (ev.position(), id.clone());
+                                app.update(cx, |app, cx| app.archive_from_card(id, at, window, cx));
                             }
                         }),
                     ),

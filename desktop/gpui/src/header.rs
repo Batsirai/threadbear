@@ -786,7 +786,9 @@ impl Threadbear {
                     "arrow.triangle.2.circlepath",
                     "Make a new link. The old one stops working.",
                     cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.set_share(id_for_new.clone(), "link", true, cx)
+                        if !this.share_busy {
+                            this.set_share(id_for_new.clone(), "link", true, cx)
+                        }
                     }),
                     cx,
                 ))
@@ -918,6 +920,11 @@ impl Threadbear {
         new_link: bool,
         cx: &mut Context<Self>,
     ) {
+        // One at a time: a second New link while the first is on its way
+        // made two, and the link shown first stopped working.
+        if self.share_busy {
+            return;
+        }
         let client = self.client.clone();
         let params = json!({ "threadId": id, "access": access, "newLink": new_link });
         self.share_busy = true;
@@ -928,9 +935,11 @@ impl Threadbear {
                 this.share_busy = false;
                 match res {
                     Ok(v) => {
+                        // Another runner's thread stays that runner's,
+                        // shared (the relay answers for it; 23 Nov review).
                         if let Ok(t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone())
                         {
-                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
+                            this.store_reply_summary(t);
                         }
                     }
                     Err(e) => this.show_error(e.message, cx),
@@ -1708,7 +1717,7 @@ impl Threadbear {
                             >(v["thread"].clone())
                             {
                                 if thread.id == id {
-                                    t.threads.insert(id.clone(), std::sync::Arc::new(thread));
+                                    t.store_reply_summary(thread);
                                 }
                             }
                             // Not from inside this update: opening needs the
@@ -2372,7 +2381,7 @@ impl Threadbear {
                         if let Ok(t) = serde_json::from_value::<ThreadSummary>(v["thread"].clone())
                         {
                             let id = t.id.clone();
-                            this.threads.insert(t.id.clone(), std::sync::Arc::new(t));
+                            this.store_reply_summary(t);
                             this.open(id, window, cx);
                         }
                     }

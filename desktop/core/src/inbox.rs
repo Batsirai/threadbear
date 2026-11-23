@@ -280,6 +280,35 @@ pub fn roll_back<T: Borrow<ThreadSummary>>(
     true
 }
 
+/// Puts back what a summary from a runner doesn't say but this app knows,
+/// from the row it's stored over (`old`), as the Swift app's `threads`
+/// didSet does for every summary stored:
+///
+/// - which runner the thread is on: no summary says (`runner_id` is never
+///   on the wire), so one from a call's reply (a share's, a project
+///   change's) or a relayed thread.updated over another runner's thread
+///   would quietly make it one of this Mac's, its calls going to this Mac's
+///   runner ("Thread not found") and its own runner's rows skipped as this
+///   Mac's (23 Nov review);
+/// - another runner's thread's share: the other runners' table leaves it
+///   out, so a link made here (the relay's `threads.share` reply) stays
+///   until a summary says otherwise. Once made a share never goes back to
+///   none (off keeps its slug).
+///
+/// A thread moved here from another runner is this Mac's own list's word,
+/// which sets `runner_id` itself; that path doesn't come through here.
+pub fn keep_local_marks(new: &mut ThreadSummary, old: Option<&ThreadSummary>) {
+    let Some(old) = old.filter(|old| old.id == new.id) else {
+        return;
+    };
+    if new.runner_id.is_none() {
+        new.runner_id = old.runner_id.clone();
+    }
+    if new.share.is_none() && new.runner_id.is_some() {
+        new.share = old.share.clone();
+    }
+}
+
 impl OpenAsk {
     /// Where it's to be done, in plain words (`plainWhere`).
     pub fn where_text(&self) -> Option<String> {
@@ -1764,5 +1793,71 @@ mod tests {
         threads.insert("t".into(), newer.clone());
         assert!(!roll_back(&mut threads, Some(before), Some(&guess)));
         assert_eq!(threads["t"], newer, "the newer row stands");
+    }
+
+    // Share on another Mac's thread: the relay's reply names no runner, and
+    // storing it as it came made the thread one of this Mac's ("Thread not
+    // found" on every send), and the other runners' next table, which has
+    // no share, put the share icon back to Only you (23 Nov review).
+    #[test]
+    fn a_reply_over_another_runners_thread_keeps_its_runner_and_share() {
+        let link = json!({ "access": "link", "slug": "abc" });
+        let old = ThreadSummary {
+            id: "t".into(),
+            runner_id: Some("mini".into()),
+            share: Some(link),
+            ..Default::default()
+        };
+        // The share's reply: no runner (never on the wire), a new link.
+        let mut reply: ThreadSummary =
+            serde_json::from_value(json!({ "id": "t", "runnerId": "ignored", "share": { "access": "link", "slug": "new" } }))
+                .unwrap();
+        assert_eq!(reply.runner_id, None, "runnerId is never read off the wire");
+        keep_local_marks(&mut reply, Some(&old));
+        assert_eq!(reply.runner_id.as_deref(), Some("mini"));
+        assert_eq!(
+            reply.share,
+            Some(json!({ "access": "link", "slug": "new" })),
+            "the reply's own share wins"
+        );
+
+        // That runner's next table row: its runner, no share.
+        let mut row = ThreadSummary {
+            id: "t".into(),
+            runner_id: Some("mini".into()),
+            ..Default::default()
+        };
+        keep_local_marks(&mut row, Some(&reply));
+        assert_eq!(row.share, Some(json!({ "access": "link", "slug": "new" })));
+    }
+
+    #[test]
+    fn a_reply_over_this_macs_thread_stays_this_macs() {
+        let old = ThreadSummary {
+            id: "t".into(),
+            share: Some(json!({ "access": "link", "slug": "abc" })),
+            ..Default::default()
+        };
+        let mut reply = ThreadSummary {
+            id: "t".into(),
+            ..Default::default()
+        };
+        keep_local_marks(&mut reply, Some(&old));
+        assert_eq!(reply.runner_id, None);
+        // This Mac's runner says its own share, so none is none.
+        assert_eq!(reply.share, None);
+        // A new thread has nothing to keep.
+        let mut fresh = ThreadSummary {
+            id: "n".into(),
+            ..Default::default()
+        };
+        keep_local_marks(&mut fresh, None);
+        assert_eq!(
+            fresh,
+            ThreadSummary {
+                id: "n".into(),
+                ..Default::default()
+            }
+        );
     }
 }

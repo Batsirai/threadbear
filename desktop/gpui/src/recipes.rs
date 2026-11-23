@@ -229,7 +229,7 @@ impl Threadbear {
                             >(v["thread"].clone())
                             {
                                 if thread.id == id {
-                                    t.threads.insert(id.clone(), std::sync::Arc::new(thread));
+                                    t.store_reply_summary(thread);
                                 }
                             }
                             let (me, window) = (cx.entity().downgrade(), t.main_window);

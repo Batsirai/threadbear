@@ -120,7 +120,7 @@ export type Dump = {
   /** The Threads panel is on screen: in the layout and not folded away with ⌘/. */
   threadsShowing?: boolean;
   /** Threads open in panels of their own: whether each one's tab is showing, and its transcript. */
-  threadPanels?: { id: string; title: string; showing: boolean; transcript?: Dump['transcript'] | null }[];
+  threadPanels?: { id: string; title: string; showing: boolean; transcript?: Dump['transcript'] | null; mode?: string | null; archived?: boolean }[];
   /** The thread the main panel says is open in its own panel. */
   openElsewhere?: string | null;
   /** The keys shown beside the buttons while ⌘ is held ("Threads ⌘1"). */
