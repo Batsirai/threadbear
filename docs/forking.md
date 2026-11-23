@@ -104,8 +104,9 @@ gone from your fork, not just quiet.
   `"normal"`, or `"background"` for macOS's `taskpolicy -b`, which Mike's
   runners use. Background keeps a Mac quiet but makes a check several
   times slower, and timing tests can fail under it
-  (`runner/src/background.ts`). The ACP agents (Antigravity, Grok, OpenCode
-  and the rest) start at that priority too, so what they run inherits it;
+  (`runner/src/background.ts`). A thread's ACP agent (Antigravity, Grok,
+  OpenCode and the rest) starts at that priority too, so what it runs
+  inherits it;
   Codex starts at it but never below `nice`, as background would slow the
   browsers and dev servers it runs. Claude starts as it is.
 - Once main's `desktop/` changes, the GPUI app waits until it has stayed

@@ -85,3 +85,13 @@ export function asAgent(
   const priority = opts.priority ?? jobPriority();
   return inBackground(bin, args, { ...opts, priority: kind === 'codex' && priority === 'background' ? 'low' : priority });
 }
+
+// The program a command from inBackground or asAgent runs: what the process
+// is once taskpolicy or nice has exec'd it, for the process registry's
+// fallback match by name (proc.ts).
+export function unwrapped(command: string, args: readonly string[]): string {
+  if (command === TASKPOLICY && args[0] === '-b' && args.length > 1) return args[1];
+  if (command === TASKPOLICY && args[0] === '-c' && args.length > 2) return args[2];
+  if (path.basename(command) === 'nice' && args[0] === '-n' && args.length > 2) return args[2];
+  return command;
+}

@@ -5,6 +5,7 @@ import type { SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sd
 import type { Logger } from './log.ts';
 import { atomicWriteFileSync, readJsonSync } from './fsutil.ts';
 import { IS_WINDOWS } from './platform.ts';
+import { unwrapped } from './background.ts';
 import { parseProcesses, powershellPath, win32Helper } from './win32-helper.ts';
 import crypto from 'node:crypto';
 
@@ -750,7 +751,8 @@ export function groupSpawner(
       windowsHide: true,
     });
     const pid = child.pid;
-    if (pid) registry.add(pid, opts.command, threadId);
+    // The agent's own name, not taskpolicy's or nice's, as they exec it.
+    if (pid) registry.add(pid, unwrapped(opts.command, opts.args), threadId);
     log.info('spawned CLI', { threadId, pid, cwd: opts.cwd });
     let buf = '';
     child.stderr?.setEncoding('utf8');

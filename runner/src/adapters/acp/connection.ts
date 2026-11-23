@@ -63,6 +63,10 @@ export type AcpProcessOptions = {
   timings?: Partial<AcpTimings>;
   // Offer form elicitation (questions for Mike): only a thread can show one.
   forms?: boolean;
+  // A thread's agent, which runs builds and tests: started at the job
+  // priority (asAgent). The model list and small jobs run nothing, so they
+  // start as they are, kept clear of their timeouts on a busy Mac.
+  lowered?: boolean;
 };
 
 // The ACP version this client speaks; initialize's answer must match it.
@@ -107,7 +111,7 @@ export class AcpProcess {
     this.abort = new AbortController();
     const spawn = groupSpawner(opts.registry, opts.log, (line) => this.stderr(line), opts.label);
     // At the job priority, so the builds and tests it runs are too (asAgent).
-    const [command, args] = asAgent('acp', opts.binary, opts.args);
+    const [command, args] = opts.lowered ? asAgent('acp', opts.binary, opts.args) : [opts.binary, opts.args];
     const child = spawn({ command, args, cwd: opts.cwd, env: opts.env, signal: this.abort.signal } as never) as unknown as ChildProcess;
     this.child = child;
     this.pid = child.pid;
