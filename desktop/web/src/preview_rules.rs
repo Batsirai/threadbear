@@ -249,19 +249,16 @@ pub const COPY_GUARD: &str = r#"(() => {
 mod tests {
     use super::*;
 
+    // Local previews are unix only (Site::new is None elsewhere), so are
+    // the tests that need one: requests_stay_on_its_origin, without the
+    // mark, failed main's Windows run (22 Nov).
+    #[cfg(unix)]
     fn preview(scripts: bool) -> PreviewSite {
         let dir =
             std::env::temp_dir().join(format!("preview-rules-{}-{}", std::process::id(), token()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("my page.html"), "<p>hi</p>").unwrap();
-        let site = Site::new(&dir.join("my page.html"), None);
-        #[cfg(unix)]
-        let site = site.expect("a site");
-        #[cfg(not(unix))]
-        let site: Site = match site {
-            Some(s) => s,
-            None => panic!("no sites off unix"),
-        };
+        let site = Site::new(&dir.join("my page.html"), None).expect("a site");
         PreviewSite::new(Arc::new(site), scripts)
     }
 
@@ -348,6 +345,7 @@ mod tests {
         assert_eq!(asked_address("https://example.com/x", o), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn requests_stay_on_its_origin() {
         let p = preview(false);
