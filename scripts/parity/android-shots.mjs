@@ -18,11 +18,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const entity = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 const unescape = (s) => s.replace(/&(#x?[0-9a-f]+|\w+);/gi, (m, e) => (e[0] === '#' ? String.fromCodePoint(e[1] === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : (entity[e] ?? m)));
 
-// The text and descriptions of everything on screen, one per line.
+// The text and descriptions of everything on screen, one per line. An
+// emulator slowed by other work on the host can put up "System UI isn't
+// responding" over the app, and it covered every picture on 23 Nov: its
+// Wait button is tapped, and the next look reads the app.
 function screenText() {
   try {
     run(['shell', 'uiautomator', 'dump', '/sdcard/tb-ui.xml'], { stdio: 'ignore' });
     const xml = run(['exec-out', 'cat', '/sdcard/tb-ui.xml'], { encoding: 'utf8' });
+    if (/isn(?:'|&apos;|&#39;)t responding/.test(xml)) {
+      const wait = xml.match(/text="Wait"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+      if (wait) {
+        const [x1, y1, x2, y2] = wait.slice(1).map(Number);
+        run(['shell', 'input', 'tap', String((x1 + x2) >> 1), String((y1 + y2) >> 1)], { stdio: 'ignore' });
+        return '';
+      }
+    }
     return [...xml.matchAll(/\s(?:text|content-desc)="([^"]*)"/g)].map((m) => unescape(m[1])).filter(Boolean).join('\n');
   } catch {
     return '';
