@@ -88,8 +88,33 @@ test('a thread summary says what it waits on, from its first turn to done, and a
   assert.equal(h.runner.get(thread.id).waitState, 'scheduled');
   h.runner.publish({ method: 'schedules.updated', params: { schedules } });
   await until(() => sent.some((x) => x.id === thread.id && x.state === 'scheduled'), 'the re-sent summary');
-  // A change that moves nothing marks nothing to send.
-  await until(() => !h.runner.dirty.has(thread.id), 'the re-send flushed');
+  // A change that moves nothing sends nothing: the next thing sent for the
+  // thread is what a later change of its own sends.
+  sent.length = 0;
   h.runner.publish({ method: 'schedules.updated', params: { schedules } });
-  assert.equal(h.runner.dirty.has(thread.id), false);
+  h.runner.markDirty(h.runner.threads.get(thread.id)!);
+  await until(() => sent.length > 0, 'the marker');
+  assert.equal(sent.length, 1);
+});
+
+test('the first schedule removed after a start re-sends its thread', async () => {
+  const h = makeHarness(tmpDir());
+  const { thread } = h.runner.create({ text: 'Fix it', accountId: 'claude-main' });
+  const s = h.adapter.sessions.at(-1)!;
+  s.init();
+  s.out({ kind: 'event', event: { type: 'tool.call', itemId: 'e1', name: END_TURN, kind: 'mcp', title: 'end_turn', input: { needs: 'nothing' } } });
+  s.text('m1', 'Done.');
+  s.result('completed');
+  let schedules: Schedule[] = [{ id: 's1', title: 'Check in', text: 'look again', whenText: 'tomorrow', threadId: thread.id, nextRunAt: '2099-01-01T00:00:00Z' } as Schedule];
+  h.runner.schedulesFor = () => schedules;
+  await until(() => h.runner.get(thread.id).waitState === 'scheduled', 'scheduled');
+  await until(() => !h.runner.dirty.has(thread.id), 'flushed');
+  // No list went out yet; then the schedule goes.
+  const sent: (string | undefined)[] = [];
+  h.runner.onNotification((n) => {
+    if (n.method === 'thread.updated' && n.params.thread.id === thread.id) sent.push(n.params.thread.waitState);
+  });
+  schedules = [];
+  h.runner.publish({ method: 'schedules.updated', params: { schedules } });
+  await until(() => sent.includes('done'), 'the re-sent summary');
 });

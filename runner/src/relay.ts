@@ -778,6 +778,9 @@ export class Relay {
       else t[k] = c.value === PUT_AWAY ? UNTIL_RESTART : c.value;
     }
     if (!kept.size) this.changed.delete(threadId);
+    // The row's state is from before the change: without it the app's own
+    // rule draws the change (Codex's review, 23 Nov).
+    else delete t.waitState;
     return t as T;
   }
 

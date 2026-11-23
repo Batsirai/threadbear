@@ -1565,10 +1565,12 @@ export class Runner {
   recheckWaitStates(): void {
     const now = new Set<string>();
     for (const st of this.threads.values()) if (this.scheduled(st.rec.id)) now.add(st.rec.id);
-    const before = this.scheduledThreads;
+    // The first time, every thread a summary has said is scheduled counts
+    // as before, so the first schedule removed after a start is sent too.
+    const before = this.scheduledThreads ?? new Set([...this.threads.values()].filter((st) => st.rt.waitState === 'scheduled').map((st) => st.rec.id));
     this.scheduledThreads = now;
-    for (const id of new Set([...now, ...(before ?? [])])) {
-      if (before && now.has(id) === before.has(id)) continue;
+    for (const id of new Set([...now, ...before])) {
+      if (now.has(id) === before.has(id)) continue;
       const st = this.threads.get(id);
       if (st && !st.rt.deleted) this.markDirty(st);
     }

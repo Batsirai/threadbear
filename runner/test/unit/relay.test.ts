@@ -643,6 +643,24 @@ test("the sidebar's list keeps an archive made here until the backend's row show
   assert.equal(h.relay.overlay(h.remote).threads[0]!.archivedAt, undefined);
 });
 
+test("a change made here drops the row's wait state until the row shows the change", async () => {
+  // Hibernated here while that runner's row still said done: the state
+  // would have put it back in the inbox (Codex's review, 23 Nov).
+  const h = harness();
+  (h.remote.threads[0] as { waitState?: string }).waitState = 'done';
+  const snooze = h.relay.call(T, 'threads.update', { threadId: T, snoozedUntil: at(9_000_000) });
+  await new Promise((r) => setImmediate(r));
+  h.subs.get('relay:commandState')![0]!.onUpdate({ state: 'done' });
+  await snooze;
+  const listed = h.relay.overlay(h.remote).threads[0] as { snoozedUntil?: string; waitState?: string };
+  assert.equal(typeof listed.snoozedUntil, 'string');
+  assert.equal(listed.waitState, undefined);
+  // The row catches up with its own state.
+  h.remote.threads[0]!.snoozedUntil = listed.snoozedUntil;
+  (h.remote.threads[0] as { waitState?: string }).waitState = 'hibernating';
+  assert.equal((h.relay.overlay(h.remote).threads[0] as { waitState?: string }).waitState, 'hibernating');
+});
+
 test("sharing answers with the link, read from that runner's row once it shows it", async () => {
   let share: { access: string; slug: string } | undefined;
   const h = harness({ row: () => ({ ...idle, ...(share ? { share } : {}) }) });

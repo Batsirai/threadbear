@@ -640,6 +640,8 @@ async function main(): Promise<void> {
   if (!copyOfReal && !box) scheduler.start();
   // The done card's loose ends list the check-ins booked for a thread.
   runner.schedulesFor = (id) => scheduler.list(id);
+  // The list as it starts, so the first change to it re-sends the threads it moves.
+  runner.recheckWaitStates();
   runner.scheduleChecks = () => scheduler.localChecks();
   // Projects need the threads loaded (their counts, and the thread side of
   // membership); the librarian needs both.
