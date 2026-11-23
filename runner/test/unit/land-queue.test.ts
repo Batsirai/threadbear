@@ -366,11 +366,32 @@ test('a passing group check lands one whose tb went during it, even once its nex
 });
 
 // One rewritten without what was checked (amended, reset) asks for something
-// else now: checked again without it, and out of the line.
-test('one whose tb went during a passing group check and whose branch was rewritten is checked again without, and leaves the line', async () => {
+// else now: checked again without it, and out of the line. So is one
+// amended in whitespace only (git's patch id would call that the same:
+// Codex's review), and one rebased with a commit made empty on purpose,
+// which its next tb land would land a second time.
+const rewrites: Record<string, (cwd: string, base: string, branch: string) => void> = {
+  'reset and made again differently': (cwd, base) => {
+    sh(cwd, `git reset -q --hard ${base}`);
+    commit(cwd, { 'c2.txt': 'c2\n' }, 'Add c differently');
+  },
+  'amended in whitespace only': (cwd) => {
+    write(cwd, { 'c.txt': 'c \n' });
+    sh(cwd, 'git commit -q -a --amend --no-edit');
+  },
+  // Main can't move while the holder has the lock: a commit main doesn't
+  // have is enough to rebase it onto.
+  'rebased with a commit made empty on purpose': (cwd, base, branch) => {
+    sh(cwd, `git checkout -q -b scratch ${base}`);
+    commit(cwd, { 'n.txt': 'n\n' }, 'Elsewhere');
+    sh(cwd, `git checkout -q ${branch} && git rebase -q scratch`);
+  },
+};
+for (const [how, rewrite] of Object.entries(rewrites)) test(`one whose tb went during a passing group check and whose branch was ${how} is checked again without, and leaves the line`, async () => {
   const { root, main } = makeRepo();
   const common = path.join(main, '.git');
   const [a, b, c] = branches(main, ['a', 'b', 'c']);
+  if (how.includes('empty')) sh(c.path, "git commit -q --allow-empty -m 'Empty on purpose'");
   const base = sh(main, 'git rev-parse main');
   const check = groupCheck(root, 'c.txt');
   const sb = await standIn(root, common, b, base, check);
@@ -381,8 +402,8 @@ test('one whose tb went during a passing group check and whose branch was rewrit
     try {
       await until(() => fs.existsSync(path.join(root, 'group-checking')), 'the group check');
       await sc.gone();
-      sh(c.path, `git reset -q --hard ${base}`);
-      commit(c.path, { 'c2.txt': 'c2\n' }, 'Add c differently');
+      rewrite(c.path, base, c.branch);
+      assert.notEqual(sh(c.path, 'git rev-parse HEAD'), sc.entry.commit);
     } finally {
       write(root, { 'group-release': '' });
     }
@@ -435,6 +456,29 @@ test("one whose tb went during a group check that passed but didn't land is carr
   // Its branch is moved to what landed, as for any whose tb has gone.
   assert.equal(sh(b.path, `git log --oneline main..${b.branch}`), '');
   assert.deepEqual(waiting(common), [], 'nobody left in the line');
+});
+
+// A carried landing and its next tb land's, both waiting: one goes in, and
+// a commit made empty on purpose lands once (Codex's review).
+test('a carried landing and its next tb land are never stacked together', async () => {
+  const { root, main } = makeRepo();
+  const common = path.join(main, '.git');
+  const [a, b] = branches(main, ['a', 'b']);
+  sh(b.path, "git commit -q --allow-empty -m 'Empty on purpose'");
+  const base = sh(main, 'git rev-parse main');
+  const check = groupCheck(root, 'never-there.txt');
+  const old = joinQueue(common, { branch: b.branch, path: b.path, base, commit: sh(b.path, 'git rev-parse HEAD'), check, checkFrom: '' });
+  writeEntry(common, { ...old, inCheckAt: Date.now() });
+  deadPid(common, old.id);
+  const again = await standIn(root, common, b, base, check);
+  const ca = capture();
+  try {
+    assert.equal(await land({ ...a, check }, ca.opts), 0, ca.err.join('\n'));
+  } finally {
+    await again.gone();
+  }
+  assert.match(ca.out.join('\n'), /In the same check, and landed with it: thread\/b0000000\.$/m);
+  assert.equal(sh(main, "git log --format=%s main | grep -c '^Empty on purpose$'"), '1');
 });
 
 test("the line keeps one whose tb has gone only once a check of it started, and not for ever", () => {

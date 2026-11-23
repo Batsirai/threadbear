@@ -684,26 +684,83 @@ async function ownerWaiting(common: string, e: QueueEntry): Promise<boolean> {
   }
 }
 
-// Whether every commit a landing asked to land has its change in
-// `upstream` (git cherry, by patch id), as a rebase carries them.
-async function changesIn(cwd: string, e: QueueEntry, upstream: string): Promise<boolean> {
-  if ((await git(cwd, ['merge-base', '--is-ancestor', e.commit, upstream])).ok) return true;
-  const said = await gitOut(cwd, ['cherry', upstream, e.commit, e.base]);
-  if (said === undefined) return false;
-  const lines = said.split('\n').filter(Boolean);
-  return lines.length > 0 && lines.every((l) => l.startsWith('- '));
+// A commit as tb land compares it across a rebase: its author, message and
+// change, exactly, less only what a rebase moves (hunk positions, blob
+// ids). Not git's patch id, which ignores whitespace and the message, so an
+// amend that changed only those would pass for the same (Codex's review).
+// Context lines that changed underneath still differ: that's then taken for
+// a rewrite, which only costs a check.
+async function asMade(cwd: string, c: string): Promise<string | undefined> {
+  const meta = await git(cwd, ['log', '-1', '--format=%an%x00%ae%x00%B', c]);
+  const diff = await git(cwd, ['diff-tree', '-p', '--binary', '--no-color', '--no-ext-diff', '--no-renames', '--no-commit-id', '--root', c]);
+  if (!meta.ok || !diff.ok) return undefined;
+  return `${meta.stdout}\0${diff.stdout.split('\n').filter((l) => !l.startsWith('@@') && !l.startsWith('index ')).join('\n')}`;
+}
+
+// The commits a landing asked to land, oldest first, or undefined if git
+// can't say.
+async function askedCommits(cwd: string, e: QueueEntry): Promise<string[] | undefined> {
+  const list = await gitOut(cwd, ['rev-list', '--reverse', '--no-merges', `${e.base}..${e.commit}`]);
+  return list === undefined ? undefined : list.split('\n').filter(Boolean);
+}
+
+// Whether each of `asked` was made again, as it was (asMade), among the
+// commits of `range`.
+async function madeAgainIn(cwd: string, asked: string[], range: string): Promise<boolean> {
+  if (!asked.length) return false;
+  const list = await gitOut(cwd, ['log', '--no-merges', '--format=%H %s', range]);
+  if (list === undefined) return false;
+  const wanted = new Map<string, number>();
+  for (const c of asked) {
+    const made = await asMade(cwd, c);
+    if (made === undefined) return false;
+    wanted.set(made, (wanted.get(made) ?? 0) + 1);
+  }
+  // Only those with a subject among the asked ones are read in full.
+  const subjects = new Set<string>();
+  for (const c of asked) subjects.add((await gitOut(cwd, ['log', '-1', '--format=%s', c])) ?? '');
+  let left = asked.length;
+  for (const line of list.split('\n')) {
+    const m = /^([0-9a-f]{40,64}) (.*)$/.exec(line);
+    if (!m || !subjects.has(m[2])) continue;
+    const made = await asMade(cwd, m[1]);
+    const n = made === undefined ? 0 : wanted.get(made) ?? 0;
+    if (!n) continue;
+    wanted.set(made!, n - 1);
+    if (--left === 0) return true;
+  }
+  return false;
+}
+
+// Whether what a landing asked to land is on main already, landed by its
+// next tb land or with another group: as it was, or made again on it.
+async function landedOn(cwd: string, e: QueueEntry, main: string): Promise<boolean> {
+  if ((await git(cwd, ['merge-base', '--is-ancestor', e.commit, main])).ok) return true;
+  const asked = await askedCommits(cwd, e);
+  return !!asked && (await madeAgainIn(cwd, asked, `${e.base}..${main}`));
 }
 
 // Whether a landing whose tb has gone still asks for what it asked to land:
-// its branch has those commits, as they were, with more on top, or rebased.
-// On 23 Nov two passing group checks landed nothing because a member's
-// agent, its tb killed, ran tb land again, and that rebased the branch
-// before it waited: the same commits on a newer main. One whose branch was
-// rewritten without them (amended, reset) asks for something else now.
-async function stillAsked(cwd: string, e: QueueEntry): Promise<boolean> {
+// its branch has those commits, as they were, with more on top, or made
+// again on `main` as they were (asMade). On 23 Nov two passing group checks
+// landed nothing because a member's agent, its tb killed, ran tb land
+// again, and that rebased the branch before it waited: the same commits on
+// a newer main. One whose branch was rewritten without them (amended,
+// reset) asks for something else now. Nor one rebased with a commit made
+// empty on purpose: its next tb land keeps that commit, as rebase does,
+// and would land it again (Codex's review). Then it's checked again
+// without, as before.
+async function stillAsked(cwd: string, e: QueueEntry, main: string): Promise<boolean> {
   const tip = await gitOut(cwd, ['rev-parse', '--verify', '-q', `refs/heads/${e.branch}`]);
   if (!tip || !/^[0-9a-f]{40,64}$/.test(tip)) return false;
-  return tip === e.commit || (await changesIn(cwd, e, tip));
+  if (tip === e.commit || (await git(cwd, ['merge-base', '--is-ancestor', e.commit, tip])).ok) return true;
+  const asked = await askedCommits(cwd, e);
+  if (!asked?.length) return false;
+  for (const c of asked) {
+    const tree = await gitOut(cwd, ['rev-parse', `${c}^{tree}`]);
+    if (!tree || tree === (await gitOut(cwd, ['rev-parse', `${c}^^{tree}`]))) return false;
+  }
+  return madeAgainIn(cwd, asked, `${main}..${tip}`);
 }
 
 // A group check runs with HEAD detached at the stack (landLocked). This
@@ -1383,6 +1440,10 @@ async function stackWaiting(
     if (!free(e) && !includeOthers) continue;
     if (!free(e) && allowed && !allowed.has(e.id)) continue;
     if (e.path === t.path || e.branch === t.branch) continue;
+    // One branch once: a carried landing and its next tb land's, say. Its
+    // next tb land moves to what the first landed, first thing, so nothing
+    // (a commit made empty on purpose) lands twice (Codex's review).
+    if (group.some((g) => g.entry.branch === e.branch)) continue;
     if ((e.check ?? null) !== check || (e.checkFrom ?? '') !== checkFrom) continue;
     // A landing whose tb has gone after a check of it started is carried:
     // stacked as it asked, while its branch still has those commits.
@@ -1392,7 +1453,7 @@ async function stackWaiting(
       if ((await gitOut(e.path, ['rev-parse', 'HEAD'])) !== e.commit) continue;
     } else {
       if (!isCarried(e)) continue;
-      if (!(await stillAsked(t.path, e)) || (await changesIn(t.path, e, main))) {
+      if (!(await stillAsked(t.path, e, main)) || (await landedOn(t.path, e, main))) {
         leaveQueue(common, e.id);
         continue;
       }
@@ -2041,7 +2102,7 @@ async function landLocked(
       const movedOn = [];
       for (const g of group) {
         if (await ownerWaiting(common, g.entry)) continue;
-        if (!(await stillAsked(t.path, g.entry))) {
+        if (!(await stillAsked(t.path, g.entry, main))) {
           movedOn.push(g.entry.branch);
           leaveQueue(common, g.entry.id);
         }
