@@ -416,6 +416,68 @@ phone keeps each thread the phone has in its own section, and puts the
 rest after its archived ones. An older phone sends no `everywhere` and gets
 what it did before.
 
+## Searching Agent Archive
+
+With the `archive` experiment on (docs/experiments.md) and Agent Archive
+installed on the runner's machine, the Mac's sidebar search also searches
+the archive: every word said anywhere in a session, sessions run outside
+Threadbear (the terminal, Codex, T3 Code), everything from before
+Threadbear, and every machine that syncs to it. The runner never holds
+an archive credential: it runs the archive's own command, `agent-archive
+search --json` and `read --json`, which uses the read-only key the
+archive's MCP server uses, and passes the answer on. Nothing goes to the
+backend, so the phone and the website don't search the archive.
+
+```ts
+type ArchiveHit = {
+  threadId: string            // the archive's thread id (31 to 37 lowercase letters and digits)
+  title: string               // its Threadbear thread's title when it has one, else the archive's
+  agent: string               // "claude" | "codex" | "grok" | "muse"; tolerate others
+  folder?: string             // the session's working folder
+  machine?: string            // the archive's name for the computer it came from
+  updatedAt: number           // ms
+  sequence: number            // the matching message's place in the session, for archive.read's around
+  snippet: string             // up to about 240 characters around the first match, one line
+  threadbear?: { threadId: string, title: string }  // the Threadbear thread it belongs to, if any
+}
+type ArchiveThread = {
+  threadId: string, title: string, agent: string, folder?: string, machine?: string,
+  createdAt?: number, updatedAt: number,
+  messages: number            // how many messages the session has (user and assistant)
+  url?: string                // the archive reader's page for it
+  threadbear?: { threadId: string, title: string }
+}
+type ArchiveItem = {
+  sequence: number,
+  role: "user" | "assistant",
+  text: string                // at most 8 KB, clipped with "…"
+}
+```
+
+One hit per archived session, best first. The app sends a search once
+typing pauses (about 400 ms) with three or more characters, and shows its
+own threads first, so the archive can't slow them down; a late answer for
+older words is dropped. A hit whose Threadbear thread is in the app's
+lists opens that thread, and is left out when that thread is already among
+the search's own results. Any other hit opens read-only in the thread's
+place: the messages from `archive.read`, the matching one in view, with
+Open in the archive (the reader's `url`) and New thread from this, which
+starts a new thread's message naming the archived session, so its agent
+reads it with the archive's tools.
+
+A runner without the experiment answers `{ hits: [], off: "experiment" }`,
+and one where the archive's command isn't there `off: "not_installed"`;
+the app then shows nothing for the archive. A runner from before answers
+`-32601`, the same. A search that fails (the archive's server can't be
+reached) is an error whose message says why, which the app shows under
+the Agent Archive heading. The command gets 20 seconds.
+
+With the same experiment on, every thread's agent gets the archive's tools:
+the runner adds the archive's MCP server, `agent-archive`, to each Claude
+and Codex session it starts, the same command Mike's own config names,
+so threads on a login whose config doesn't have it (the cloud box's)
+have it too.
+
 ## What Mike last asked
 
 A thread's summary carries `asked`: the last message Mike sent it, at the
