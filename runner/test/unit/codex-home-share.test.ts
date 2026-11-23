@@ -120,3 +120,83 @@ test('readHookStates and onlyProjectTrust read what Codex writes', () => {
   assert.ok(!onlyProjectTrust('model = "x"\n[projects."/a"]\ntrust_level = "trusted"\n'));
   assert.ok(!onlyProjectTrust('[projects."/a"]\ntrust_level = "trusted"\n[mcp_servers.x]\ncommand = "y"\n'));
 });
+
+// From the Codex review of 23 Nov 2026: trust text inside a multi-line
+// string isn't trust, and Codex's other valid spellings still count.
+test('hook states inside a multi-line string are not read; commented headers and inline tables are', () => {
+  const fake = '[hooks.state."/h/hooks.json:pre_tool_use:0:0"]\ntrusted_hash = "sha256:fake"';
+  const text = [
+    `developer_instructions = """\n${fake}\n"""`,
+    `other = '''\n${fake}\n'''`,
+    'one_line = "a \\"\\"\\" b"',
+    '[hooks.state."/h/hooks.json:stop:0:0"] # a guard',
+    'trusted_hash = "sha256:real" # set by codex',
+    '[hooks.state]',
+    `'/h/hooks.json:session_start:0:0' = { trusted_hash = "sha256:inline", enabled = false }`,
+  ].join('\n');
+  assert.deepEqual(Object.fromEntries(readHookStates(text)), {
+    '/h/hooks.json:stop:0:0': { trusted_hash: 'sha256:real' },
+    '/h/hooks.json:session_start:0:0': { trusted_hash: 'sha256:inline', enabled: false },
+  });
+});
+
+test("a config.toml moved aside never replaces an earlier one, and comes back if the link can't be made", () => {
+  const { main, login } = homes();
+  shareCodexHome(main, login, '2026-11-23');
+  // Codex made a new trust-only file in its place, the same day.
+  fs.unlinkSync(path.join(login, 'config.toml'));
+  fs.writeFileSync(path.join(login, 'config.toml'), '[projects."/b"]\ntrust_level = "trusted"\n');
+  shareCodexHome(main, login, '2026-11-23');
+  assert.match(fs.readFileSync(path.join(login, 'config.toml.before-share-2026-11-23'), 'utf8'), /thing/);
+  assert.match(fs.readFileSync(path.join(login, 'config.toml.before-share-2026-11-23-2'), 'utf8'), /"\/b"/);
+  // A link refused (as on Windows without the right): the file stays.
+  fs.unlinkSync(path.join(login, 'config.toml'));
+  fs.writeFileSync(path.join(login, 'config.toml'), '[projects."/c"]\ntrust_level = "trusted"\n');
+  const real = fs.symlinkSync;
+  (fs as { symlinkSync: typeof fs.symlinkSync }).symlinkSync = () => {
+    throw new Error('EPERM: operation not permitted');
+  };
+  try {
+    const report = shareCodexHome(main, login, '2026-11-24');
+    assert.equal(report.skipped.length, 1);
+  } finally {
+    (fs as { symlinkSync: typeof fs.symlinkSync }).symlinkSync = real;
+  }
+  assert.ok(!fs.lstatSync(path.join(login, 'config.toml')).isSymbolicLink());
+  assert.match(fs.readFileSync(path.join(login, 'config.toml'), 'utf8'), /"\/c"/);
+  assert.ok(!fs.existsSync(path.join(login, 'config.toml.before-share-2026-11-24')));
+});
+
+// From the Gemini review of 23 Nov 2026.
+test("a main home that keeps its sign-in in the Keychain doesn't send the login there", () => {
+  const { main, login } = homes();
+  shareCodexHome(main, login);
+  assert.ok(fs.lstatSync(path.join(login, 'config.toml')).isSymbolicLink());
+  const text = fs.readFileSync(path.join(main, 'config.toml'), 'utf8');
+  fs.writeFileSync(path.join(main, 'config.toml'), `cli_auth_credentials_store = "keyring"\n${text}`);
+  shareCodexHome(main, login);
+  assert.ok(!fs.existsSync(path.join(login, 'config.toml')) && !fs.lstatSync(path.join(login, 'config.toml'), { throwIfNoEntry: false }));
+  assert.equal(shareCodexHome(main, login).skipped.length, 1);
+});
+
+test('a link whose file left the main home goes too', () => {
+  const { main, login } = homes();
+  shareCodexHome(main, login);
+  fs.unlinkSync(path.join(main, 'AGENTS.md'));
+  const report = shareCodexHome(main, login);
+  assert.equal(fs.lstatSync(path.join(login, 'AGENTS.md'), { throwIfNoEntry: false }), undefined);
+  assert.equal(report.changes.length, 1);
+});
+
+test("single-quoted hashes count; a skills file where the folder should be doesn't stop the rest", () => {
+  assert.deepEqual(Object.fromEntries(readHookStates(`[hooks.state.'C:\\h\\hooks.json:stop:0:0']\ntrusted_hash = 'sha256:lit'\n`)), {
+    'C:\\h\\hooks.json:stop:0:0': { trusted_hash: 'sha256:lit' },
+  });
+  const { main, login } = homes();
+  fs.rmSync(path.join(login, 'skills'), { recursive: true });
+  fs.writeFileSync(path.join(login, 'skills'), 'not a folder');
+  const report = shareCodexHome(main, login);
+  assert.equal(report.skipped.length, 1);
+  assert.equal(fs.readlinkSync(path.join(login, 'hooks.json')), path.join(main, 'hooks.json'));
+  assert.ok(Object.keys(hookTrust(main, login)).length);
+});

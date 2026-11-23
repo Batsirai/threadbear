@@ -23,6 +23,7 @@
 // changed since shows as changed there too.
 import fs from 'node:fs';
 import path from 'node:path';
+import { readCodexConfig } from './accounts.ts';
 
 export type ShareReport = { changes: string[]; skipped: string[] };
 
@@ -57,7 +58,15 @@ export function sameHome(a: string, b: string): boolean {
 // Points `link` at `target`, never over a real file someone made. A link
 // that leads nowhere (its target moved) is repointed.
 function linkTo(target: string, link: string, report: ShareReport): void {
-  if (!exists(target)) return;
+  if (!exists(target)) {
+    // Gone from the main home: so is the login's link to it, rather than
+    // left leading nowhere (memory-sync.ts would keep it for good).
+    if (isLink(link) && fs.readlinkSync(link) === target) {
+      fs.unlinkSync(link);
+      report.changes.push(`removed ${link} (${target} is gone)`);
+    }
+    return;
+  }
   if (isLink(link)) {
     if (fs.readlinkSync(link) === target) return;
     if (exists(link)) {
@@ -90,7 +99,19 @@ export function onlyProjectTrust(text: string): boolean {
 function shareConfig(mainDir: string, loginDir: string, report: ShareReport, stamp: string): void {
   const target = path.join(mainDir, CONFIG);
   const link = path.join(loginDir, CONFIG);
-  if (!exists(target)) return;
+  if (!exists(target)) return linkTo(target, link, report);
+  // The main home keeping its tokens in the Keychain would send the login
+  // there too, away from its own auth.json.
+  const store = readCodexConfig(target).credentialsStore;
+  if (store && store !== 'file') {
+    if (isLink(link) && fs.readlinkSync(link) === target) {
+      fs.unlinkSync(link);
+      report.changes.push(`removed ${link}: ${target} now keeps its sign-in in the ${store} store`);
+      return;
+    }
+    report.skipped.push(`${target} keeps its sign-in in the ${store} store, so ${link} isn't shared`);
+    return;
+  }
   if (!isLink(link) && exists(link)) {
     let text: string;
     try {
@@ -103,9 +124,21 @@ function shareConfig(mainDir: string, loginDir: string, report: ShareReport, sta
       report.skipped.push(`${link} has settings of its own, so it isn't shared`);
       return;
     }
-    const aside = `${link}.before-share-${stamp}`;
+    // Never over an earlier one kept the same day.
+    let aside = `${link}.before-share-${stamp}`;
+    for (let n = 2; exists(aside) || isLink(aside); n++) aside = `${link}.before-share-${stamp}-${n}`;
     fs.renameSync(link, aside);
-    report.changes.push(`moved ${link} aside to ${aside}`);
+    try {
+      fs.symlinkSync(target, link);
+    } catch (e) {
+      // No link (Windows without the right to make one): the login keeps
+      // its own file rather than having none.
+      fs.renameSync(aside, link);
+      report.skipped.push(`${link}: ${(e as Error).message}`);
+      return;
+    }
+    report.changes.push(`moved ${link} aside to ${aside}`, `linked ${link} -> ${target}`);
+    return;
   }
   linkTo(target, link, report);
 }
@@ -124,6 +157,10 @@ function shareSkills(mainDir: string, loginDir: string, report: ShareReport): vo
     return;
   }
   if (isLink(to)) return;
+  if (exists(to) && !fs.statSync(to).isDirectory()) {
+    report.skipped.push(`${to} isn't a folder`);
+    return;
+  }
   if (!exists(to)) {
     fs.mkdirSync(to, { recursive: true });
     report.changes.push(`made ${to}`);
@@ -161,26 +198,96 @@ export function shareCodexHome(mainDir: string, loginDir: string, stamp = new Da
   return report;
 }
 
+// The lines of a TOML file that start outside a multi-line string, trimmed
+// (null for the rest), so text inside a """...""" or '''...''' value (a
+// developer_instructions, say) is never read as a table or a key.
+export function tomlLines(text: string): (string | null)[] {
+  const out: (string | null)[] = [];
+  let open: '"""' | "'''" | null = null;
+  for (const line of text.split(/\r?\n/)) {
+    out.push(open ? null : line.trim());
+    let i = 0;
+    let single: '"' | "'" | null = null;
+    while (i < line.length) {
+      if (open) {
+        const at = line.indexOf(open, i);
+        if (at < 0) break;
+        let slashes = 0;
+        for (let j = at - 1; j >= 0 && line[j] === '\\'; j--) slashes++;
+        i = at + 3;
+        if (open === '"""' && slashes % 2) continue;
+        // Up to two more quotes can end the string's own text.
+        while (line[i] === open[0] && i < at + 5) i++;
+        open = null;
+        continue;
+      }
+      const c = line[i];
+      if (single) {
+        if (c === '\\' && single === '"') i++;
+        else if (c === single) single = null;
+        i++;
+        continue;
+      }
+      if (c === '#') break;
+      const three = line.slice(i, i + 3);
+      if (three === '"""' || three === "'''") {
+        open = three;
+        i += 3;
+        continue;
+      }
+      if (c === '"' || c === "'") single = c;
+      i++;
+    }
+  }
+  return out;
+}
+
 type HookState = { trusted_hash?: string; trusted_content_hash?: string; enabled?: boolean };
 
-// The [hooks.state."<key>"] tables of a config.toml as Codex writes them
-// (toml_edit, a table per hook), with the three keys a state has.
+const QUOTED = String.raw`"((?:[^"\\]|\\.)*)"|'([^']*)'`;
+const unquote = (basic: string | undefined, literal: string | undefined) => (basic !== undefined ? basic.replace(/\\(["\\])/g, '$1') : literal!);
+const STATE_KV = /^(trusted_hash|trusted_content_hash|enabled)\s*=\s*(?:"([^"\\]*)"|'([^']*)'|(true|false))$/;
+
+function setState(state: HookState, kv: RegExpExecArray): void {
+  const text = kv[2] ?? kv[3];
+  if (kv[1] === 'enabled') {
+    if (kv[4]) state.enabled = kv[4] === 'true';
+  } else if (text !== undefined) state[kv[1] as 'trusted_hash' | 'trusted_content_hash'] = text;
+}
+
+// The hook states in a config.toml: the [hooks.state."<key>"] tables Codex
+// writes (toml_edit, a table per hook), or "<key>" = { ... } lines under
+// [hooks.state], each with the three keys a state has. Anything else is
+// passed over, which leaves that hook untrusted on the login: never more
+// trusted than in ~/.codex.
 export function readHookStates(text: string): Map<string, HookState> {
   const out = new Map<string, HookState>();
   let current: HookState | undefined;
-  for (const line of text.split(/\r?\n/)) {
-    const l = line.trim();
-    if (l.startsWith('[')) {
-      const m = /^\[hooks\.state\."((?:[^"\\]|\\.)*)"\]$/.exec(l);
+  let inStateTable = false;
+  const header = new RegExp(String.raw`^\[\s*hooks\s*\.\s*state\s*\.\s*(?:${QUOTED})\s*\]\s*(?:#.*)?$`);
+  const inline = new RegExp(String.raw`^(?:${QUOTED})\s*=\s*\{(.*)\}\s*(?:#.*)?$`);
+  for (const line of tomlLines(text)) {
+    if (line === null) continue;
+    if (line.startsWith('[')) {
+      const m = header.exec(line);
       current = m ? {} : undefined;
-      if (m) out.set(m[1].replace(/\\(["\\])/g, '$1'), current!);
+      if (m) out.set(unquote(m[1], m[2]), current!);
+      inStateTable = /^\[\s*hooks\s*\.\s*state\s*\]\s*(?:#.*)?$/.test(line);
       continue;
     }
-    if (!current) continue;
-    const kv = /^(trusted_hash|trusted_content_hash|enabled)\s*=\s*(?:"([^"\\]*)"|(true|false))\s*(?:#.*)?$/.exec(l);
-    if (!kv) continue;
-    if (kv[1] === 'enabled' && kv[3]) current.enabled = kv[3] === 'true';
-    else if (kv[1] !== 'enabled' && kv[2] !== undefined) current[kv[1] as 'trusted_hash' | 'trusted_content_hash'] = kv[2];
+    if (current) {
+      const kv = STATE_KV.exec(line.replace(/\s+#.*$/, ''));
+      if (kv) setState(current, kv);
+    } else if (inStateTable) {
+      const m = inline.exec(line);
+      if (!m) continue;
+      const state: HookState = {};
+      for (const part of m[3].split(',')) {
+        const kv = STATE_KV.exec(part.trim());
+        if (kv) setState(state, kv);
+      }
+      out.set(unquote(m[1], m[2]), state);
+    }
   }
   return out;
 }

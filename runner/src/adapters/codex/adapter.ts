@@ -168,6 +168,12 @@ export class CodexAdapter implements AgentAdapter {
   // The folder's skills, as the picker's commands (Codex's own commands
   // are slash-commands.ts's list).
   async commands(account: Account, cwd: string): Promise<SlashCommand[]> {
+    // A login not yet shared would list only Codex's own skills.
+    try {
+      this.deps.homeConfig?.(account);
+    } catch (e) {
+      this.deps.log.warn('codex login setup failed', { account: account.id, error: errText(e) });
+    }
     return withShortLivedProcess(
       { ...this.shortLived(account, `commands:${account.id}`), cwd },
       async (p) => codexSkillCommands(await p.request<SkillsListResponse>('skills/list', { cwds: [cwd] })),
