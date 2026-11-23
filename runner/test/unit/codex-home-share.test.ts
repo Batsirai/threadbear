@@ -63,7 +63,7 @@ test('the main home itself, or a link to it, is never touched', () => {
   const alias = path.join(root, 'alias');
   fs.symlinkSync(main, alias);
   assert.deepEqual(shareCodexHome(main, alias, 'file'), { changes: [], skipped: [] });
-  assert.deepEqual(hookTrust([{ key: `${main}/hooks.json:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], main, alias), {});
+  assert.deepEqual(hookTrust([{ key: `${path.join(main, 'hooks.json')}:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], main, alias), {});
 });
 
 test("a skill deleted from the main home loses its link; the login's own skills stay", () => {
@@ -80,11 +80,11 @@ test("a skill deleted from the main home loses its link; the login's own skills 
 test("hooks get the trust Codex reports for the main home, under the login's own path", () => {
   const { main, login } = homes();
   const hooks: MainHook[] = [
-    { key: `${main}/hooks.json:pre_tool_use:0:0`, trustStatus: 'trusted', currentHash: 'sha256:aaa' },
-    { key: `${main}/hooks.json:session_start:0:0`, trustStatus: 'trusted', currentHash: 'sha256:bbb', enabled: false },
+    { key: `${path.join(main, 'hooks.json')}:pre_tool_use:0:0`, trustStatus: 'trusted', currentHash: 'sha256:aaa' },
+    { key: `${path.join(main, 'hooks.json')}:session_start:0:0`, trustStatus: 'trusted', currentHash: 'sha256:bbb', enabled: false },
     // Changed since it was trusted, never trusted, or another file's.
-    { key: `${main}/hooks.json:stop:0:0`, trustStatus: 'modified', currentHash: 'sha256:ccc' },
-    { key: `${main}/hooks.json:stop:1:0`, trustStatus: 'untrusted', currentHash: 'sha256:ddd' },
+    { key: `${path.join(main, 'hooks.json')}:stop:0:0`, trustStatus: 'modified', currentHash: 'sha256:ccc' },
+    { key: `${path.join(main, 'hooks.json')}:stop:1:0`, trustStatus: 'untrusted', currentHash: 'sha256:ddd' },
     { key: '/repo/.codex/hooks.json:stop:0:0', trustStatus: 'trusted', currentHash: 'sha256:eee' },
   ];
   // Not shared yet: the login's hooks aren't the main ones, so no trust.
@@ -92,8 +92,8 @@ test("hooks get the trust Codex reports for the main home, under the login's own
   shareCodexHome(main, login, 'file');
   assert.deepEqual(hookTrust(hooks, main, login), {
     'hooks.state': {
-      [`${login}/hooks.json:pre_tool_use:0:0`]: { trusted_hash: 'sha256:aaa' },
-      [`${login}/hooks.json:session_start:0:0`]: { trusted_hash: 'sha256:bbb', enabled: false },
+      [`${path.join(login, 'hooks.json')}:pre_tool_use:0:0`]: { trusted_hash: 'sha256:aaa' },
+      [`${path.join(login, 'hooks.json')}:session_start:0:0`]: { trusted_hash: 'sha256:bbb', enabled: false },
     },
   });
 });
@@ -102,7 +102,7 @@ test("a hooks.json of the login's own gets no trust from the main home", () => {
   const { main, login } = homes();
   fs.writeFileSync(path.join(login, 'hooks.json'), '{"hooks":{}}');
   shareCodexHome(main, login, 'file');
-  assert.deepEqual(hookTrust([{ key: `${main}/hooks.json:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], main, login), {});
+  assert.deepEqual(hookTrust([{ key: `${path.join(main, 'hooks.json')}:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], main, login), {});
 });
 
 test('onlyProjectTrust knows the file Codex writes on a fresh login', () => {

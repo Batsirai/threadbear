@@ -317,7 +317,7 @@ test("an extra login: ~/.codex is asked about once, the login linked, and its ho
     timings: { finishWaitMs: 500, closeWaitMs: 2000, terminateMs: 500, spawnRetryForMs: PATIENCE_MS },
   });
   const extra: Account = { ...account, id: 'codex-1', configDir: login };
-  const hooks = [{ key: `${main}/hooks.json:pre_tool_use:0:0`, trustStatus: 'trusted', currentHash: 'sha256:aaa' }];
+  const hooks = [{ key: `${path.join(main, 'hooks.json')}:pre_tool_use:0:0`, trustStatus: 'trusted', currentHash: 'sha256:aaa' }];
   const h = await (async () => {
     const opening = open({ adapter, account: extra });
     // First the short-lived process on ~/.codex.
@@ -330,7 +330,7 @@ test("an extra login: ~/.codex is asked about once, the login linked, and its ho
     return opening;
   })();
   const req = await h.conn.request('thread/start');
-  assert.deepEqual((req.params.config as Record<string, unknown>)['hooks.state'], { [`${login}/hooks.json:pre_tool_use:0:0`]: { trusted_hash: 'sha256:aaa' } });
+  assert.deepEqual((req.params.config as Record<string, unknown>)['hooks.state'], { [`${path.join(login, 'hooks.json')}:pre_tool_use:0:0`]: { trusted_hash: 'sha256:aaa' } });
   assert.equal(fs.readlinkSync(path.join(login, 'AGENTS.md')), path.join(main, 'AGENTS.md'));
   assert.equal(fs.readlinkSync(path.join(login, 'config.toml')), path.join(main, 'config.toml'));
   h.conn.respond(req.id, threadResult('th-1'));
@@ -370,7 +370,7 @@ test("an extra login: hooks/list failing still shares config.toml, and ~/.codex 
     probe.respond(read.id, { config: {}, origins: {} });
     const list = await probe.request('hooks/list');
     if (hooks === 'fail') probe.fail(list.id, -32601, 'no such method');
-    else probe.respond(list.id, { data: [{ cwd: '/tmp', hooks: [{ key: `${main}/hooks.json:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], warnings: [], errors: [] }] });
+    else probe.respond(list.id, { data: [{ cwd: '/tmp', hooks: [{ key: `${path.join(main, 'hooks.json')}:stop:0:0`, trustStatus: 'trusted', currentHash: 'sha256:a' }], warnings: [], errors: [] }] });
   };
   const opening = open({ adapter, account: extra });
   await answer('fail');
