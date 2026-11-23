@@ -172,7 +172,9 @@ pub struct Threadbear {
     /// "Moving to …" is put back on every summary that comes in meanwhile
     /// (threadbear_core::starting_moves).
     pub(crate) starting_moves: threadbear_core::starting_moves::StartingMoves,
-    pub(crate) continuing_refusal: Option<String>,
+    /// Threads whose Continue with Codex Sol is on its way: each its own,
+    /// as a box in a panel of its own shows the offer too.
+    pub(crate) continuing_refusal: HashSet<String>,
     /// The runner's website, from `runner.status` (`websiteURL`).
     pub(crate) website_url: Option<String>,
     pub(crate) schedules_supported: bool,
@@ -618,7 +620,7 @@ impl Threadbear {
             share_busy: false,
             chip_busy: Default::default(),
             starting_moves: Default::default(),
-            continuing_refusal: None,
+            continuing_refusal: HashSet::new(),
             website_url: None,
             schedules_supported: false,
             scheduled,
@@ -2244,11 +2246,17 @@ impl Threadbear {
                     .open_thread()
                     .and_then(|t| self.refusal_target(t, cx))
                     .is_some();
-            out["offerAbove"] = json!(refused.then_some(if self.continuing_refusal.is_some() {
-                "Continuing…"
-            } else {
-                "Continue with Codex Sol"
-            }));
+            out["offerAbove"] = json!(refused.then_some(
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| self.continuing_refusal.contains(id))
+                {
+                    "Continuing…"
+                } else {
+                    "Continue with Codex Sol"
+                }
+            ));
             // Whether the chips and the send button fit inside the box.
             let (row, send) = composer.controls_fit.get();
             out["chipsFit"] = json!(send <= row + 0.5);

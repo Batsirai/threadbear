@@ -2138,7 +2138,7 @@ impl Threadbear {
         // Any box's own thread, in the main panel or one of its own.
         let thread = t.threads.get(thread_id)?;
         let (account, title) = t.refusal_target(thread, cx)?;
-        let continuing = t.continuing_refusal.as_deref() == Some(thread_id);
+        let continuing = t.continuing_refusal.contains(thread_id);
         Some(Self::render_refusal_offer(
             app.downgrade(),
             thread_id.to_owned(),
@@ -2219,10 +2219,9 @@ impl Threadbear {
         account: String,
         cx: &mut Context<Self>,
     ) {
-        if self.continuing_refusal.as_deref() == Some(thread.as_str()) {
+        if !self.continuing_refusal.insert(thread.clone()) {
             return;
         }
-        self.continuing_refusal = Some(thread.clone());
         cx.notify();
         let client = self.client.clone();
         // The runner it's shown on, as every send says it (thread.rs, Daybreak 113).
@@ -2236,7 +2235,7 @@ impl Threadbear {
                 Err(e) => Err(e.clone()),
             };
             this.update(cx, |this, cx| {
-                this.continuing_refusal = None;
+                this.continuing_refusal.remove(&thread);
                 if let Err(e) = sent {
                     this.show_error(e.message, cx);
                 }
