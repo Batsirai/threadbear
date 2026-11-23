@@ -304,6 +304,36 @@ impl Threadbear {
         )
     }
 
+    /// The pane of the thread in a panel of its own whose box (or a card's
+    /// Something else box) has the focus: what a menu command or its key
+    /// acts on in place of the main panel's thread.
+    pub(crate) fn focused_panel_pane(
+        &self,
+        window: &Window,
+        cx: &App,
+    ) -> Option<Entity<ThreadPane>> {
+        self.thread_panels
+            .panes()
+            .find(|pane| {
+                pane.read(cx)
+                    .composer
+                    .read(cx)
+                    .native_paste_target(window, cx)
+                    .is_some()
+            })
+            .cloned()
+    }
+
+    /// The thread a menu command (Archive, Stop, Hibernate, Copy
+    /// Transcript) acts on: one in a panel of its own while its box has the
+    /// focus, else the main panel's.
+    pub(crate) fn command_thread(&self, window: &Window, cx: &App) -> Option<String> {
+        match self.focused_panel_pane(window, cx) {
+            Some(pane) => Some(pane.read(cx).summary.id.clone()),
+            None => self.selected.clone(),
+        }
+    }
+
     /// What a thread's own panel shows (`PinnedThreadView`): its sign-in
     /// line and its reviews waiting over its transcript and box, as in the
     /// main panel.

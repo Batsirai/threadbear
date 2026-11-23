@@ -41,6 +41,12 @@ When('I press {string} on the card in the panel of {string}', async function (th
   await this.app.do({ cmd: 'ask', action, thread: id });
 });
 
+When('I put the cursor in the box in the panel of {string}', async function (this: ThreadbearWorld, title: string) {
+  const id = await threadId(this, title);
+  await this.until(`${title} in a panel of its own`, (d) => panelOf(d, id)?.transcript?.state === 'loaded');
+  await this.app.do({ cmd: 'type', text: '', thread: id });
+});
+
 Then('the panel of {string} says its permission mode is {string}', async function (this: ThreadbearWorld, title: string, mode: string) {
   const id = await threadId(this, title);
   await this.until(`${title}'s own panel in ${mode}`, (d) => panelOf(d, id)?.mode === mode);

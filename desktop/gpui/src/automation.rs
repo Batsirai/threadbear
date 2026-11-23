@@ -897,6 +897,7 @@ fn step(
         "type" | "send" => {
             type_in_composer(
                 app,
+                cmd,
                 text(cmd, "text"),
                 cmd["replace"].as_bool().unwrap_or(false),
                 window,
@@ -1430,7 +1431,10 @@ fn step(
             Ok(json!("ok"))
         }
         "archive" => {
-            app.update(cx, |t, cx| t.toggle_archive(window, cx));
+            // As ⌘E does: the thread being typed in, else the main panel's.
+            app.update(cx, |t, cx| {
+                t.run_command(crate::shell::Command::Archive, window, cx)
+            });
             Ok(json!("ok"))
         }
         "snooze" => {
@@ -2032,6 +2036,7 @@ fn shell_step(
 
 fn type_in_composer(
     app: &Entity<Threadbear>,
+    cmd: &Value,
     words: &str,
     replace: bool,
     window: &mut Window,
@@ -2039,12 +2044,11 @@ fn type_in_composer(
 ) -> Result<(), String> {
     // On the new-thread page the box is made at its first render; a script
     // may type before that frame has been drawn.
-    if app.read(cx).pane.is_none() {
+    if app.read(cx).pane.is_none() && cmd["thread"].is_null() {
         app.update(cx, |t, cx| t.ensure_new_composer(window, cx));
     }
-    let Some(composer) = app.read(cx).composer(cx) else {
-        return Err("no thread open".into());
-    };
+    // `thread`: the box in that thread's own panel.
+    let composer = app.read(cx).composer_for_command(cmd, cx)?;
     let input = composer.read(cx).input.clone();
     if replace {
         input.update(cx, |s, cx| s.set_value("", window, cx));

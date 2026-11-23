@@ -109,6 +109,17 @@ Feature: The panels round the thread
     And the open thread is "Rename the Settings tabs"
     And the "Archived" section doesn't list "Rename the Settings tabs"
 
+  # The menu's thread commands act on the thread being typed in.
+  @dock.threadpanel @swift-pending
+  Scenario: ⌘E in a thread's own panel's box archives that thread
+    When I open "Tidy the imports in the uploader" in a new panel
+    And I open the thread "Rename the Settings tabs"
+    And I put the cursor in the box in the panel of "Tidy the imports in the uploader"
+    And I press "e" with "cmd"
+    Then the "Archived" section lists "Tidy the imports in the uploader"
+    And the open thread is "Rename the Settings tabs"
+    And the "Archived" section doesn't list "Rename the Settings tabs"
+
   @dock.threadpanel
   Scenario: Move to Main Panel closes the thread's panel and shows it in the main one
     When I open "Morning brief" in a new panel

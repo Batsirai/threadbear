@@ -1539,8 +1539,10 @@ impl Threadbear {
         // and the line would blame the new login.
         let failed_on_limit = thread.status == "error"
             && self.failed_on_account.get(&thread.id) == Some(&thread.account_id)
+            // This thread's own turn: a box in a panel of its own isn't the
+            // main panel's thread.
             && self
-                .latest_completion(cx)
+                .completion_for(&thread.id, cx)
                 .is_some_and(|c| c.error_kind == Some(TurnErrorKind::UsageLimit));
         // A pinned thread at its limit waits for its own login too.
         let waiting = thread.waiting_for_room_until_ms();
@@ -2069,25 +2071,11 @@ impl Threadbear {
         }
     }
 
-    /// A pinned thread's auth failure belongs to its own pane, even while a
-    /// different thread is open in the main panel.
+    /// A thread's last turn's end, from its own pane: a pinned thread's auth
+    /// failure, limit or refusal belongs to it, even while a different
+    /// thread is open in the main panel.
     fn completion_for(&self, thread: &str, cx: &App) -> Option<TurnCompletion> {
         let pane = self.pane_for(thread, cx)?;
-        let p = pane.read(cx);
-        p.feed
-            .model()
-            .rows()
-            .iter()
-            .rev()
-            .take(40)
-            .find_map(|row| match &row.content {
-                RowContent::Footer(c) => Some(c.clone()),
-                _ => None,
-            })
-    }
-
-    pub(crate) fn latest_completion(&self, cx: &App) -> Option<TurnCompletion> {
-        let pane = self.pane.as_ref()?;
         let p = pane.read(cx);
         p.feed
             .model()
@@ -2111,7 +2099,7 @@ impl Threadbear {
         if thread.status != "error" || thread.provider != "claude" {
             return None;
         }
-        let completion = self.latest_completion(cx)?;
+        let completion = self.completion_for(&thread.id, cx)?;
         if completion.outcome != TurnOutcome::Failed {
             return None;
         }
@@ -2147,10 +2135,8 @@ impl Threadbear {
         cx: &App,
     ) -> Option<AnyElement> {
         let t = app.read(cx);
-        let thread = t
-            .threads
-            .get(thread_id)
-            .filter(|_| t.selected.as_deref() == Some(thread_id))?;
+        // Any box's own thread, in the main panel or one of its own.
+        let thread = t.threads.get(thread_id)?;
         let (account, title) = t.refusal_target(thread, cx)?;
         let continuing = t.continuing_refusal.as_deref() == Some(thread_id);
         Some(Self::render_refusal_offer(

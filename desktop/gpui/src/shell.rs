@@ -1004,20 +1004,30 @@ impl Threadbear {
     ) {
         match command {
             Command::NewThread => self.new_thread(cx),
-            Command::Archive => self.toggle_archive(window, cx),
+            // These act on the thread being typed in: one in a panel of its
+            // own while its box has the focus, else the main panel's (23 Nov
+            // review: ⌘E in a panel's box archived the main panel's thread).
+            Command::Archive => {
+                if let Some(id) = self.command_thread(window, cx) {
+                    self.toggle_archive_of(id, window, cx);
+                }
+            }
             Command::Hibernate => {
-                if let Some(id) = self.selected.clone() {
+                if let Some(id) = self.command_thread(window, cx) {
                     self.open_pick_time(id, window, cx);
                 }
             }
             Command::WakeWhen => {
-                if let Some(id) = self.selected.clone() {
+                if let Some(id) = self.command_thread(window, cx) {
                     self.open_wake_when(id, window, cx);
                 }
             }
-            Command::Stop => self.stop_open(cx),
+            Command::Stop => match self.focused_panel_pane(window, cx) {
+                Some(pane) => pane.update(cx, |p, cx| p.stop(cx)),
+                None => self.stop_open(cx),
+            },
             Command::CopyTranscript => {
-                if let Some(pane) = &self.pane {
+                if let Some(pane) = self.focused_panel_pane(window, cx).or(self.pane.clone()) {
                     pane.update(cx, |p, cx| p.copy_transcript(cx));
                 }
             }
@@ -1076,7 +1086,7 @@ impl Threadbear {
             Command::HibernateTomorrow => self.hibernate_open("tomorrow", window, cx),
             Command::HibernateMonday => self.hibernate_open("monday", window, cx),
             Command::HibernateRestart => {
-                if let Some(id) = self.selected.clone() {
+                if let Some(id) = self.command_thread(window, cx) {
                     self.snooze_until_restart(id, window, cx);
                 }
             }
@@ -1098,16 +1108,8 @@ impl Threadbear {
         self.sync_menus(cx);
     }
 
-    /// ⌘E: archives the open thread, or brings it back if it's archived
-    /// (`toggleArchive`).
-    pub(crate) fn toggle_archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.selected.clone() else {
-            return;
-        };
-        self.toggle_archive_of(id, window, cx);
-    }
-
-    /// Archives the thread, or takes it out of Archived if it's there.
+    /// ⌘E (`toggleArchive`) and the done card's Archive: archives the
+    /// thread, or takes it out of Archived if it's there.
     pub(crate) fn toggle_archive_of(
         &mut self,
         id: String,
@@ -1128,7 +1130,7 @@ impl Threadbear {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.selected.clone() else {
+        let Some(id) = self.command_thread(window, cx) else {
             return;
         };
         let until =
