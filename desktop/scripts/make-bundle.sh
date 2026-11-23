@@ -125,8 +125,9 @@ chmod +x "$bundle/Contents/Resources/stage-update.sh"
 # the app keeps the same identity from one build to the next and macOS's
 # privacy permissions stick. Ad hoc otherwise, with the designated
 # requirement pinned to the bundle id, as an ad hoc one is the binary's hash
-# and changes on every build.
-identity="${THREADBEAR_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $2; exit }' || true)}"
+# and changes on every build. A revoked certificate is still listed, marked
+# CSSMERR_TP_CERT_REVOKED, and codesign fails with it, so it's passed over.
+identity="${THREADBEAR_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ && !/CSSMERR_/ { print $2; exit }' || true)}"
 requirements=()
 if [ -z "$identity" ]; then
   identity="-"
