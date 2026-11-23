@@ -7,7 +7,8 @@ import { defaultHome, expandHome, peekRunnerJson } from './config.ts';
 // builds) run at a lower priority than what you're doing, so a land's check
 // doesn't take the Mac over: one once held Mike's M5 above load 24 for ten
 // minutes (6 Nov). The agent-side hook only lowers commands an agent runs
-// itself, not what the runner or `tb land` spawns.
+// itself, not what the runner or `tb land` spawns; agents with no such hook
+// start at a priority from it too (asAgent, below).
 //
 // How much lower is runner.json's `jobPriority` (or THREADBEAR_JOB_PRIORITY):
 //   background  macOS's background priority, `taskpolicy -b`: efficiency
@@ -55,4 +56,32 @@ export function inBackground(
   if (priority === 'background' && platform === 'darwin' && exists(TASKPOLICY)) return [TASKPOLICY, ['-b', bin, ...args]];
   // nice is /usr/bin/nice on macOS and every Linux; found on the PATH if not.
   return [exists('/usr/bin/nice') ? '/usr/bin/nice' : 'nice', ['-n', '10', bin, ...args]];
+}
+
+// The agents Threadbear starts besides Claude: their process, and so every
+// build and test they run, starts at a priority from jobPriority. On 23 Nov
+// an Antigravity review ran `swift test` on Mike's M5 with about 18
+// swift-frontends at normal priority. Claude needs none of this: Mike's
+// heavy-compute hook puts just the builds and tests it runs at background.
+//
+// One priority covers everything the agent starts, the browsers and dev
+// servers too, and those break under background: a headless browser drops
+// from 120 frames a second to 5, and a dev server misses Convex's one-second
+// limits and fails like an app bug.
+//   acp    the job priority as it is. Antigravity, Grok, OpenCode and the
+//          rest have no hook at all, and their threads are mostly reviews
+//          and second opinions, which run tests far more than dev servers.
+//   codex  low at most. Codex threads are everyday work with dev servers and
+//          browsers, and Codex reads the same hook (Mike's ~/.codex has it),
+//          which puts its builds at background itself.
+export type AgentKind = 'acp' | 'codex';
+
+export function asAgent(
+  kind: AgentKind,
+  bin: string,
+  args: string[],
+  opts: { platform?: NodeJS.Platform; exists?: (p: string) => boolean; priority?: JobPriority } = {},
+): [string, string[]] {
+  const priority = opts.priority ?? jobPriority();
+  return inBackground(bin, args, { ...opts, priority: kind === 'codex' && priority === 'background' ? 'low' : priority });
 }

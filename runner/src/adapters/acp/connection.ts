@@ -2,6 +2,7 @@
 // newline-delimited JSON-RPC 2.0 over its stdio, in its own process group.
 import type { ChildProcess } from 'node:child_process';
 import { LineReader, MAX_LINE_BYTES, type OversizedLine } from '../codex/appserver.ts';
+import { asAgent } from '../../background.ts';
 import { RUNNER_VERSION } from '../../config.ts';
 import type { Logger } from '../../log.ts';
 import { groupAlive, groupSpawner, killGroup, type ProcessRegistry } from '../../proc.ts';
@@ -105,7 +106,9 @@ export class AcpProcess {
     const { opts } = this;
     this.abort = new AbortController();
     const spawn = groupSpawner(opts.registry, opts.log, (line) => this.stderr(line), opts.label);
-    const child = spawn({ command: opts.binary, args: opts.args, cwd: opts.cwd, env: opts.env, signal: this.abort.signal } as never) as unknown as ChildProcess;
+    // At the job priority, so the builds and tests it runs are too (asAgent).
+    const [command, args] = asAgent('acp', opts.binary, opts.args);
+    const child = spawn({ command, args, cwd: opts.cwd, env: opts.env, signal: this.abort.signal } as never) as unknown as ChildProcess;
     this.child = child;
     this.pid = child.pid;
     this.exited = false;

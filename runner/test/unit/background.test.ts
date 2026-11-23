@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { makeHarness, tmpDir } from '../helpers/fakes.ts';
-import { inBackground, jobPriority, TASKPOLICY } from '../../src/background.ts';
+import { asAgent, inBackground, jobPriority, TASKPOLICY } from '../../src/background.ts';
+import { AcpProcess } from '../../src/adapters/acp/connection.ts';
+import { AppServerProcess } from '../../src/adapters/codex/appserver.ts';
+import { ProcessRegistry } from '../../src/proc.ts';
+import { nullLogger } from '../../src/log.ts';
 import { runCommand } from '../../src/patches.ts';
 import { land } from '../../src/worktrees.ts';
 
@@ -26,6 +30,23 @@ test('inBackground: taskpolicy -b for background on a Mac that has it, nice for 
   assert.deepEqual(run('low', 'linux', () => false), ['nice', ['-n', '10', '/bin/sh', '-c', 'x']]);
   assert.deepEqual(run('normal', 'darwin', () => true), ['/bin/sh', ['-c', 'x']]);
   assert.deepEqual(run('low', 'win32', () => true), ['/bin/sh', ['-c', 'x']]);
+});
+
+// The agents besides Claude start at a priority too, so what they run
+// inherits it: an Antigravity review's `swift test` ran at normal priority on
+// Mike's M5 (23 Nov). Codex stops at nice, for the browsers and dev servers.
+test('asAgent: ACP agents at the job priority, Codex at it but never below low', () => {
+  const run = (kind: 'acp' | 'codex', priority: 'background' | 'low' | 'normal', platform: NodeJS.Platform = 'darwin') =>
+    asAgent(kind, '/bin/agent', ['--acp'], { platform, exists: () => true, priority });
+  const nice = ['/usr/bin/nice', ['-n', '10', '/bin/agent', '--acp']];
+  assert.deepEqual(run('acp', 'background'), [TASKPOLICY, ['-b', '/bin/agent', '--acp']]);
+  assert.deepEqual(run('acp', 'low'), nice);
+  assert.deepEqual(run('acp', 'normal'), ['/bin/agent', ['--acp']]);
+  assert.deepEqual(run('acp', 'background', 'linux'), nice);
+  assert.deepEqual(run('codex', 'background'), nice);
+  assert.deepEqual(run('codex', 'low'), nice);
+  assert.deepEqual(run('codex', 'normal'), ['/bin/agent', ['--acp']]);
+  assert.deepEqual(run('codex', 'background', 'win32'), ['/bin/agent', ['--acp']]);
 });
 
 test("jobPriority: THREADBEAR_JOB_PRIORITY, then runner.json's jobPriority, then low", () => {
@@ -128,4 +149,33 @@ test('runner: a turn hook runs at background priority unless the runner is told 
   // when ./check.sh sends it to a check host, 4 under taskpolicy -b).
   const own = execFileSync('/bin/ps', ['-o', 'pri=', '-p', String(process.pid)], { encoding: 'utf8' }).trim();
   assert.equal((await pri(false)) ?? '', own);
+});
+
+// The real spawns: a stand-in agent writes its own priority and exits, so
+// start() fails, which is fine here.
+function agentRig(): { root: string; out: string; registry: ProcessRegistry } {
+  const root = fs.realpathSync(tmpDir('tb-agent-pri-'));
+  return { root, out: path.join(root, 'pri.txt'), registry: new ProcessRegistry(path.join(root, 'run'), nullLogger) };
+}
+
+test('an ACP agent starts at background priority when runner.json says so', { skip: !onMac }, async (t) => {
+  t.after(withPriority('background'));
+  const { root, out, registry } = agentRig();
+  const p = new AcpProcess({ binary: '/bin/sh', args: ['-c', `${PRI} > '${out}'`], env: { PATH: '/usr/bin:/bin' }, cwd: root, registry, log: nullLogger, label: 'pri' });
+  await p.start().catch(() => undefined);
+  assert.equal(fs.readFileSync(out, 'utf8').trim(), '4');
+});
+
+test('Codex starts niced, not at background, when runner.json says background', { skip: process.platform === 'win32' }, async (t) => {
+  t.after(withPriority('background'));
+  const { root, out, registry } = agentRig();
+  const bin = path.join(root, 'codex');
+  fs.writeFileSync(bin, `#!/bin/sh\nps -o pri=,nice= -p $$ > '${out}'\n`, { mode: 0o755 });
+  const p = new AppServerProcess({ binary: bin, account: { id: 'codex-main', provider: 'codex', title: 'Codex', configDir: root }, cwd: root, registry, log: nullLogger, label: 'pri', timings: { spawnRetryForMs: 0 } });
+  await p.start().catch(() => undefined);
+  const [ownPri, ownNice] = execFileSync('/bin/ps', ['-o', 'pri=,nice=', '-p', String(process.pid)], { encoding: 'utf8' }).trim().split(/\s+/).map(Number);
+  const [pri, nice] = fs.readFileSync(out, 'utf8').trim().split(/\s+/).map(Number);
+  assert.equal(nice, Math.min(ownNice + 10, process.platform === 'darwin' ? 20 : 19));
+  // Unless this suite is itself under taskpolicy -b, which everything inherits.
+  if (onMac && ownPri !== 4) assert.notEqual(pri, 4, 'not darwin background');
 });
