@@ -404,10 +404,21 @@ export class ProcessRegistry {
   private settling = new Map<Entry, Promise<unknown>>();
   private lingering = new Set<Entry>();
 
-  // True once the job has ended (or had nothing left in it).
-  private endJob(name: string, pid?: number): Promise<boolean> {
+  // 'ended' once the job has ended, with everything in it. 'missing' when
+  // no job has that name any more: its name went with the last handle to
+  // it, which only the helper held, so a helper that has stopped since (a
+  // question timed out, the runner crashed) leaves its processes running
+  // in a job no one can reach. Those are left to the pid-based clean-up,
+  // which checks each is still the process it was; there's nothing to end
+  // later either (review, 23 Nov 2026: taken as ended, they survived).
+  // false when it couldn't be ended now, to try again at the next start.
+  private endJob(name: string, pid?: number): Promise<'ended' | 'missing' | false> {
     return (this.jobs ?? helperJobs).end(name).then(
-      () => true,
+      (r) => {
+        if (r !== 'missing') return 'ended' as const;
+        this.log.warn("a CLI's job had gone (its helper stopped); what it held is stopped by pid where it can be", { pid });
+        return 'missing' as const;
+      },
       (e) => {
         this.log.warn("could not end a CLI's job; it's tried again at the next start", { pid, error: String(e) });
         return false;
@@ -439,7 +450,7 @@ export class ProcessRegistry {
     for (const e of previous) {
       if (!e || typeof e.pid !== 'number' || e.exited) continue;
       // Its job has ended, and with it the CLI: its pid may be anyone's now.
-      if (IS_WINDOWS && e.job && ended[jobbed.indexOf(e)]) continue;
+      if (e.job && ended[jobbed.indexOf(e)] === 'ended') continue;
       if (sameGroup({ pgid: e.pid, lstart: e.lstart ?? '', started: e.started }, e.lstart || e.started ? undefined : path.basename(e.command ?? ''))) targets.push(e.pid);
       for (const g of e.groups ?? []) if (sameGroup(g)) targets.push(g.pgid);
     }
@@ -479,8 +490,8 @@ export class ProcessRegistry {
     }));
     // A CLI whose job has ended is gone, and its pid may be someone else's
     // by now (Codex's review): only the others get taskkill.
-    const done = new Set(jobbed.filter((_, i) => ended[i]).map((e) => e.pid));
-    const pids = this.pids().filter((p) => !(IS_WINDOWS && done.has(p)));
+    const done = new Set(jobbed.filter((_, i) => ended[i] === 'ended').map((e) => e.pid));
+    const pids = this.pids().filter((p) => !done.has(p));
     const groups = pids.flatMap((pid) => [pid, ...this.toolGroups(pid)]);
     for (const pgid of groups) killGroup(pgid, 'SIGTERM');
     await waitGone(groups, graceMs);
