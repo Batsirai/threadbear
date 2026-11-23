@@ -5,10 +5,11 @@
 # Nothing is signed: the Mac app needs right-click Open the first time, and
 # Windows SmartScreen asks once.
 #
-# tb land holds a landing that changes what this checks while its last run on
-# main failed (runner/src/land-gate.ts, docs/thread-worktrees.md): it was red
-# for two days of GPUI landings (10 to 12 Nov) over what only GitHub's Macs,
-# Linux and Windows see, which tb land's quick check on Tinker Desk can't.
+# When its last run on main failed, tb red-watch starts a thread to fix it
+# and tb land says so (runner/src/red-watch.ts, docs/thread-worktrees.md): it
+# was red for two days of GPUI landings (10 to 12 Nov) over what only
+# GitHub's Macs, Linux and Windows see, which tb land's quick check on Tinker
+# Desk can't.
 #
 # The paths are everything the app builds and tests from, the files outside
 # desktop/ included (the mock runner, the pictures, pele.js and cases in

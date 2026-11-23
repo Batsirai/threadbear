@@ -17,7 +17,8 @@ import { findWorktreePatch, isInside } from './patches.ts';
 import { TRUST_ALL } from './patch-trust.ts';
 import { checkoutTop, land, landTargetFromGit, realpath, type LandTarget } from './worktrees.ts';
 import { landRefusal, pushAfterLanding } from './follow-origin.ts';
-import { gateCacheDir, gh, landHold } from './land-gate.ts';
+import { gateCacheDir, gh } from './land-gate.ts';
+import { sayRedOnLanding, watchRed, type FixThreads } from './red-watch.ts';
 import { detachable, landInBackground, landWorker } from './land-detach.ts';
 import { activityCommand } from './activity.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
@@ -62,6 +63,7 @@ const OPTIONS = {
   remove: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
   'despite-red': { type: 'boolean' },
+  quiet: { type: 'boolean' },
   'allow-format': { type: 'string' },
   // tb-dev.ts
   last: { type: 'string' },
@@ -152,18 +154,21 @@ const HELP = `tb: talk to the Threadbear runner
   tb models try <job> "text" [--labels a,b] [--field name=description]... [--system S] [--cwd DIR]
                                   one call by hand: classify (--labels), extract (--field),
                                   summarize or generate. It spends like any other
-  tb land [--dry-run] [--despite-red] [--allow-format <id>] [--full]
+  tb land [--dry-run] [--allow-format <id>] [--full]
                                   in a thread's own worktree: rebase its branch on main, run
                                   the repo's check, then move main to it (and push it, only in a
                                   repo listed in runner.json's pushAfterLanding);
                                   --dry-run stops before main moves. A GitHub workflow
-                                  marked "# tb land: hold while red" holds the landings it
-                                  would run for while it's red on main; --despite-red
-                                  lands anyway, for the fix; a branch changing a format command
+                                  marked "# tb land: hold while red" that this sets off and is
+                                  red on main gets a line saying so; it lands anyway. A branch changing a format command
                                   in .git-blame-ignore-revs or a config file one runs with lands
                                   only with the --allow-format id it shows for exactly those.
                                   --full runs every step, even those that passed before with
                                   the same files
+  tb red-watch [--quiet]          in a checkout: starts a thread to fix each workflow marked
+                                  "# tb land: hold while red" gone red on main, and tells it
+                                  when it fails again or passes (a schedule's check runs it
+                                  with --quiet, which prints only when it couldn't)
   tb runner add <name> (--ssh <host> | --out <file>) [--id <runnerId>]
                                   on the main Mac: a backend key for another runner that acts
                                   as that runner alone, written over ssh into its
@@ -229,13 +234,16 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   export: ['out'],
   rpc: [],
   land: ['dry-run', 'despite-red', 'allow-format', 'full'],
+  'red-watch': ['quiet'],
   runner: ['ssh', 'out', 'id', 'json', 'finish', 'replace', 'drop', 'snapshot', 'keys-checked', 'lock-out', 'purge'],
 };
 
 // Read but never listed when a command refuses a flag: an agent that sees
 // --force in "It takes ..." learns to cut every thread's work short (tb
 // restart --now --force) or withdraw someone else's deploy.
-const HIDDEN_FLAGS = new Set(['force']);
+// --despite-red did something until 24 Nov, when red stopped holding a
+// landing: taken still, so a habit or an old script doesn't fail.
+const HIDDEN_FLAGS = new Set(['force', 'despite-red']);
 
 // `tb show --help`: the help lines for that command (its usage line and
 // the indented lines under it), or undefined for a command it doesn't know.
@@ -298,7 +306,7 @@ async function main(argv: string[]): Promise<number> {
   if (cmd === 'land') {
     const worker = landWorker();
     if (!worker && detachable()) return landInBackground(argv);
-    return landCommand(cfg, Boolean(values['dry-run']), Boolean(values['despite-red']), worker?.onLocked, typeof values['allow-format'] === 'string' ? values['allow-format'] : undefined, Boolean(values.full));
+    return landCommand(cfg, Boolean(values['dry-run']), worker?.onLocked, typeof values['allow-format'] === 'string' ? values['allow-format'] : undefined, Boolean(values.full));
   }
   // tb runner uses this Mac's keys straight from disk, so the runner never
   // sees them to refuse them (tb-connect.ts).
@@ -358,7 +366,7 @@ type Flags = Record<string, string | boolean | string[] | undefined>;
 // worktrees of their own with its THREADBEAR_THREAD_ID, and went for the
 // parent's (GPUI port thread, 11 Nov). The check is the one in that
 // worktree's own patch, so a branch that changes it lands under its own.
-async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, despiteRed = false, onLocked?: () => boolean, allowFormat?: string, full = false): Promise<number> {
+async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, onLocked?: () => boolean, allowFormat?: string, full = false): Promise<number> {
   const here = process.cwd();
   let target: Omit<LandTarget, 'check'> | undefined;
   let from = here;
@@ -398,18 +406,24 @@ async function landCommand(cfg: ReturnType<typeof loadConfig>, dryRun: boolean, 
     console.error(refused);
     return 1;
   }
+  // Each red workflow is said once, though the landing asks twice.
+  const saidRed = new Set<string>();
   return land(target, {
     dryRun,
     checkFrom: path.relative(realpath(target.path), realpath(from)),
     // Read after the landing lock and rebase: main may have changed the
     // check while we waited. Running tb land asks for this patch's check.
     readCheck: async () => (await findWorktreePatch(from, undefined, undefined, undefined, TRUST_ALL, true))?.check,
-    // A workflow red on main holds what it would run for (land-gate.ts).
-    despiteRed,
     ...(allowFormat ? { allowFormat } : {}),
     // The whole check, no step skipped for having passed before.
     full,
-    hold: (root, files) => { const dir = gateCacheDir(root); return landHold(root, files, (line) => console.log(line), gh, dir ? { dir } : undefined); },
+    // A workflow red on main that this sets off gets a line, and holds
+    // nothing (red-watch.ts).
+    hold: async (root, files) => {
+      const dir = gateCacheDir(root);
+      await sayRedOnLanding(root, files, (line) => console.log(line), gh, dir ? { dir } : undefined, saidRed);
+      return undefined;
+    },
     // Main goes to GitHub once it has landed, on the owner's Mac only.
     push: !dryRun && pushAfterLanding(cfg.home, target.mainCheckout),
     // Stopped while it waits, it says it's out of the line, then exits.
@@ -448,6 +462,27 @@ async function threadFromRunner(cfg: ReturnType<typeof loadConfig>, threadId: st
   }
 }
 
+// The threads tb red-watch starts and tells (red-watch.ts), as `tb new
+// --from GitHub` would start one and `tb send` tell it.
+function fixThreads(client: RunnerClient): FixThreads {
+  let all: Promise<ThreadSummary[]> | undefined;
+  return {
+    state: async (id) => {
+      all ??= client.call<{ threads: ThreadSummary[] }>('threads.list', { include: ['inbox', 'snoozed', 'archived'] }).then((r) => r.threads);
+      const t = (await all).find((x) => x.id === id);
+      return !t ? 'gone' : t.archivedAt ? 'archived' : 'open';
+    },
+    start: async ({ text, why, cwd }) => {
+      const startedBy = startedByFlags({ from: 'GitHub', why, icon: 'wrench.and.screwdriver' }, process.env.THREADBEAR_THREAD_ID);
+      // Not under the thread that ran tb red-watch, if one did.
+      const r = await client.call<{ thread: ThreadSummary }>('threads.create', { text, cwd, images: [], detached: true, ...(startedBy ? { startedBy } : {}) });
+      return r.thread.id;
+    },
+    send: async (threadId, text) => {
+      await client.call('threads.send', { threadId, text, images: [] });
+    },
+  };
+}
 
 async function run(client: RunnerClient, cmd: string, args: string[], f: Flags): Promise<number> {
   const images = async (): Promise<ImageRef[]> => {
@@ -555,6 +590,13 @@ async function run(client: RunnerClient, cmd: string, args: string[], f: Flags):
       const until = word === 'restart' || word === 'release' ? word : parseWhen(args[1] ?? '1h');
       const r = await client.call<{ thread: ThreadSummary }>('threads.update', { threadId: id, snoozedUntil: until });
       console.log(`snoozed until ${r.thread.snoozedUntilRelease ? 'a new release' : r.thread.snoozedUntilRestart ? 'the runner restarts' : r.thread.snoozedUntil}`);
+      return 0;
+    }
+    case 'red-watch': {
+      const root = await checkoutTop(process.cwd());
+      if (!root) throw new Error('tb red-watch runs in a checkout of the repo whose workflows it watches.');
+      const did = await watchRed(root, { gh, threads: fixThreads(client) });
+      if (!f.quiet) for (const line of did) console.log(line);
       return 0;
     }
     case 'archive':

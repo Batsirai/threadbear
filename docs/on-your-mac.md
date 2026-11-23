@@ -315,7 +315,12 @@ File references are where to look.
   In a repo with a GitHub workflow marked `# tb land: hold while red`
   (this one's `desktop.yml`), it runs your `gh` to ask GitHub how that
   workflow's last runs on main went, when the landing changes files it
-  checks (`runner/src/land-gate.ts`). Nothing of the branch is sent.
+  checks, to say in a line if it's red (`runner/src/land-gate.ts`), and
+  for a cancelled run, its jobs and their annotations, to tell a timeout
+  from a newer push. Nothing of the branch is sent. `tb red-watch` (run
+  only by a schedule you set up) asks the same about every marked
+  workflow and starts or messages a thread in that repo when one is red;
+  what it knows is in `threadbear-land-gate/red-watch/` there.
   A landing waiting for the lock leaves a small JSON file in
   `threadbear-land-queue/` there (branch, worktree, commits, process id),
   removed when it's done, and the lock's holder keeps

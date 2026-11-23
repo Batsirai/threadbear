@@ -136,9 +136,9 @@ stays. Separate repos do not block one another.
    it; such a branch never rides in another's group check).
    Then it refuses a commit whose `Important:` line git doesn't read as a
    trailer (not in the last paragraph with `Co-Authored-By`), as a release
-   would not flag it and forks wouldn't hear. And it holds a landing while
-   a GitHub workflow it would set off is red on main (below, "Red on
-   GitHub").
+   would not flag it and forks wouldn't hear. And it says in a line when
+   a GitHub workflow it would set off is red on main, and lands anyway
+   (below, "Red on GitHub").
 3. Reads the patch's `check` after rebasing, and runs it in the worktree,
    if there is one, together with everyone waiting (below). A landing that
    changes no file from main (a commit with only a trailer) skips the check
@@ -214,61 +214,85 @@ on every push of main for two days (10 to 12 Nov) while GPUI landings went
 on top of it, over a Windows link error, GitHub's Macs' bash 3.2 and Linux's
 words for Finder and ⌘Q. Running the behaviour specs in the quick check
 wouldn't have caught any of that (they pass on Tinker Desk), and all of them
-take 15 to 30 minutes a system, so instead the workflow's own result holds
-the next landing.
+take 15 to 30 minutes a system, so GitHub's own result is watched instead.
 
 The runner, Convex and website tests (`runner.yml`), Android (`android.yml`)
-and the Xcode 26 builds (`xcode-26.yml`) hold too since 19 Nov: `runner.yml`
-was red on Windows from 16 to 19 Nov, and as the daily release waits for
-every workflow to pass on one commit, none went out. And the TypeScript
-lint (`lint.yml`) since 22 Nov, after a merged PR left main failing
-check.sh's lint and ten landings waited behind it. And the repo guards
-(`guards.yml`) since 23 Nov: the runner's tests of files outside its own
-paths (the workflows' pins, desktop.yml's paths, the frozen Swift app's
-folders, shared/'s copies), on every push, so they hold every landing.
-
-A workflow opts in with a line of its own in its file:
+and the Xcode 26 builds (`xcode-26.yml`) are watched too since 19 Nov:
+`runner.yml` was red on Windows from 16 to 19 Nov, and as the daily release
+waits for every workflow to pass on one commit, none went out. And the
+TypeScript lint (`lint.yml`) since 22 Nov, and the repo guards
+(`guards.yml`) since 23 Nov. A workflow opts in with a line of its own in
+its file (the words are from when it held landings):
 
 ```yaml
 # tb land: hold while red
 ```
 
-After rebasing, `tb land` lists what the branch changes (`git diff
---name-only main...<branch>`), and for each marked workflow whose `on: push:
-paths:` match any of it (any file at all, with no paths) asks GitHub, with
-`gh run list --workflow <file> --branch main --event push`, how its last
-finished run on main went, past runs cancelled for a newer push. If that
-failed, nothing lands, before the check runs: it names the run, which jobs
-and steps failed, any newer run still going, and the files of the branch the
-workflow checks (`runner/src/land-gate.ts`). It asks again once the check
-has passed, just before main moves, as a run going when it started may have
-failed since. A trigger it can't read (an alias, a list over several lines)
-counts as every file, and a whole page of cancelled runs as "couldn't ask".
-A held workflow mustn't cancel its runs on main for newer pushes, or a busy
-day never finishes one and the gate holds on an old red run for hours (12
-Nov): `desktop.yml` cancels in progress only for pull requests, so main's
-runs go one at a time, with the newest push waiting in place of any before it.
+Until 24 Nov a red one held every landing that changed what it checks.
+That held 31% of threads in the days before, 40% of those just went round
+it with `--despite-red`, and `desktop.yml`'s runs take 40 to 80 minutes and
+failed about a third of the time, so it was mostly a detour. Now red holds
+nothing. Instead:
 
-Fix what failed first (`gh run view <id> --log-failed`; for a job that
+- **One thread fixes it.** `tb red-watch`, run every 10 minutes by a
+  schedule's check on Mike's Mac (`tb red-watch --quiet`, which prints
+  nothing unless it couldn't do its job, so the schedule never starts an
+  agent), asks GitHub how each marked workflow's last finished run on main
+  went (`runner/src/red-watch.ts`). The first time one is red it starts a
+  thread in the repo's checkout, "Started by GitHub" like the Sentry
+  watch's, with the run, the jobs and steps that failed, and to fix it and
+  land. That thread is the one for the red stretch: a newer failed run is
+  sent to it, never a second thread, and so is the news when the workflow
+  passes again. A later red stretch starts a new thread, unless the last
+  one is still open (not archived), which is told instead; one that was
+  deleted is left alone for the rest of its stretch. What it knows is in
+  `threadbear-land-gate/red-watch/<workflow>.json`.
+- **A landing says so in one line.** After rebasing, `tb land` lists what
+  the branch changes, and for each marked workflow whose `on: push: paths:`
+  match any of it says, when its last run on main is red, `<name>
+  (<file>) is red on main (<run>, failed: <jobs>); this lands anyway, and
+  fix thread <id> is on it` (or that none is yet). Then it lands as usual.
+  `--despite-red` is still taken, and does nothing.
+
+A run cancelled for a newer push, or by hand, says nothing about main and
+is passed over. One cancelled because a job ran into its own
+`timeout-minutes` is red: GitHub calls both `cancelled`, and only the job's
+annotation ("exceeded the maximum execution time") tells them apart. From
+22 Nov `runner.yml`'s Mac jobs hit their 30 minutes on every push of main
+and nothing noticed. So a cancelled run that lasted at least the
+workflow's shortest `timeout-minutes` has its cancelled jobs' annotations
+read, a few runs a look, and what was found is kept by run in
+`threadbear-land-gate/cancelled-runs.json`. A whole page of cancelled runs,
+or a trigger it can't read (an alias, a list over several lines, which
+counts as every file), is as before.
+A watched workflow mustn't cancel its runs on main for newer pushes, or a
+busy day never finishes one: `desktop.yml` cancels in progress only for
+pull requests, so main's runs go one at a time, with the newest push
+waiting in place of any before it.
+
+The fix thread starts from `gh run view <id> --log-failed`; for a job that
 timed out, `--log`, whose end shows how far it got: in `runner.yml` the
 unit tests print a line a minute with the test files still running, and the
-slowest ones at the end, `runner/test/helpers/progress-reporter.mjs`). The landing that is
-that fix, or one made while main already has a fix GitHub hasn't run yet
-(main is only pushed now and then), goes in with `tb land --despite-red`.
+slowest ones at the end, `runner/test/helpers/progress-reporter.mjs`.
 GitHub's answer is kept in the repo's git folder
-(`threadbear-land-gate/`), shared by every worktree: one from the last
-minute is used without asking again, as a dozen threads landing at once ran
-out GitHub's shared API allowance (13 Nov). When `gh` isn't installed,
-isn't signed in or can't reach GitHub (a 403 for that allowance too), an
-answer from the last half hour still counts, saying how old it is; with
-none, the landing goes ahead and says it couldn't ask.
+(`threadbear-land-gate/`), shared by every worktree and `tb red-watch`:
+one from the last minute is used without asking again, as a dozen threads
+landing at once ran out GitHub's shared API allowance (13 Nov). When `gh`
+isn't installed, isn't signed in or can't reach GitHub (a 403 for that
+allowance too), an answer from the last half hour still counts; with none,
+there's nothing to say and nothing is started.
 
-In someone else's copy the gate stays out of the way. Since 19 Nov every
+The schedule is Mike's own (Scheduled view, "Red on GitHub"): to watch a
+copy of your own, make one that runs every 10 minutes in the repo's folder
+with `tb red-watch --quiet` as its check, sending to a thread of its own,
+so only a broken check ever reaches it.
+
+In someone else's copy it stays out of the way. Since 19 Nov every
 workflow's jobs only run in `mikecann/threadbear` (or when started by hand),
 as a fork's owner only builds and checks for their own system and their
 pushes were running every job on Linux, Mac, Windows and Android, mostly
 red. A marked workflow whose `if:` names one repo (`github.repository ==
-'owner/name'`) holds only where origin is that repo; in a fork, gh reads the
+'owner/name'`) counts only where origin is that repo; in a fork, gh reads the
 `upstream` remote's runs first, so before this Mike's red Windows build held
 landings that only had to work on a Mac.
 
@@ -308,9 +332,9 @@ their own.
 - An entry is left out, to see to itself later, if it asks for a
   different check (or reads it from another folder), its worktree has
   moved on since it asked, it doesn't go onto the stack cleanly, its tb
-  has gone before any check of it started, or the group's files would be held by a workflow red on
-  GitHub ("Red on GitHub"; the holder asks for the whole stack, and again
-  once the check has passed). A dry run and a branch with a merge on it
+  has gone before any check of it started, or (until 24 Nov, when red
+  stopped holding landings: "Red on GitHub") the group's files would be
+  held by a workflow red on GitHub. A dry run and a branch with a merge on it
   are never put in anyone's check.
 - One whose tb goes during the check (killed: a session restart does
   that) still lands, as long as its branch still has what it asked to
@@ -364,8 +388,10 @@ their own.
   way it's out: nobody would hear how it went, and it may have been
   stopped on purpose. Not once a check of it has started: then it stays
   in the line, as above, and says so.
-- A landing made with `tb land --despite-red` is the repair for what's
-  red, so it's a fix in the queue: it goes first on the stack in every
+- Until 24 Nov, when red stopped holding landings (see "Red on GitHub"),
+  a landing made with `tb land --despite-red` was the repair for what's
+  red, so it was a fix in the queue. The flag does nothing now, so no
+  landing is one, but the queue still knows them: it goes first on the stack in every
   group check, outside the group's limit, and the red hold isn't asked
   about its files (the others' still are). So a repair queued behind
   groups failing on main's own error goes into the next check with them,

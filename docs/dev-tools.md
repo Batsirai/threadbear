@@ -217,6 +217,10 @@ the data dir (`<home>`, normally `~/Library/Application Support/Threadbear`):
   `.fixtures/threads/<id>` at the repo's top (private and gitignored), so a rendering bug
   in one of Mike's threads can be reproduced against the mock runner.
 - `tb rpc <method> [json]`: a raw call, printing the result.
+- `tb red-watch [--quiet]`: in a checkout, starts one thread to fix each
+  workflow marked `# tb land: hold while red` that's red on main, and
+  tells it when it fails again or passes (docs/thread-worktrees.md, "Red
+  on GitHub"). A schedule's check runs it every 10 minutes on Mike's Mac.
 - `tb activity` (and `--summary`): what Mike has clicked, opened, chosen and
   sent in the app lately, or what he uses most, while he has the activity log
   on (Settings > General; off by default, so other people's copies never
