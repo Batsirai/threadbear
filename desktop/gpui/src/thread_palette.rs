@@ -118,10 +118,10 @@ impl Composer {
         let zoom = style::zoom_scale();
         let window_height = f64::from(window.viewport_size().height / zoom);
         let height = mentions::height(found.len(), window_height);
-        // No taller than the room over the box (the new-thread page).
+        // No taller than the room over the box (the new-thread page): the
+        // text sits lower, so that's never more than it has.
         let room = f64::from(self.box_top.get() / zoom) - 16.;
         let height = height.min(room.max(0.));
-        let width = self.card_width.get() / zoom;
         let mut rows = v_flex().w_full();
         for thread in &found {
             let on = picked.as_deref() == Some(thread.id.as_str());
@@ -147,25 +147,22 @@ impl Composer {
                     .track_scroll(&self.thread_scroll)
                     .child(rows),
             );
+        // On the text's top edge, out to the box's sides, and as far over
+        // the text as it was over the box, so with nothing over the text it
+        // sits where it did, 8 over the box, and with a card or chips there
+        // it covers them, next to the # (Mike, 24 Nov).
+        let inset = style::COMPOSER_PADDING;
         Some(
             deferred(
                 div()
                     .absolute()
-                    .left_0()
-                    .right_0()
+                    .left(px(-inset))
+                    .right(px(-inset))
                     .bottom_full()
-                    .mb(px(8.))
+                    .mb(px(inset + 8.))
                     .h(px(height as f32))
-                    .child(
-                        div()
-                            .absolute()
-                            .top_0()
-                            .bottom_0()
-                            .left_0()
-                            .w(px(width))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(panel),
-                    ),
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(panel),
             )
             .with_priority(2)
             .into_any_element(),
