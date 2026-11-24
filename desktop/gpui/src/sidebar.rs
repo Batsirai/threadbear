@@ -1226,6 +1226,17 @@ impl Threadbear {
         cx.notify();
     }
 
+    /// A row button's tip, as drawn and as `dump` lists it. A greyed-out
+    /// Delete on another runner's thread names the Mac to delete it on.
+    pub(crate) fn row_action_tip(&self, action: RowAction, t: &ThreadSummary) -> String {
+        match t.runner_id.as_deref() {
+            Some(runner) if !action.enabled(t) => {
+                format!("Delete it on {}", self.runner_name_of(runner))
+            }
+            _ => action.tip(t).to_owned(),
+        }
+    }
+
     /// Delete from the sidebar, only for an archived chat, after asking
     /// (`AppModel.deleteThread`). Its trash button shows a spinner until the
     /// runner answers, so it can't be pressed twice.
@@ -1237,7 +1248,7 @@ impl Threadbear {
         let Some(thread) = self.threads.get(&id) else {
             return;
         };
-        if !thread.is_archived() {
+        if !thread.is_archived() || !RowAction::Delete.enabled(thread) {
             return;
         }
         let title = format!("Delete \u{201C}{}\u{201D}?", thread.title);
@@ -1493,7 +1504,19 @@ impl Threadbear {
                 "tray.and.arrow.up",
                 MenuAction::Unarchive,
             ));
-            rows.push(MenuRow::item("Delete…", "trash", MenuAction::Delete));
+            // Another runner's thread can't be deleted through Convex
+            // (runner/src/parity.ts): greyed out, naming where it can be.
+            match t.runner_id.as_deref() {
+                Some(runner) => rows.push(
+                    MenuRow::item(
+                        format!("Delete on {}", self.runner_name_of(runner)),
+                        "trash",
+                        MenuAction::Delete,
+                    )
+                    .disabled(),
+                ),
+                None => rows.push(MenuRow::item("Delete…", "trash", MenuAction::Delete)),
+            }
         } else {
             rows.push(MenuRow::item("Archive", "archivebox", MenuAction::Archive));
         }
@@ -3351,7 +3374,23 @@ impl Threadbear {
                 }
                 RowAction::Delete => {
                     let busy_key = format!("delete:{id}");
-                    if self.sidebar.busy.contains(&busy_key) {
+                    if !action.enabled(t) {
+                        // Greyed out, no click: the tip says where it can be deleted.
+                        tipped!(
+                            div()
+                                .flex_none()
+                                .size(px(22.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .opacity(0.35),
+                            key,
+                            self.row_action_tip(*action, t)
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(icon(symbol, 13., p.secondary))
+                        .into_any_element()
+                    } else if self.sidebar.busy.contains(&busy_key) {
                         // On the way: a spinner, and no more clicks.
                         div()
                             .flex_none()
@@ -3518,7 +3557,7 @@ impl Threadbear {
                 "mark": mark,
                 "trailing": tail.text,
                 "tile": tile,
-                "hoverButtons": hovered.then(|| mode.actions().iter().map(|a| a.tip(t)).collect::<Vec<_>>()),
+                "hoverButtons": hovered.then(|| mode.actions().iter().map(|a| self.row_action_tip(*a, t)).collect::<Vec<_>>()),
                 "runner": t.runner_id.as_deref().map(|id| self.runner_place_of(id)),
                 // Laid out within the part of the list that's showing (null
                 // for a row that isn't drawn, as in a folded section).

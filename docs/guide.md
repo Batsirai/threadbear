@@ -848,7 +848,9 @@ them, most recently archived first, with the older ones behind Show more
 there, puts one back.
 To get rid of one for good, hover it there and click the trash, or
 right-click it and choose Delete…; after you confirm, it goes to the
-runner's trash folder, with no Undo in the app.
+runner's trash folder, with no Undo in the app. Another Mac's thread can
+only be deleted on that Mac, so there the trash is greyed out and its tip
+names the Mac.
 
 A thread another thread's agent started archives itself when it finishes
 with nothing left for you: nothing asked, no follow-ups suggested, nothing
