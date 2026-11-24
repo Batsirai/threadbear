@@ -239,6 +239,10 @@ says whose is whose. An instance quits after an hour with no command.
   Swift app's README ("Seeing and driving it from a script").
 - A scripted app is never in front, so opening a thread doesn't mark it read
   until you send `{"cmd":"focus"}`.
+- A click that asks first says so: `click` and `click-at` reply "ok, and it
+  brought up a dialog with Cancel, Archive" (its buttons). A busy row's
+  Archive or moon (running, or waiting on you, as several demo threads are)
+  asks before stopping the turn, while the `archive` command doesn't ask.
 - A bug in one of Mike's real threads: `tb export <id>`, then
   `dev-app.sh start --mock --fixtures .fixtures/threads/<id>` and `open`
   it. Exports are his private conversations: keep shots of them out of git

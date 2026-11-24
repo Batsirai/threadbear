@@ -1352,10 +1352,11 @@ fn step(
                 return Err(format!("no button called {title:?}"));
             };
             let at = target.visible_bounds().center();
+            let before = dialogs_up(window);
             window.pointer_move(at, None, cx);
             window.pointer_down(at, MouseButton::Left, cx);
             window.pointer_up(at, MouseButton::Left, cx);
-            Ok(json!("click ok"))
+            Ok(json!(clicked("click ok", &before, window, cx)))
         }
         // A click at a point in the window, in points from its top left,
         // through its hit testing as a real one goes, without moving the
@@ -1381,8 +1382,9 @@ fn step(
                 MouseButton::Left
             };
             let count = cmd["count"].as_u64().unwrap_or(1).clamp(1, 3) as usize;
+            let before = dialogs_up(window);
             click_at(window, at, button, count, cx);
-            Ok(json!("click-at ok"))
+            Ok(json!(clicked("click-at ok", &before, window, cx)))
         }
         "expand" | "collapse" => {
             let open = text(cmd, "cmd") == "expand";
@@ -2061,6 +2063,59 @@ fn type_in_composer(
     Ok(())
 }
 
+/// Each dialog drawn in the window (an alert, a sheet, a popover), by the
+/// labels of what's in it, its buttons in order. Not its title: a dialog's
+/// text is plain GPUI text, which gpui-kit's observation doesn't record.
+fn dialogs_up(window: &Window) -> Vec<String> {
+    let elements = window.elements();
+    elements
+        .iter()
+        .filter(|e| e.visible() && matches!(e.role(), Some(Role::AlertDialog | Role::Dialog)))
+        .map(|dialog| {
+            let inside = dialog.path();
+            let mut parts: Vec<&str> = dialog.label().into_iter().collect();
+            parts.extend(
+                elements
+                    .iter()
+                    .filter(|e| {
+                        e.visible() && e.path().len() > inside.len() && e.path().starts_with(inside)
+                    })
+                    .filter_map(|e| e.label()),
+            );
+            parts.join(", ")
+        })
+        .collect()
+}
+
+/// A click's reply, naming any dialog it brought up: a click can ask
+/// rather than do (a busy row's Archive confirms first), and a bare "ok"
+/// read as done. 24 Nov: three `click-at`s on waiting rows' Archive buttons
+/// each left "Archive and stop the turn?" up and archived nothing, and the
+/// film script took it for click-at missing the button.
+fn clicked(ok: &str, before: &[String], window: &mut Window, cx: &mut App) -> String {
+    // One frame mounts a dialog's layer, the next paints it.
+    window.render_frame(cx);
+    window.render_frame(cx);
+    let new: Vec<String> = dialogs_up(window)
+        .into_iter()
+        .filter(|d| !before.contains(d))
+        .collect();
+    if new.is_empty() {
+        return ok.to_owned();
+    }
+    let with: Vec<String> = new
+        .iter()
+        .map(|d| {
+            if d.is_empty() {
+                "a dialog".to_owned()
+            } else {
+                format!("a dialog with {d}")
+            }
+        })
+        .collect();
+    format!("{ok}, and it brought up {}", with.join("; "))
+}
+
 /// `click-at`'s presses: the pointer moved there, then each press with its
 /// count, as a real double-click's second carries 2.
 fn click_at(
@@ -2404,5 +2459,98 @@ mod click_at_tests {
             !shows(window, &drawn, cx),
             "a tooltip is up after a click on what's under the pointer now"
         );
+    }
+}
+
+/// A click that brings up a dialog says so, with its buttons: the busy
+/// confirm a waiting row's Archive asks first read as a click that missed
+/// (24 Nov). One that doesn't, or a dialog already up, adds nothing.
+#[cfg(test)]
+mod clicked_tests {
+    use super::{click_at, clicked, dialogs_up};
+    use gpui_kit::component::dialog::DialogButtonProps;
+    use gpui_kit::component::WindowExt as _;
+    use gpui_kit::prelude::*;
+    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::{
+        div, px, size, AnyWindowHandle, Bounds, MouseButton, Point, TestAppContext, Window,
+        WindowBounds, WindowOptions,
+    };
+
+    /// An Archive button that asks first, as a busy row's does, and a spot
+    /// that does nothing.
+    struct Row;
+
+    impl Render for Row {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .child(
+                    div()
+                        .id("archive")
+                        .w(px(40.))
+                        .h(px(20.))
+                        .on_click(|_, window, cx| {
+                            window.open_alert_dialog(cx, |alert, _, _| {
+                                alert
+                                    .title("Archive and stop the turn?")
+                                    .description("This thread is waiting for you.")
+                                    .button_props(
+                                        DialogButtonProps::default()
+                                            .ok_text("Archive")
+                                            .show_cancel(true),
+                                    )
+                            })
+                        }),
+                )
+        }
+    }
+
+    fn press(window: AnyWindowHandle, x: f32, y: f32, cx: &mut TestAppContext) -> String {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let before = dialogs_up(window);
+            click_at(
+                window,
+                gpui_kit::point(px(x), px(y)),
+                MouseButton::Left,
+                1,
+                cx,
+            );
+            clicked("click-at ok", &before, window, cx)
+        })
+        .expect("the test window")
+    }
+
+    #[gpui_kit::test]
+    fn a_click_that_brings_up_a_dialog_says_what_it_asks(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let window = cx.update(|cx| {
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: Point::default(),
+                    size: size(px(600.), px(400.)),
+                })),
+                ..Default::default()
+            };
+            gpui_kit::open_window(options, cx, |_, cx| cx.new(|_| Row))
+                .expect("a test window")
+                .0
+        });
+        assert_eq!(
+            press(window, 300., 300., cx),
+            "click-at ok",
+            "a click on nothing brought up nothing"
+        );
+        let reply = press(window, 20., 10., cx);
+        assert_eq!(
+            reply, "click-at ok, and it brought up a dialog with Cancel, Archive",
+            "the reply didn't name the confirm"
+        );
+        // Under the dialog now: the same dialog still up isn't news.
+        assert_eq!(press(window, 590., 390., cx), "click-at ok");
     }
 }

@@ -4414,7 +4414,10 @@ pub(crate) fn automation(
         "archive" => {
             let id = target(cx)?;
             // `slide`: as its button does it, sliding off first. Otherwise at
-            // once, for the specs that read the list straight after.
+            // once, for the specs that read the list straight after. Either
+            // way without the confirm the button asks first for a busy
+            // (running or waiting) thread; a `click-at` on the button gets
+            // that, and its reply names the dialog.
             if cmd["slide"].as_bool() == Some(true) {
                 app.update(cx, |t, cx| t.archive_row_sliding(id.clone(), window, cx));
             } else {
