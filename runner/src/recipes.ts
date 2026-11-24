@@ -16,6 +16,19 @@
 // setup agent makes the schedule with its ordinary schedule_message, and a
 // schedule that thread made becomes the recipe's at the next look, so agents
 // get no new tool for this.
+//
+// A habit (24 Nov 2026) is the other kind of part: a few lines every thread's
+// agent is given while the recipe is on, beside the standing instructions
+// (Runner.briefFor, instructionsNews). Mike's point: most of what he'd pass
+// on isn't a scheduled job but how he has agents work ("show me a few
+// options", "try it yourself first"), and those lived in his own CLAUDE.md
+// where nobody else could switch them on. Nothing is written to the user's
+// CLAUDE.md or AGENTS.md: off is at once, and Claude and Codex both hear it.
+// Like the standing instructions, a habit steers every thread, so a file
+// alone doesn't count: what's given is the wording as it was when the user
+// switched it on, kept in recipes.json and signed with the runner's token
+// (instructions.ts has why). A changed file waits for them to take it.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync } from './fsutil.ts';
@@ -30,6 +43,12 @@ const HEADERS = ['header.png', 'header.jpg', 'header.jpeg', 'header.webp'];
 const WINDOW_MS = 30 * 86_400_000;
 const MAX_RUNS = 60;
 const LOOK_MS = 30_000;
+// A habit goes to every thread, so it's kept short (runner/context-budget.json
+// is what the rest of the brief may cost).
+export const MAX_HABIT_BYTES = 800;
+const MAX_HABIT_NAME = 60;
+const HABIT_CONTEXT = 'threadbear-recipe-habit-v1\n';
+const HABITS_LEAD = "Habits from the recipes the user has switched on in Threadbear's Recipes view (the only place they change: writing a recipe's file does nothing). Keep them in mind the same way:";
 
 export type RecipeFile = {
   id: string;
@@ -47,6 +66,8 @@ export type RecipeFile = {
   example?: string;
   setup?: string;
   eachRun?: string;
+  // What every thread's agent is told while it's on.
+  habit?: string;
   file: string;
   dir: string;
   header?: string;
@@ -68,6 +89,12 @@ export type RecipeSummary = {
   header?: string;
   state: RecipeState;
   setupThreadId?: string;
+  // Its habit as the file has it now. `given`: agents are being told it (the
+  // wording the user switched on, which is `givenText` when that's not the
+  // file's). `changed`: the file's wording isn't what they switched on.
+  habit?: { text: string; bytes: number; given: boolean; changed?: true; givenText?: string };
+  // Add turns it on at once: it's only a habit, so there's nothing to set up.
+  instant?: true;
   schedules: { id: string; title: string; paused: boolean; nextRunAt?: string; whenText: string }[];
   stats: { runs: number; neededYou: number; seen: number; lastRunAt?: string; lastHeadline?: string };
 };
@@ -82,6 +109,10 @@ type Kept = {
   setupThreadId?: string;
   schedules: string[];
   addedAt: string;
+  // The habit as it was when the user last switched it on, and the runner's
+  // signature over both and its id. The name is in it because agents are
+  // told the habit under its name.
+  habit?: { name: string; text: string; sig: string };
 };
 
 export type RecipesDeps = {
@@ -92,6 +123,8 @@ export type RecipesDeps = {
   now: () => number;
   // The experiment's switch, read each time.
   on: () => boolean;
+  // An HMAC keyed by the runner's token, as it was at startup (instructions.ts).
+  sign: (text: string) => string;
   publish: () => void;
   experimentOn: (id: string) => boolean;
   setExperiment: (id: string, on: boolean) => void;
@@ -127,6 +160,9 @@ export function parseRecipe(text: string, file: string): Omit<RecipeFile, 'id' |
     return fields[k];
   };
   const opt = (v: string | undefined) => (v ? v : undefined);
+  const habit = opt(sections.habit);
+  if (habit && need('name').length > MAX_HABIT_NAME) throw new Error(`${file}: a recipe with a Habit has a name of at most ${MAX_HABIT_NAME} characters`);
+  if (habit && Buffer.byteLength(habit, 'utf8') > MAX_HABIT_BYTES) throw new Error(`${file}: its Habit is over ${MAX_HABIT_BYTES} bytes, and every thread is given it: make it shorter`);
   return {
     name: need('name'),
     icon: need('icon'),
@@ -140,6 +176,7 @@ export function parseRecipe(text: string, file: string): Omit<RecipeFile, 'id' |
     example: opt(sections.example),
     setup: opt(sections['setting it up']),
     eachRun: opt(sections['each run']),
+    habit,
   };
 }
 
@@ -226,29 +263,69 @@ export class Recipes {
     return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), file: f.file, runs: this.runs(f, s, threads) };
   }
 
-  add(id: string): { threadId: string; thread: ThreadSummary } {
+  /**
+   * What every thread's agent is told for the recipes that are on, '' for
+   * none. Read fresh each time (a few small files, as the standing
+   * instructions are): an experiment switched off or a recipe's file
+   * deleted stops it on the next message, not at the next look (Codex's
+   * review).
+   */
+  habits(): string {
+    if (!this.deps.on()) return '';
+    const parts: string[] = [];
+    // Only recipes whose file is still there and still has a habit.
+    for (const f of this.files().sort((a, b) => a.id.localeCompare(b.id))) {
+      if (!f.habit) continue;
+      if (f.experiment && !this.deps.experimentOn(f.experiment)) continue;
+      const given = this.givenHabit(f.id, this.kept[f.id]);
+      if (given) parts.push(`${given.name}:\n${given.text}`);
+    }
+    return parts.length ? `${HABITS_LEAD}\n\n${parts.join('\n\n')}` : '';
+  }
+
+  // `seen`: the habit's wording the user was shown, which is what they're
+  // switching on. The file is read again here, so without it an agent could
+  // change the file between their look and their click.
+  add(id: string, seen?: SeenHabit): { threadId?: string; thread?: ThreadSummary; recipe?: RecipeSummary } {
     const f = this.file(id);
+    sameHabit(f, seen);
     const current = this.summary(f, []);
     if (current.state !== 'add') throw new RpcError(ErrorCode.badParams, `${f.name} is already added`);
+    if (instant(f)) {
+      this.kept[id] = { on: true, schedules: [], addedAt: new Date(this.deps.now()).toISOString(), ...this.snapshot(f) };
+      this.changed();
+      return { recipe: this.summary(f, this.recentThreads()) };
+    }
     const cwd = path.join(this.deps.folder(), id);
     fs.mkdirSync(cwd, { recursive: true });
     if (f.experiment) this.deps.setExperiment(f.experiment, true);
     const thread = this.deps.start({ text: setupBrief(f, cwd), title: `Set up ${f.name}`, cwd });
-    this.kept[id] = { on: true, setupThreadId: thread.id, schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
+    this.kept[id] = { on: true, setupThreadId: thread.id, schedules: [], addedAt: new Date(this.deps.now()).toISOString(), ...this.snapshot(f) };
     this.changed();
     return { threadId: thread.id, thread };
   }
 
-  async setOn(id: string, on: boolean): Promise<RecipeSummary> {
+  async setOn(id: string, on: boolean, seen?: SeenHabit): Promise<RecipeSummary> {
     const f = this.file(id);
+    if (on) sameHabit(f, seen);
     if (f.experiment) {
       this.deps.setExperiment(f.experiment, on);
-      this.kept[id] = { ...(this.kept[id] ?? { schedules: [], addedAt: new Date(this.deps.now()).toISOString() }), on };
+      const { habit: _was, ...rest } = this.kept[id] ?? { schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
+      this.kept[id] = { ...rest, on, ...(on ? this.snapshot(f) : {}) };
     } else {
+      // One that's only a habit is added by its switch: there's no setup.
+      if (!this.kept[id] && instant(f) && on) this.kept[id] = { on, schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
       const k = this.kept[id];
       if (!k) throw new RpcError(ErrorCode.badParams, `${f.name} isn't added yet`);
       this.adopt(id, k);
       k.on = on;
+      // Switching it on is taking its habit as the file has it now. Off
+      // forgets the signed wording: left there, anything that can write
+      // recipes.json could switch it back on by changing `on` alone (Codex's
+      // review). What's left is putting back a whole older recipes.json,
+      // which the standing instructions' file has too.
+      delete k.habit;
+      if (on) Object.assign(k, this.snapshot(f));
       this.save();
       for (const s of this.deps.schedules.list()) {
         if (k.schedules.includes(s.id) && s.paused === on) await this.deps.schedules.update({ scheduleId: s.id, paused: !on });
@@ -323,6 +400,7 @@ export class Recipes {
     let state: RecipeState;
     if (f.experiment) state = this.deps.experimentOn(f.experiment) ? 'on' : k ? 'off' : 'add';
     else if (!k) state = 'add';
+    else if (instant(f)) state = k.on ? 'on' : 'off';
     else if (!schedules.length) state = 'settingUp';
     else state = k.on ? 'on' : 'off';
     const runs = threads.filter(isRun(f, schedules));
@@ -340,6 +418,8 @@ export class Recipes {
       ...(f.header ? { header: f.header } : {}),
       state,
       ...(k?.setupThreadId ? { setupThreadId: k.setupThreadId } : {}),
+      ...(f.habit ? { habit: this.habitOf(f, k) } : {}),
+      ...(instant(f) ? { instant: true as const } : {}),
       schedules: schedules.map((s) => ({ id: s.id, title: s.title, paused: s.paused, whenText: s.whenText, ...(s.nextRunAt ? { nextRunAt: s.nextRunAt } : {}) })),
       stats: {
         runs: runs.length,
@@ -366,6 +446,34 @@ export class Recipes {
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
+  // The wording a recipe's habit is given in: only what the user switched
+  // on, and only as the runner signed it.
+  private givenHabit(id: string, k: Kept | undefined): { name: string; text: string } | undefined {
+    const h = k?.habit;
+    if (!k?.on || !h || typeof h.name !== 'string' || typeof h.text !== 'string' || typeof h.sig !== 'string') return undefined;
+    const want = Buffer.from(this.deps.sign(habitSigned(id, h.name, h.text)));
+    const got = Buffer.from(h.sig);
+    return got.length === want.length && crypto.timingSafeEqual(got, want) ? { name: h.name, text: h.text } : undefined;
+  }
+
+  private habitOf(f: RecipeFile, k: Kept | undefined): NonNullable<RecipeSummary['habit']> {
+    const text = f.habit ?? '';
+    // An experiment's recipe is given while the experiment is on.
+    const given = f.experiment && !this.deps.experimentOn(f.experiment) ? undefined : this.givenHabit(f.id, k);
+    const changed = !!k?.on && (given?.text !== text || given.name !== f.name);
+    return {
+      text,
+      bytes: Buffer.byteLength(text, 'utf8'),
+      given: given !== undefined,
+      ...(changed ? { changed: true as const } : {}),
+      ...(given && changed ? { givenText: given.text } : {}),
+    };
+  }
+
+  private snapshot(f: RecipeFile): { habit?: NonNullable<Kept['habit']> } {
+    return f.habit ? { habit: { name: f.name, text: f.habit, sig: this.deps.sign(habitSigned(f.id, f.name, f.habit)) } } : {};
+  }
+
   private changed(): void {
     this.save();
     this.seen = JSON.stringify(this.list());
@@ -383,6 +491,24 @@ export class Recipes {
 
   private save(): void {
     atomicWriteFileSync(path.join(this.deps.home, STATE_FILE), JSON.stringify({ version: 1, recipes: this.kept }, null, 2) + '\n');
+  }
+}
+
+// Only a habit: nothing for an agent to set up, so Add is its switch.
+function instant(f: RecipeFile): boolean {
+  return !!f.habit && !f.setup && !f.eachRun && !f.experiment;
+}
+
+function habitSigned(id: string, name: string, text: string): string {
+  return `${HABIT_CONTEXT}${JSON.stringify([id, name, text])}`;
+}
+
+// Switching a habit on is agreeing to its words, so they're the ones shown.
+// Its name too: agents are told the habit under it.
+export type SeenHabit = { name?: string; habit?: string };
+function sameHabit(f: RecipeFile, seen: SeenHabit | undefined): void {
+  if (f.habit && (seen?.habit !== f.habit || seen.name !== f.name)) {
+    throw new RpcError(ErrorCode.badParams, `This recipe's habit isn't the wording you were shown${seen?.habit === undefined ? '' : ': it has just changed'}. Look at it again, then switch it on.`);
   }
 }
 
@@ -430,10 +556,10 @@ export function recipeMethods(r: Recipes): Record<string, (p: Record<string, unk
   return {
     'recipes.list': gate(() => ({ recipes: r.list() })),
     'recipes.get': gate((p) => ({ recipe: r.get(id(p)) })),
-    'recipes.add': gate((p) => r.add(id(p))),
+    'recipes.add': gate((p) => r.add(id(p), { name: optStr(p, 'name'), habit: optStr(p, 'habit') })),
     'recipes.setOn': gate(async (p) => {
       if (typeof p.on !== 'boolean') throw new RpcError(ErrorCode.badParams, 'on must be a boolean');
-      return { recipe: await r.setOn(id(p), p.on) };
+      return { recipe: await r.setOn(id(p), p.on, { name: optStr(p, 'name'), habit: optStr(p, 'habit') }) };
     }),
     'recipes.remove': gate((p) => r.remove(id(p))),
     'recipes.create': gate((p) => r.create({ text: optStr(p, 'text'), fromThreadId: optStr(p, 'fromThreadId'), editId: optStr(p, 'editId') })),

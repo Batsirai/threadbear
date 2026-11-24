@@ -660,6 +660,13 @@ function addRecipesDemo() {
     description: 'Keeps every Mac patched. Starts a thread only when an update is waiting, and installs at a safe moment.' });
   make({ id: 'stay-in-touch', name: 'Stay in touch', icon: '👋', color: '#d86a8c', when: 'Saturdays at 9:00', state: 'add', source: 'yours', by: undefined,
     description: "Once a week, picks a friend who's overdue and drafts a warm message with a photo. You send it." });
+  // Only a habit: Add is its switch, and it starts no threads.
+  const habit = "When the user is exploring something new, don't hand them one answer. Show about three options that really differ, say which you'd pick and why, and polish only the one they choose.";
+  make({ id: 'show-a-few-options', name: 'Show a few options', icon: '🔀', color: '#7a5cc4', when: 'In every thread', state: 'add', instant: true,
+    description: "When you're exploring something new, agents show you three directions that really differ and say which they'd pick.",
+    about: "Ask an agent for a design, a name or an approach and it hands you one answer, polished. With this on, it shows about three rough options that go in different directions, says which it would pick and why, and polishes only the one you choose.",
+    example: 'You: *The settings page feels cluttered.*\n\n**A. Group, don\'t hide.** Four headed groups.\n**B. Search first.** A search box on top.\n**C. Split by who it\'s for.** Two pages.\n\nI\'d pick A.',
+    habit: { text: habit, bytes: Buffer.byteLength(habit), given: false } });
   // A month of runs for the three that are on.
   const brief = recipes.get('daily-brief');
   for (let d = 0; d < 28; d++) {
@@ -704,13 +711,20 @@ async function recipeRequest(client, method, p) {
     case 'recipes.setOn': {
       const r = needRecipe(p.id);
       if (process.env.TB_MOCK_RECIPES_REFUSE) throw rpcError(-32000, 'The runner could not reach your backend to pause its schedule.');
-      if (r.state !== 'add') r.state = r.state === 'settingUp' && p.on ? 'settingUp' : p.on ? 'on' : 'off';
+      if (r.state !== 'add' || r.instant) r.state = r.state === 'settingUp' && p.on ? 'settingUp' : p.on ? 'on' : 'off';
+      if (r.habit) r.habit = { text: r.habit.text, bytes: r.habit.bytes, given: Boolean(p.on) };
       r.schedules = r.schedules.map((s) => ({ ...s, paused: !p.on }));
       broadcast('recipes.updated', {});
       return { recipe: recipeSummary(r) };
     }
     case 'recipes.add': {
       const r = needRecipe(p.id);
+      if (r.instant) {
+        r.state = 'on';
+        r.habit = { ...r.habit, given: true };
+        broadcast('recipes.updated', {});
+        return { recipe: recipeSummary(r) };
+      }
       const made = await dispatch(client, 'threads.create', { text: `Set up the recipe "${r.name}" with me.`, title: `Set up ${r.name}`, cwd: `${os.homedir()}/ThreadbearThreads/recipes/${r.id}` });
       r.state = 'settingUp';
       r.setupThreadId = made.thread.id;
@@ -726,6 +740,7 @@ async function recipeRequest(client, method, p) {
     case 'recipes.remove': {
       const r = needRecipe(p.id);
       r.state = 'add';
+      if (r.habit) r.habit = { text: r.habit.text, bytes: r.habit.bytes, given: false };
       r.schedules = [];
       delete r.setupThreadId;
       broadcast('recipes.updated', {});

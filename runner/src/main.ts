@@ -6,6 +6,7 @@ import './win32-hide.ts';
 import { onYearToken } from './year-token.ts';
 import { YearTokenMaker } from './year-token-maker.ts';
 import { realCopy } from './real-copy.ts';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -498,6 +499,8 @@ async function main(): Promise<void> {
   // message gets (Runner.forAgent). Only phone messages read it, and they
   // only come through that mirror.
   let atMac: boolean | undefined;
+  // Set once Recipes is made, further down.
+  let recipesHabits: (() => string) | undefined;
   const instructions = new InstructionsStore({ home: cfg.home, token, publish: (n) => runner.publish(n) });
   // Not in box mode: its spawn gate (spawn-gate.ts) holds processes on the
   // main thread only, and the look runs git.
@@ -514,7 +517,9 @@ async function main(): Promise<void> {
         }
       : {}),
     threadKey: (id) => makeThreadKey(token, id),
-    standingInstructions: () => instructions.given(),
+    // His own, then the habits of the recipes that are on (recipes.ts): both
+    // are for every thread, and a change to either is news the same way.
+    standingInstructions: () => [instructions.given().trim(), recipesHabits?.() ?? ''].filter(Boolean).join('\n\n'),
     projects,
     atMac: () => atMac,
     config: cfg,
@@ -1201,6 +1206,7 @@ async function main(): Promise<void> {
     folder: () => expandHome(peekRunnerJson(cfg.home).recipes?.folder || DEFAULT_RECIPES_FOLDER),
     now: () => realClock.now(),
     on: () => experimentOn(cfg.home, RECIPES_EXPERIMENT),
+    sign: (text) => crypto.createHmac('sha256', token).update(text).digest('hex'),
     publish: () => runner.publish({ method: 'recipes.updated', params: {} }),
     experimentOn: (id) => experimentOn(cfg.home, id),
     setExperiment: (id, on) => settings.update({ experiments: { [id]: on } }),
@@ -1209,6 +1215,7 @@ async function main(): Promise<void> {
     start: (p) => runner.create({ text: p.text, title: p.title, cwd: p.cwd, worktree: false, startedBy: { kind: 'runner', label: 'Recipes', why: p.title } }).thread,
     log: (msg, extra) => log.warn(msg, extra),
   });
+  recipesHabits = () => recipes.habits();
   if (!box && !copyOfReal) recipes.start();
   const upstream = new Upstream({
     home: cfg.home,

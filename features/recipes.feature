@@ -39,3 +39,13 @@ Feature: Recipes
     When I open the Recipes view
     And I open the recipe "Daily brief"
     Then the recipe page for "daily-brief" has an example and its runs
+
+  @recipes.habit @recipes @swift-pending
+  Scenario: A habit is added by its switch, with no thread to set it up
+    When I open the Recipes view
+    Then the gallery has a card "Show a few options" tagged "+ Add"
+    And the habit of "Show a few options" says "while it's on"
+    When I add the habit "Show a few options"
+    Then the Recipes sidebar lists "Show a few options" as "on"
+    And the habit of "Show a few options" says "is being told this"
+    And nothing in the Recipes view is waiting on the runner

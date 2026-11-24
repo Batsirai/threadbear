@@ -171,9 +171,15 @@ impl Threadbear {
         self.recipes.replace(guess.clone());
         self.recipes.busy.insert(key.clone());
         cx.notify();
+        // On is agreeing to its habit's words: the ones shown here.
+        let mut params = json!({ "id": id, "on": on });
+        if let Some(h) = before.habit.as_ref().filter(|_| on) {
+            params["habit"] = json!(h.text);
+            params["name"] = json!(before.name);
+        }
         let client = self.client.clone();
         cx.spawn(async move |this, cx| {
-            let res = call(client, "recipes.setOn", json!({ "id": id, "on": on })).await;
+            let res = call(client, "recipes.setOn", params).await;
             this.update(cx, |this, cx| {
                 this.recipes.busy.remove(&key);
                 match res {
@@ -187,6 +193,8 @@ impl Threadbear {
                             this.recipes.replace(before);
                         }
                         this.show_error(e.message, cx);
+                        // Its wording may have changed under the click.
+                        this.load_recipes(cx);
                     }
                 }
                 cx.notify();
@@ -253,7 +261,19 @@ impl Threadbear {
     }
 
     fn add_recipe(&mut self, id: String, cx: &mut Context<Self>) {
-        self.start_recipe_thread(format!("add:{id}"), "recipes.add", json!({ "id": id }), cx);
+        // Only a habit: nothing to set up, so adding it is switching it on.
+        if self.recipes.recipe(&id).is_some_and(|r| r.instant) {
+            self.set_recipe_on(id, true, cx);
+            return;
+        }
+        let mut params = json!({ "id": id });
+        if let Some(r) = self.recipes.recipe(&id) {
+            if let Some(h) = &r.habit {
+                params["habit"] = json!(h.text);
+                params["name"] = json!(r.name);
+            }
+        }
+        self.start_recipe_thread(format!("add:{id}"), "recipes.add", params, cx);
     }
 
     fn new_recipe(&mut self, cx: &mut Context<Self>) {
@@ -280,7 +300,7 @@ impl Threadbear {
             let (entity, id) = (entity.clone(), id.clone());
             alert
                 .title(title.clone())
-                .description("Its schedules are deleted and it goes back to the gallery, ready to add again. Its files stay where they are.")
+                .description("Its schedules are deleted, agents stop being told its habit if it has one, and it goes back to the gallery, ready to add again. Its files stay where they are.")
                 .button_props(DialogButtonProps::default().ok_text("Remove").show_cancel(true))
                 .on_ok(move |_, _, cx| {
                     let id = id.clone();
@@ -549,6 +569,12 @@ impl Threadbear {
             (RecipeState::SettingUp, _) => {
                 "Being set up. Turn it off and it stays off once it's ready".to_owned()
             }
+            (_, true) if recipe.instant => {
+                "On. Turn it off and agents stop being told its habit".to_owned()
+            }
+            (_, false) if recipe.instant => {
+                "Off. Turn it on and every thread's agent is told its habit".to_owned()
+            }
             (_, true) => format!(
                 "On. Turn it off to pause {}",
                 if recipe.experiment.is_some() {
@@ -802,10 +828,17 @@ impl Threadbear {
             RecipeState::Add => {
                 let busy = self.recipes.busy.contains(&format!("add:{id}"));
                 let link = style::link_text(cx);
-                let tip = format!(
-                    "Add {}: an agent sets it up with you in a new thread",
-                    recipe.name
-                );
+                let tip = if recipe.instant {
+                    format!(
+                        "Add {}: every thread's agent is told its habit from now on",
+                        recipe.name
+                    )
+                } else {
+                    format!(
+                        "Add {}: an agent sets it up with you in a new thread",
+                        recipe.name
+                    )
+                };
                 tipped!(
                     h_flex()
                         .flex_none()
@@ -873,7 +906,11 @@ impl Threadbear {
                         .small()
                         .loading(busy)
                         .disabled(busy)
-                        .tooltip("An agent sets it up with you in a new thread")
+                        .tooltip(if recipe.instant {
+                            "Every thread's agent is told its habit from now on"
+                        } else {
+                            "An agent sets it up with you in a new thread"
+                        })
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.add_recipe(add_id.clone(), cx)),
                         ),
@@ -980,11 +1017,20 @@ impl Threadbear {
                 )
             }
         }
-        left = left
-            .child(section_title("What it set up"))
-            .child(self.render_recipe_setup(&recipe, cx));
+        if recipe.habit.is_some() {
+            left = left
+                .child(section_title("What agents are told"))
+                .child(self.render_recipe_habit(&recipe, cx));
+        }
+        // One that's only a habit sets nothing up and starts no threads.
+        if !recipe.instant {
+            left = left
+                .child(section_title("What it set up"))
+                .child(self.render_recipe_setup(&recipe, cx));
+        }
         left = left.child(self.render_recipe_buttons(&recipe, cx));
-        let right = self.render_recipe_runs(&recipe, detail.as_ref(), cx);
+        let right =
+            (!recipe.instant).then(|| self.render_recipe_runs(&recipe, detail.as_ref(), cx));
         v_flex()
             .w_full()
             .child(banner)
@@ -994,7 +1040,7 @@ impl Threadbear {
                     .items_start()
                     .gap(px(28.))
                     .child(left)
-                    .child(right),
+                    .children(right),
             )
             .into_any_element()
     }
@@ -1010,6 +1056,86 @@ impl Threadbear {
         .selectable(true)
         .style(crate::rows::reading_style(cx))
         .into_any_element()
+    }
+
+    /// Its habit, word for word, with whether agents are being told it and
+    /// what it adds to every thread. When its file's wording isn't the one
+    /// switched on, both show, with a button that takes the new one.
+    fn render_recipe_habit(&mut self, recipe: &Recipe, cx: &mut Context<Self>) -> AnyElement {
+        let Some(habit) = recipe.habit.clone() else {
+            return div().into_any_element();
+        };
+        let id = recipe.id.clone();
+        let faint = style::faint_text(cx);
+        let secondary = style::secondary_text(cx);
+        let border = style::card_border(cx);
+        let code_bg = style::code_background(cx);
+        let stale = recipe.habit_stale();
+        let quote = |text: String| {
+            div()
+                .p(px(14.))
+                .rounded(px(12.))
+                .border_1()
+                .border_color(border)
+                .bg(code_bg)
+                .text_size(px(style::size::LABEL))
+                .line_height(px(19.))
+                .child(text)
+        };
+        let mut col = v_flex()
+            .id(ElementId::Name(format!("recipe-habit-{id}").into()))
+            .test_support()
+            .gap(px(8.));
+        if let Some(old) = habit.given_text.clone().filter(|_| stale) {
+            col = col
+                .child(
+                    div()
+                        .text_size(px(style::size::DETAIL))
+                        .text_color(faint)
+                        .child("What agents are told now"),
+                )
+                .child(quote(old).text_color(secondary))
+                .child(
+                    div()
+                        .text_size(px(style::size::DETAIL))
+                        .text_color(faint)
+                        .child("The new wording"),
+                );
+        }
+        col = col.child(quote(habit.text.clone()));
+        let line = recipe.habit_line().unwrap_or_default();
+        let mut foot = h_flex().items_center().gap(px(10.)).child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_size(px(style::size::DETAIL))
+                .line_height(px(16.))
+                .text_color(if stale {
+                    crate::activity_panels::system_orange(cx)
+                } else {
+                    faint
+                })
+                .child(line),
+        );
+        if stale {
+            let busy = self.recipes.busy.contains(&format!("on:{id}"));
+            let take_id = id.clone();
+            foot = foot.child(
+                div().id("recipe-habit-take").test_support().child(
+                    Button::new("recipe-habit-take-button")
+                        .label("Use the new wording")
+                        .small()
+                        .secondary()
+                        .loading(busy)
+                        .disabled(busy)
+                        .tooltip("Tell every thread's agent this wording from now on")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_recipe_on(take_id.clone(), true, cx)
+                        })),
+                ),
+            );
+        }
+        col.child(foot).into_any_element()
     }
 
     /// Its schedules and its experiment, or what adding it will do.
@@ -1136,7 +1262,7 @@ impl Threadbear {
                         .loading(removing)
                         .disabled(removing)
                         .tooltip(
-                            "Delete its schedules and take it back to the gallery. Its files stay",
+                            "Delete its schedules, stop its habit and take it back to the gallery. Its files stay",
                         )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.remove_recipe(remove_id.clone(), window, cx)
@@ -1294,7 +1420,7 @@ impl Threadbear {
     /// page that's open.
     #[cfg(feature = "automation")]
     pub(crate) fn recipes_dump(&self) -> Value {
-        let row = |r: &Recipe| json!({ "id": r.id, "name": r.name, "state": r.state.name(), "status": r.status_line(Local::now()), "tag": r.tag(), "stat": r.stat_line() });
+        let row = |r: &Recipe| json!({ "id": r.id, "name": r.name, "state": r.state.name(), "status": r.status_line(Local::now()), "tag": r.tag(), "stat": r.stat_line(), "habit": r.habit_line() });
         let list = self.recipes.list.clone().unwrap_or_default();
         json!({
             "loaded": self.recipes.list.is_some(),

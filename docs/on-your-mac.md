@@ -761,7 +761,10 @@ File references are where to look.
   and your own, in `~/ThreadbearThreads/recipes` (runner.json's
   `recipes.folder`). Nothing is fetched or sent anywhere. It keeps
   `recipes.json` in the data folder (which recipes you added, the thread that
-  set each up and the schedules that are its). Adding a recipe makes its
+  set each up and the schedules that are its, and for a recipe with a habit
+  the habit's words as you switched them on, signed with the runner's token).
+  While such a recipe is on, those words go to the agent in every thread,
+  with your standing instructions. Adding a recipe makes its
   folder there and starts a thread in it; the schedules that thread makes are
   ordinary schedules. Switching one off pauses them, and for the email
   watcher's recipe turns that experiment off.

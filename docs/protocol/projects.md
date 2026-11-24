@@ -562,6 +562,8 @@ experiment's switch (`settings.update`'s `experiments`).
   header?,                   // absolute path of its header picture on this Mac
   state: "add" | "settingUp" | "on" | "off",
   setupThreadId?,
+  habit?: { text, bytes, given: boolean, changed?: true, givenText? },   // see "Habits"
+  instant?: true,            // only a habit: recipes.add turns it on, with no thread
   schedules: { id, title, paused, nextRunAt?, whenText }[],
   stats: { runs: number, neededYou: number, seen: number, lastRunAt?, lastHeadline? } }   // last 30 days
 ```
@@ -572,13 +574,57 @@ has a schedule (or, for an experiment's, until that's on); then `on` or `off`.
 that ended needing the user, and those they've read (`lastSeenSeq` at
 `lastSeq`).
 
+### Habits
+
+A recipe's file may have a `## Habit` section: a few lines every thread's
+agent is given while the recipe is on, at most 800 bytes (a longer one makes
+the file unreadable, and it's left out of the list like any broken file). The
+runner gives them after the user's standing instructions, in the same words
+at the start of a session and the same note when they change
+(settings.md, "Standing instructions"), under a line saying they're habits
+from recipes the user switched on. Nothing is written to the user's
+`CLAUDE.md` or `AGENTS.md`, so off takes effect on every thread's next
+message, and Claude and Codex sessions both hear it.
+
+A habit steers every thread, so a recipe's file alone doesn't count, as
+with the standing instructions. What's given is the wording as it was when
+the user switched the recipe on (`recipes.add`, `recipes.setOn` with `on:
+true`), kept in `recipes.json` with an HMAC of it keyed by the runner's
+token. `recipes.*` aren't open to a thread's own key (connection.md, "A
+thread's own key"), so only the app can switch one on. In `habit`, `text`
+is the file's wording now and `bytes` its size; `given` says agents are
+being told it; `changed` that the recipe is on but what the file says isn't
+what was switched on (the file was edited, a release changed a built-in's,
+or what's kept wasn't signed by this runner), with `givenText` the wording
+still being given, if any. `recipes.setOn` with `on: true` on a recipe
+that's already on takes the file's wording.
+
+Switching a habit on is agreeing to its words, so a client sends the ones
+it showed: `habit` (the summary's `habit.text`) and `name`, on
+`recipes.add` and on `recipes.setOn` with `on: true`. The runner reads the
+file again and refuses (`-32602`) unless it still says exactly those, so a
+file changed between the user's look and their click isn't taken; the client
+fetches the list again and shows the new wording. The name counts because
+agents are told the habit under it: it's kept and signed with the wording,
+at most 60 characters, and a changed name is `changed` too. Switching it off
+forgets the signed wording, so nothing left in `recipes.json` can turn it
+back on. Each message reads the recipes afresh, so a habit whose file or
+experiment has gone stops with the next one.
+
+A recipe that is only a habit (no "Setting it up", no "Each run", no
+experiment) is `instant`: there's nothing for an agent to set up, so
+`recipes.add` turns it on and answers `{ recipe }` with no thread, and
+`recipes.setOn` with `on: true` adds it too. It's never `settingUp`. One
+with a habit and a setup is added by its thread as usual, and its habit is
+given from then while it's on.
+
 | Method | Params | Result |
 |---|---|---|
 | `recipes.list` | `{}` | `{ recipes: RecipeSummary[] }`, on first, then the rest by name |
 | `recipes.get` | `{ id }` | `{ recipe: RecipeSummary & { about, example?, file, runs: RecipeRun[] } }`. `about` and `example` are Markdown (the file's sections); `file` is the `RECIPE.md` path. `RecipeRun` is `{ threadId, title, at, headline?, needsYou, seen, archived }`, the threads its schedules started in the last 30 days (and for a recipe whose feature starts its own threads, those: its file's `runsFrom` names the label they're started under), newest first, 60 at most |
-| `recipes.add` | `{ id }` | `{ threadId, thread }` (`thread` its `ThreadSummary`, so a client opens it at once): starts a thread in `<recipes folder>/<id>` (made if need be), on the default pool and mode, whose message points its agent at the recipe's file and has it set the recipe up with the user. The recipe is `settingUp` from now |
-| `recipes.setOn` | `{ id, on }` | `{ recipe }`. Off pauses each of its schedules (and turns its experiment off); on resumes them (and turns it on). A recipe still setting up just records the choice |
-| `recipes.remove` | `{ id }` | `{ removed: true }`: deletes its schedules, turns its experiment off and forgets it, so it's `add` again. Its files stay |
+| `recipes.add` | `{ id, habit?, name? }` | For an `instant` recipe `{ recipe }`, on from now. Otherwise `{ threadId, thread }` (`thread` its `ThreadSummary`, so a client opens it at once): starts a thread in `<recipes folder>/<id>` (made if need be), on the default pool and mode, whose message points its agent at the recipe's file and has it set the recipe up with the user. The recipe is `settingUp` from now |
+| `recipes.setOn` | `{ id, on, habit?, name? }` | `{ recipe }`. Off pauses each of its schedules, stops its habit being given (and turns its experiment off); on resumes them, takes its habit as its file has it now (and turns it on). A recipe still setting up just records the choice |
+| `recipes.remove` | `{ id }` | `{ removed: true }`: deletes its schedules, stops its habit, turns its experiment off and forgets it, so it's `add` again. Its files stay |
 | `recipes.create` | `{ text?, fromThreadId?, editId? }` | `{ threadId, thread }`: starts a thread in the recipes folder whose agent writes a new recipe with the user (from `text`, or from what went well in `fromThreadId`), and a header picture if it can make one. A new recipe shows as `add` until it's added. With `editId` the agent changes that recipe instead, writing a built-in's changed copy into the recipes folder as the user's own |
 
 `recipes.updated` (notification, no params) says the list has changed: a

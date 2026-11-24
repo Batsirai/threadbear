@@ -40,6 +40,10 @@ connector signed in, a command installed), and the schedule to make.
 
 What the scheduled thread does each time. The setup agent copies this into
 TASK.md in the recipe's working folder, adapted to what the user said.
+
+## Habit
+
+A few lines every thread's agent is told while the recipe is on.
 ```
 
 The fields:
@@ -54,6 +58,25 @@ The fields:
 - `runsFrom`: for an experiment that starts threads of its own, the label it
   gives them (what a thread's row says started it, such as `Email`). Those
   threads count as the recipe's runs, as its schedules' threads do.
+
+## A habit
+
+Some techniques aren't jobs that run but ways of working: "show me a few
+options", "try it yourself before asking me". Put those in a `## Habit`
+section. While the recipe is on, Threadbear gives those lines to the agent in
+every thread, Claude and Codex alike, beside the user's standing instructions.
+Nothing is written to their CLAUDE.md or AGENTS.md, and switching it off stops
+it at once.
+
+- Write it to the agent, as plain instructions, and say when it doesn't apply.
+- Keep it short: every thread pays for it, and over 800 bytes the recipe
+  won't load. The recipe's page shows the user the exact words and their size.
+  Something long, or only needed now and then, belongs in a skill instead.
+- A recipe with a Habit and no "Setting it up" or "Each run" is only a habit:
+  Add switches it on straight away, with no setup thread. Its Example shows an
+  exchange with and without it.
+- Agents are told the wording the user switched on. If the file changes
+  later, its page shows both and they choose when to take the new one.
 
 ## The header picture
 

@@ -2,7 +2,7 @@
 import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
-type Row = { id: string; name: string; state: string; tag: string; stat: string };
+type Row = { id: string; name: string; state: string; tag: string; stat: string; habit: string | null };
 type Recipes = { loaded: boolean; sidebar: Row[]; cards: Row[]; busy: string[]; open: string | null; page: { id: string; runs: number; example: boolean } | null };
 const recipes = (d: unknown): Recipes | undefined => (d as { sidebar?: { recipes?: Recipes } }).sidebar?.recipes;
 
@@ -19,6 +19,14 @@ When('I switch off {string}', async function (this: ThreadbearWorld, name: strin
 When('I add {string}', async function (this: ThreadbearWorld, name: string) {
   // By its tip, which scrolls a card below the gallery's fold into sight.
   await this.app.do({ cmd: 'click', tip: `Add ${name}: an agent sets it up with you in a new thread` });
+});
+
+When('I add the habit {string}', async function (this: ThreadbearWorld, name: string) {
+  await this.app.do({ cmd: 'click', tip: `Add ${name}: every thread's agent is told its habit from now on` });
+});
+
+Then('the habit of {string} says {string}', async function (this: ThreadbearWorld, name: string, words: string) {
+  await this.until(`the habit of "${name}" saying "${words}"`, (d) => Boolean(recipes(d)?.cards.find((r) => r.name === name)?.habit?.includes(words)));
 });
 
 When('I open the recipe {string}', async function (this: ThreadbearWorld, name: string) {

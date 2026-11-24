@@ -275,6 +275,10 @@ type StandingInstructions = {
   message, not in a fresh session's instructions, can fade in a compaction, as a
   project's joined line can.
 
+With the `recipes` experiment on, the habits of the recipes the user has
+switched on are given after these, in the same message and the same note
+when either changes (projects.md, "Habits").
+
 ## Shared memory
 
 `runner/src/memory-sync.ts`, `convex/memorySync.ts` (API 84). The
