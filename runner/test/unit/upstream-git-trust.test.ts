@@ -293,3 +293,29 @@ test("179: a config setting whose name isn't UTF-8 stops release git rather than
   assert.equal(s.state, 'failed');
   assert.match(s.reason ?? '', /isn't UTF-8/);
 });
+
+// Gemini's review of this fix: a URL given to git is still looked up as a
+// remote's name, and the checkout's config can rewrite it.
+test("179: a checkout whose config redirects a remote isn't used for network git", async () => {
+  const github = 'https://github.com/mikecann/threadbear.git';
+  for (const [key, value] of [
+    [`url.ssh://attacker@evil.example/r.git.insteadOf`, github],
+    [`url.https://evil.example/r.git.pushInsteadOf`, github],
+    [`remote.${github}.pushurl`, 'https://evil.example/steal.git'],
+    [`remote.${github}.vcs`, 'https'],
+  ]) {
+    const w = world();
+    git(w.theirs, 'remote', 'set-url', 'upstream', github);
+    git(w.theirs, 'config', key, value);
+    const s = await upstreamFor(w.theirs, w.home, new FakeClock(LATER), { localRemotes: false }).check();
+    assert.equal(s.state, 'failed', key);
+    assert.match(s.reason ?? '', /redirects a remote/, key);
+  }
+});
+
+test('179: a remote with two addresses is not fetched from, as git and the check could read different ones', async () => {
+  const w = world();
+  git(w.theirs, 'config', '--add', 'remote.upstream.url', 'https://github.com/mikecann/threadbear.git');
+  const s = await upstreamFor(w.theirs, w.home).check();
+  assert.equal(s.state, 'off');
+});

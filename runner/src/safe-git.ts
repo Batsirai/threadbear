@@ -150,7 +150,7 @@ export function parseConfigListBytes(out: Buffer): ConfigEntry[] {
 }
 
 // A name git's -c can carry: it splits `key=value` at the first =.
-function settable(key: string): string {
+export function settable(key: string): string {
   if (key.includes('=') || key.includes('\n')) throw new Error(`This repo's git config has a setting Threadbear can't switch off (${JSON.stringify(key.slice(0, 80))}), so it left git alone.`);
   return key;
 }
@@ -164,11 +164,13 @@ export function repoProofConfig(entries: readonly ConfigEntry[], network?: 'bund
   for (const e of entries) {
     // A protocol the repo names beats protocol.allow too (ftp, a helper's
     // name for `foo::`), so each one it names is turned off by name.
-    const p = /^protocol\.(.+)\.allow$/.exec(e.key);
+    // Any name, empty and with line separators too, which `.` skips
+    // (Gemini's review of Daybreak 179, as for hooks below).
+    const p = /^protocol\.([\s\S]*)\.allow$/.exec(e.key);
     if (p && !allowed.includes(p[1]!) && !PROTOCOL_NAMES.includes(p[1]!)) out.push('-c', `${settable(e.key)}=never`);
-    const f = /^filter\.(.+)\.[^.]+$/.exec(e.key);
+    const f = /^filter\.([\s\S]*)\.[^.]+$/.exec(e.key);
     if (f) drivers.add(`filter.${f[1]}`);
-    const d = /^diff\.(.+)\.(command|textconv)$/.exec(e.key);
+    const d = /^diff\.([\s\S]*)\.(command|textconv)$/.exec(e.key);
     if (d) out.push('-c', `${settable(`diff.${d[1]}.${d[2]}`)}=`);
     // A hook named in config (git 2.54's hook.<name>.command and .event)
     // runs whatever core.hooksPath says: update-ref ran a repo's
@@ -183,7 +185,7 @@ export function repoProofConfig(entries: readonly ConfigEntry[], network?: 'bund
   if (network === 'remote') {
     const fromRepo = (match: (k: string) => boolean) => entries.some((e) => match(e.key) && !TRUSTED_SCOPES.has(e.scope));
     const owners = (match: (k: string) => boolean) => entries.filter((e) => match(e.key) && TRUSTED_SCOPES.has(e.scope));
-    const helper = (k: string) => /^credential\.(.+\.)?helper$/.test(k);
+    const helper = (k: string) => /^credential\.([\s\S]*\.)?helper$/.test(k);
     if (fromRepo(helper)) {
       // An empty helper empties the list so far; then the owner's, in order.
       out.push('-c', 'credential.helper=');

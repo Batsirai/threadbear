@@ -117,9 +117,14 @@ function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 // checkout has replacement refs or grafts (scripts/merge-preview.sh says
 // the same).
 export async function substitutes(cwd: string): Promise<string | undefined> {
-  const replaced = (await git(cwd, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/replace/'])).stdout.trim();
+  const listed = await git(cwd, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/replace/']);
+  const found = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  // A look that fails can't say there are none (git older than 2.31 has no
+  // --path-format).
+  if (!listed.ok || !found.ok) return `Couldn't tell whether this checkout has git replacement refs or grafts (${(listed.ok ? found : listed).stderr.trim().split('\n')[0]}), so the release isn't merged.`;
+  const replaced = listed.stdout.trim();
   if (replaced) return `This checkout has git replacement refs (${replaced}), which could have git merge other objects in place of the release's: remove them (git replace -d) first.`;
-  const common = (await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
+  const common = found.stdout.trim();
   if (common && fs.existsSync(path.join(common, 'info', 'grafts'))) return `This checkout has git grafts (${path.join(common, 'info', 'grafts')}), which could have git merge other history in place of the release's: remove that file first.`;
   return undefined;
 }
@@ -438,7 +443,7 @@ export class TreeFormatter {
 
 function stdinGit(cwd: string, args: string[], input: string, extra: NodeJS.ProcessEnv): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const child = execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, _o, stderr) =>
+    const child = execFile('git', [...GIT_SAFE, ...(noCommitGraph ? ['-c', 'core.commitGraph=false'] : []), '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, _o, stderr) =>
       err ? reject(new Error(`git ${args.join(' ')}: ${String(stderr).trim()}`)) : resolve(),
     );
     child.stdin?.end(input);

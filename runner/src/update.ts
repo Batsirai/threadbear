@@ -505,12 +505,12 @@ export async function onMikesMain(checkout: string, commit: string, opts: { file
     if (repoKey(url) !== MIKES_REPO) continue;
     const main = `refs/remotes/${remote}/main`;
     // By its URL, as the release check fetches (upstream.ts, release git):
-    // none of the remote's own settings in this checkout's config (an
-    // uploadpack, a remote helper) run.
+    // nothing this checkout's config names runs, and one that redirects a
+    // remote isn't fetched with.
     const from = fetchableUrl(url);
     if (!from) continue;
     try {
-      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', UPLOAD_PACK, from, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS, network: 'remote', ...(opts.files ? { files: true } : {}) });
+      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-prune', '--no-prune-tags', '--no-write-fetch-head', '--no-recurse-submodules', UPLOAD_PACK, from, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS, network: 'remote', ...(opts.files ? { files: true } : {}) });
       await gitWithin(checkout, ['merge-base', '--is-ancestor', commit, main]);
       return `${remote}/main has this commit, and a landing's check passed them there`;
     } catch {

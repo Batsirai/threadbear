@@ -49,7 +49,7 @@ import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
 import { ADD_DELAY_MS, applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
-import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
+import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, settable, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
 export const FETCH_INTERVAL_MS = 6 * 60 * 60_000;
 // After a look that failed (no network yet after waking, GitHub down) the
@@ -392,8 +392,9 @@ export function bareRepoArgs(cwd: string): string[] {
 //   signing programs, showing signatures, and push's own signing and
 //   submodules (RELEASE_CONFIG);
 // - only https and ssh to a remote, only a folder for the local fetch, and
-//   the remote's address passed as a URL (fetchableUrl), so no remote's
-//   own settings apply, with git's own upload-pack and receive-pack named;
+//   the remote's address passed as a URL (fetchableUrl), with git's own
+//   upload-pack and receive-pack named, and a checkout whose config
+//   rewrites an address or configures a remote named by one refused;
 // - replacement objects, grafts and the commit-graph off, so an object id
 //   is that object: a signed release's commit can't be read as another.
 //   A checkout that has replacement refs or grafts isn't checked at all
@@ -431,7 +432,7 @@ const RECEIVE_PACK = '--receive-pack=git-receive-pack';
 // What the runner's environment keeps for release git: who commits (Mike's
 // tag needs a tagger), and for owner, which of his config files git reads.
 const KEEP_ENV = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
-const OWNER_ENV = /^GIT_CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)$/;
+const OWNER_ENV = /^GIT_(CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)|SSH|SSH_COMMAND)$/;
 
 export function releaseGitEnv(opts: Pick<GitOptions, 'env' | 'owner'> = {}): NodeJS.ProcessEnv {
   const kept = Object.fromEntries(Object.entries(process.env).filter(([k]) => KEEP_ENV.test(k) || (opts.owner && OWNER_ENV.test(k))));
@@ -462,6 +463,19 @@ export async function releaseGitConfig(cwd: string, env: NodeJS.ProcessEnv, opts
     );
   });
   const entries = parseConfigListBytes(listed);
+  // A remote's address is given to git as a URL (fetchableUrl), but the
+  // checkout's config can still rewrite it (url.<x>.insteadOf and
+  // pushInsteadOf) or give it settings of its own under a remote named by
+  // that URL (a push URL, a remote helper, a proxy): git looks a URL up as
+  // a remote's name first. Either sends upstream's fetch, or Mike's push
+  // with his credentials, somewhere the configured address doesn't say, so
+  // a checkout that has one isn't used for network git at all (Gemini's
+  // review, 24 Nov 2026). The owner's own (global) rewrites are his. files:
+  // tests, whose remotes are folders reached through an insteadOf.
+  if (opts.network === 'remote' && !opts.files) {
+    const redirect = entries.find((e) => !TRUSTED_SCOPES.has(e.scope) && (/^url\./.test(e.key) || /^remote\.[\s\S]*[:/][\s\S]*\.[^.]+$/.test(e.key)));
+    if (redirect) throw new Error(`this checkout's own git config redirects a remote (${JSON.stringify(redirect.key.slice(0, 80))}), so release git won't reach one from it; remove that setting`);
+  }
   const out = [...repoProofConfig(entries, opts.network === 'remote' ? 'remote' : opts.network === 'local' ? 'bundle' : undefined), ...RELEASE_CONFIG];
   // repoProofConfig lets a remote be a folder too (a thread's move needs
   // that); a release's never is.
@@ -471,7 +485,7 @@ export async function releaseGitConfig(cwd: string, env: NodeJS.ProcessEnv, opts
   // An empty helper empties the list git has so far (any URL's too); then
   // the owner's own, in order.
   out.push('-c', 'credential.helper=');
-  for (const e of own((k) => /^credential\.(.+\.)?helper$/.test(k))) out.push('-c', `${e.key}=${e.value}`);
+  for (const e of own((k) => /^credential\.([\s\S]*\.)?helper$/.test(k))) out.push('-c', `${settable(e.key)}=${e.value}`);
   return out;
 }
 
@@ -844,11 +858,16 @@ export class Upstream {
     return { origin, upstream };
   }
 
-  // Undefined when there's none (git config's exit 1); anything else that
-  // stops git (a config it won't run with) throws.
+  // Undefined when there's none (git config's exit 1), or more than one:
+  // git fetches from the first and `config --get` reads the last, so the
+  // address checked and the one used could differ (Gemini's review).
+  // Anything else that stops git (a config it won't run with) throws.
   private configuredUrl(checkout: string, name: string): Promise<string | undefined> {
     return this.git(checkout, ['config', '--get-all', `remote.${name}.url`]).then(
-      (out) => out.split('\n')[0]?.trim() || undefined,
+      (out) => {
+        const urls = out.split('\n').map((u) => u.trim()).filter(Boolean);
+        return urls.length === 1 ? urls[0] : undefined;
+      },
       (e: unknown) => {
         if ((e as { exitCode?: unknown }).exitCode === 1) return undefined;
         throw e;
@@ -1252,7 +1271,7 @@ export class Upstream {
     }
     this.origin = origin;
     // Tags made on another Mac, or by hand, count too.
-    await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-recurse-submodules', this.uploadPack, origin, `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
+    await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-prune', '--no-prune-tags', '--no-recurse-submodules', this.uploadPack, origin, `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
     const tag = tagFor(new Date(now));
     // Only tags GitHub has are releases: one made here and never pushed (its
     // push failed, or it didn't verify and couldn't be deleted, perhaps
@@ -1434,7 +1453,7 @@ export class Upstream {
   // that has settled here goes up first (fast-forward only), and its
   // checks are looked at on the next hourly look. Returns why it's held.
   private async pushMain(checkout: string, tip: string): Promise<string | undefined> {
-    await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-recurse-submodules', this.uploadPack, this.origin!, '+refs/heads/main:refs/remotes/origin/main'], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
+    await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-prune', '--no-prune-tags', '--no-recurse-submodules', this.uploadPack, this.origin!, '+refs/heads/main:refs/remotes/origin/main'], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
     const theirs = await this.git(checkout, ['rev-parse', 'refs/remotes/origin/main']).catch(() => '');
     if (theirs === tip || (theirs && (await this.isAncestor(checkout, tip, theirs)))) return undefined;
     if (theirs && !(await this.isAncestor(checkout, theirs, tip))) return "main here and GitHub's main have gone different ways";
@@ -1452,7 +1471,7 @@ export class Upstream {
     const workflows = (await this.git(checkout, ['ls-tree', '--name-only', tip, '.github/workflows/'])).split('\n').filter((f) => /\.ya?ml$/.test(f));
     if (!workflows.length) return undefined;
     // The URL as configured, not as an insteadOf rewrites it for fetching.
-    const key = repoKey(await this.git(checkout, ['config', '--get', 'remote.origin.url']).catch(() => ''));
+    const key = repoKey(this.origin ?? '');
     if (!key.startsWith('github.com/')) return "origin isn't on GitHub, so its checks can't be read";
     const pushed = await this.pushMain(checkout, tip);
     if (pushed) return pushed;
@@ -1498,7 +1517,7 @@ export class Upstream {
   // went out unchecked), only on an older commit. One GitHub request a
   // workflow, as the hourly look's are counted (60 an hour without a token).
   private async newestGreen(checkout: string, tip: string, last: string | undefined, now: number): Promise<string | undefined> {
-    const key = repoKey(await this.git(checkout, ['config', '--get', 'remote.origin.url']).catch(() => ''));
+    const key = repoKey(this.origin ?? '');
     if (!key.startsWith('github.com/')) return undefined;
     const repo = key.slice('github.com/'.length);
     const line = (await this.git(checkout, ['log', '--first-parent', `--max-count=${GREEN_LOOKBACK}`, '--format=%H %ct', tip, ...(last ? [`^${last}`] : [])]))

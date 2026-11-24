@@ -96,8 +96,12 @@ a setting whose name isn't UTF-8, which `-c` can't name, stops git); only `https
 and `ssh` to a remote, with git's own upload-pack and receive-pack named;
 and the remote given as a URL rebuilt from `remote.<name>.url` as
 configured, an https or ssh address of a plain host and path (anything
-else, a folder, `file://`, `ext::`, and upstream counts as off; a user and
-password in it are left out). Replacement objects, grafts and the
+else, a folder, `file://`, `ext::`, or more than one address, and upstream
+counts as off; a user and password in it are left out). A checkout whose
+own config rewrites an address (`url.*.insteadOf`, `pushInsteadOf`) or
+configures a remote named by a URL (which git looks a URL up as) isn't used
+for network git at all: the check fails, and Mike's runner holds its
+release, saying which setting. Replacement objects, grafts and the
 commit-graph are off (`GIT_NO_REPLACE_OBJECTS`, `GIT_GRAFT_FILE=/dev/null`,
 `core.commitGraph=false`), and a checkout with a `refs/replace/` ref or an
 `info/grafts` file isn't checked at all: the check fails and says so, and

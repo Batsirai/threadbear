@@ -100,7 +100,7 @@ the release looks halfway through something (a feature half there, a
 commit that says it's temporary, tests skipped), say so. A release often
 adds checks that read the code (a security fix's source tests), and their
 own changes can fail one even where the merge is clean. Say that if a
-check the release added or changed (it's in `git --no-replace-objects diff main...<commit>`)
+check the release added or changed (it's in `git --no-replace-objects diff --no-ext-diff --no-textconv main...<commit>`)
 fails on their code, you'll change their code the way it asks, never the
 check, and show them the diff when you land, so one go covers it. Then
 ask whether to go ahead. Nothing from it has run, and nothing has changed
