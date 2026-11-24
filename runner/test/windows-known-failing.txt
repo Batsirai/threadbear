@@ -8,7 +8,9 @@
 # and box mode's (box-mode, box-save, added 19 Nov: a box is a Linux machine,
 # and their tests make its repos through /bin/sh), and check.sh's pass
 # records' (check-cache, 22 Nov: it runs check.sh, which is bash, as
-# check-only does).
+# check-only does), and Grok's out-of-balance turns' (grok-out-of-usage,
+# 24 Nov: it starts the pretend ACP agent, a .mjs run by its #! line, as
+# acp-grok does).
 account-isolation.test.ts
 acp-adapter.test.ts
 acp-grok.test.ts
@@ -31,6 +33,7 @@ format-tool.test.ts
 format-trust.test.ts
 gpui-dev-app.test.ts
 gpui-driver-evidence.test.ts
+grok-out-of-usage.test.ts
 hangup-guard.test.ts
 highlights.test.ts
 home-patch-edits.test.ts
