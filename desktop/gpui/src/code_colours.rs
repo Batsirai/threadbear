@@ -23,11 +23,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
+use futures::channel::mpsc::{unbounded, UnboundedSender};
 use futures::StreamExt as _;
-use futures::channel::mpsc::{UnboundedSender, unbounded};
 use gpui_kit::base::text::CodeBlock;
 use gpui_kit::component::highlighter::HighlightTheme;
-use gpui_kit::component::text::{SharedCodeBlockHighlighter, shared_code_block_highlighter};
+use gpui_kit::component::text::{shared_code_block_highlighter, SharedCodeBlockHighlighter};
 use gpui_kit::{App, HighlightStyle};
 
 type Styles = Vec<(Range<usize>, HighlightStyle)>;
@@ -246,7 +246,13 @@ mod tests {
         let colour = shared_code_block_highlighter(&theme);
         let block = CodeBlock::from_code("const a = 1; // asked once", Some("ts"));
         let id = THEMES.fetch_add(1, Ordering::Relaxed);
-        let queued = || store().queue.iter().filter(|j| j.code.contains("// asked once")).count();
+        let queued = || {
+            store()
+                .queue
+                .iter()
+                .filter(|j| j.code.contains("// asked once"))
+                .count()
+        };
         assert!(lookup(id, &colour, &block).is_empty());
         assert_eq!(queued(), 1);
         assert!(lookup(id, &colour, &block).is_empty());
@@ -257,9 +263,18 @@ mod tests {
         let first = CodeBlock::from_code("let first = 0; // newest test", Some("ts"));
         lookup(id, &colour, &first);
         for n in 0..QUEUED {
-            lookup(id, &colour, &CodeBlock::from_code(format!("let n = {n}; // newest test"), Some("ts")));
+            lookup(
+                id,
+                &colour,
+                &CodeBlock::from_code(format!("let n = {n}; // newest test"), Some("ts")),
+            );
         }
-        let has_first = || store().queue.iter().any(|j| j.code.starts_with("let first"));
+        let has_first = || {
+            store()
+                .queue
+                .iter()
+                .any(|j| j.code.starts_with("let first"))
+        };
         assert!(!has_first());
         assert!(store().queue.len() <= QUEUED);
         lookup(id, &colour, &first);
