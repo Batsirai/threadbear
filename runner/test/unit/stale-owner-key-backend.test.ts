@@ -218,3 +218,36 @@ test("an \"any\" command the main key finishes can't name a keyed runner's threa
     assert.equal((await s.ctx.db.get(commandId))!.resultThreadId, kept);
   }
 });
+
+// Round two (Codex, Gemini): taking a forged row back before finding room
+// for its own words left the forged words on a row now counted as its own,
+// which no later send could correct.
+test("a forged row is taken back with its own words in one step, or not at all", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  await s.mini.append('M', 'real 1', 1);
+  await s.ctx.db.insert('messages', { threadId: 'M', seq: 2, role: 'assistant', text: 'FORGED', at: 'now' });
+  const CAP = sync.RUNNER_KEY_CAPS as { messageBytes: number };
+  const was = CAP.messageBytes;
+  // No room at all: it waits, still not Mac mini's.
+  CAP.messageBytes = s.rows('runnerStorage').find((u) => u.runnerId === MINI)!.messageBytes;
+  try {
+    const r = await s.fn(sync.appendMessages, { key: MINI_KEY, messages: [{ threadId: 'M', seq: 2, role: 'assistant', text: 'real 2 '.padEnd(2_000, 'x'), at: 'now' }] });
+    assert.deepEqual(r.skipped, ['M:2']);
+    assert.equal(s.rows('messages').find((m) => m.seq === 2)!.runnerId, undefined);
+  } finally {
+    CAP.messageBytes = was;
+  }
+  // With room, its words go in, as its own.
+  await s.fn(sync.appendMessages, { key: MINI_KEY, messages: [{ threadId: 'M', seq: 2, role: 'assistant', text: 'real 2', at: 'now' }] });
+  const two = s.rows('messages').find((m) => m.seq === 2)!;
+  assert.deepEqual([two.text, two.runnerId], ['real 2', MINI]);
+});
+
+test("the main key can't attach a keyed runner's upload to a thread of its own", async () => {
+  const s = await setup();
+  await s.owner.upsert('L', LAPTOP);
+  const theirs = await s.upload(MINI_KEY, 'mini-upload');
+  assert.equal(await outcome(s.owner.reply('L', theirs)), 'forbidden');
+  assert.equal(s.rows('storageOwners').find((o) => o.storageId === theirs)!.attachedAt, undefined);
+});

@@ -108,17 +108,21 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   2026): that runner's threads' messages, tool output and pictures (read
   as empty, written as dropped, as a runner key's for a thread not its own;
   an id with no row counts as the runner's whose tombstone or sidebar row
-  it has), `removeThreads` in either form, freeing a file it uploaded,
+  it has), `removeThreads` in either form, freeing or attaching a file it
+  uploaded,
   taking or finishing its commands (or naming its thread as the one an
   `any` command made), recording or letting go of its schedules' runs, and
   closing its requests. An id whose rows are going (`threadClears`, the owner taking
   the thread over) is answered as left out, as before. Rows written as a
   keyed runner before this don't keep its history from going up:
   `messageHeads` gives a runner key the newest of its own rows (its
-  `runnerId` on them; no head if 20 rows not its own are on top), a row of
+  `runnerId` on them, by `messages.by_thread_runner_seq`; a thread with
+  none of its own, from before its key, has no head, so a start with no
+  cache sends its history once more and takes those rows as its own), a row of
   its own thread it sends again takes the one at that seq back with its
-  own words if they differ (counted against it, waiting when there's no
-  room), and the runner itself doesn't take a head past the thread's own
+  own words if they differ, in one step (counted against it, making room
+  only among its rows older than that one, waiting when there's none, and
+  letting it go if it's older than everything it has), and the runner itself doesn't take a head past the thread's own
   last seq, which none of its own can be: it sends the whole history
   again. This keeps a forgotten copy of the owner key from carrying on as
   that runner; it isn't a fence against someone holding the owner key on

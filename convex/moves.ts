@@ -21,7 +21,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { boxOfRunner, boxStateReachable, checkRunnerId, forbidden, hasAllowance, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
-import { buryIndexRows, countBodyBytes, countMessageBytes, deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, MIN_UPLOAD_CHARGE, RUNNER_KEY_CAPS as CAP, moveView, roomForBody, roomForMessage, roomToStore, storageInUse, storedBytes, ticketKey } from './sync';
+import { buryIndexRows, countBodyBytes, countMessageBytes, deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, MIN_UPLOAD_CHARGE, RUNNER_KEY_CAPS as CAP, moveView, letGo, roomForBody, roomForMessage, roomToStore, type RowAge, storageInUse, storedBytes, ticketKey } from './sync';
 import { docBytes, ownThreadOnly, type Caller } from './runnerAccess';
 import { machines, move as moveMachine } from './machines';
 import { dropChunks } from './moveMachine';
@@ -52,13 +52,14 @@ const LISTED = 50;
 // than one mutation may read: few enough of each table's that a page of its
 // largest rows, with the destination's room-making on top (REHOME_EVICT),
 // stays well inside Convex's 16 MiB a mutation reads. A tool output is up
-// to 512 KB (CAP.bodyDoc) and a plan's message 84 KB (CAP.planDoc): 16 of
-// the one and 100 of the other are about 8 MB, and the 8 and 50 rows the
-// room-making may read about 4 MB more (Codex's review, 24 Nov 2026: 200
-// tool outputs a page could be 100 MB, so the page failed every time and
-// the move stayed claimed).
-const REHOME_PAGE: Record<(typeof REHOME_TABLES)[number], number> = { messages: 100, eventBodies: 16, shareImages: 200, replyImages: 200, heldPictures: 200 };
-const REHOME_EVICT = { messages: 50, eventBodies: 8 };
+// to 512 KB (CAP.bodyDoc) and a plan's message 84 KB (CAP.planDoc): 8 of
+// the one and 50 of the other are about 4 MB a page; each row's look at
+// T's oldest (one read when T is full) and the 4 and 30 rows room-making
+// may delete, each read once more by handedOn, about 8 MB more (Codex's
+// reviews, 24 Nov 2026: 200 tool outputs a page could be 100 MB, so the
+// page failed every time and the move stayed claimed).
+const REHOME_PAGE: Record<(typeof REHOME_TABLES)[number], number> = { messages: 50, eventBodies: 8, shareImages: 200, replyImages: 200, heldPictures: 200 };
+const REHOME_EVICT = { messages: 30, eventBodies: 4 };
 // A claimed move T has said is done but whose rows haven't all gone over
 // after this has them sent again (expireMoves).
 const REHOME_STUCK_MS = 10 * 60_000;
@@ -565,7 +566,8 @@ async function rehomeFile(ctx: MutationCtx, table: PictureTable, picture: Pictur
   for (const row of rows) {
     if (row.runnerId !== from) continue;
     const bytes = row.bytes ?? 0;
-    const charge = row.bytes ?? (await size());
+    // A record of 0 bytes (from before records had sizes, or one an older move made) is charged at its size.
+    const charge = row.bytes || (await size());
     if (toCharged && !(await roomToStore(ctx, to, charge))) return notKept();
     await countStoredBytes(ctx, from, -bytes);
     if (toCharged) {
@@ -573,22 +575,6 @@ async function rehomeFile(ctx: MutationCtx, table: PictureTable, picture: Pictur
       await countStoredBytes(ctx, to, charge);
     } else await ctx.db.delete(row._id);
   }
-}
-
-// Whether T has no room for a moved row of `size` bytes and the row is
-// older than T's oldest (as T's room-making picks it: messages by
-// _creationTime, tool output by `at`), so the row is what would go first.
-// With no rows at all T's count is stale, which its room-making puts right.
-async function olderThanAllOf(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: { _creationTime: number; at?: unknown }, to: string, size: number): Promise<boolean> {
-  const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', to)).unique();
-  if (table === 'messages') {
-    if ((usage?.messageBytes ?? 0) + size <= CAP.messageBytes) return false;
-    const oldest = await ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', to)).first();
-    return oldest !== null && row._creationTime <= oldest._creationTime;
-  }
-  if ((usage?.bodyBytes ?? 0) + size <= CAP.bodyBytes) return false;
-  const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', to)).first();
-  return oldest !== null && (row.at as number) <= oldest.at;
 }
 
 // The claimed move a rehome page is for, or null for a page that's no
@@ -680,13 +666,15 @@ export const rehomeRows = machines.internalMutation({
         const count = name === 'messages' ? countMessageBytes : countBodyBytes;
         if (toCharged) {
           const size = docBytes({ ...rest, runnerId: to });
-          if (await olderThanAllOf(ctx, name, row as { _creationTime: number; at?: unknown }, to, size)) {
-            if (owner !== undefined) await count(ctx, from, -storedBytes(row));
-            await ctx.db.delete(name, _id);
+          // Room among T's rows older than this one only (sync.ts RowAge).
+          const age: RowAge = { before: name === 'messages' ? _creationTime : row.at };
+          const room = name === 'messages' ? await roomForMessage(ctx, to, size, new Set(), budget, undefined, onlyThread, age) : await roomForBody(ctx, to, size, null, budget, onlyThread, age);
+          if (!room && age.oldest) {
+            // What T's allowance would let go first: it goes, rather than come over.
+            await letGo(ctx, name, row as Doc<'messages'>);
             moved++;
             continue;
           }
-          const room = name === 'messages' ? await roomForMessage(ctx, to, size, new Set(), budget, undefined, onlyThread) : await roomForBody(ctx, to, size, null, budget, onlyThread);
           if (!room) {
             full = true;
             break;

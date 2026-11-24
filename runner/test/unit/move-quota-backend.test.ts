@@ -421,3 +421,35 @@ test("moving older rows into a full runner reads only the page, not everything t
     assert.equal(usage(s, CLOUD).messageBytes, 0);
   });
 });
+
+// Round two (Codex, Gemini): the age check looked only at T's oldest row
+// once, so a mid-aged row made room past it, through T's newer rows too.
+test("a moved row makes room only among the new runner's older rows", async () => {
+  const s = await keyed();
+  await s.mini.upsert('O', MINI);
+  await s.mini.append('O', 1, 1, 300); // Mac mini's one old, small row
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 1, 5_000); // the moved row, in between
+  await s.mini.append('O', 2, 10, 2_000); // Mac mini's newer history
+  await withCaps({ messageBytes: usage(s, MINI).messageBytes }, async () => {
+    await s.move('T', MINI, s.cloud, s.mini);
+    // The old small row gave way, but no newer one did: the moved row, older than them, went instead.
+    assert.deepEqual(s.rows('messages').filter((r) => r.threadId === 'O').map((r) => r.seq).sort((a, b) => a - b), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert.equal(s.rows('messages').filter((r) => r.threadId === 'T').length, 0);
+    assert.ok(usage(s, MINI).messageBytes <= CAP.messageBytes);
+    assert.equal(usage(s, MINI).messageBytes, held(s, 'messages', MINI));
+    assert.equal(usage(s, CLOUD).messageBytes, 0);
+  });
+});
+
+// Gemini, round two: a record of 0 bytes (an older move's) stayed free.
+test("a picture's record of 0 bytes is charged at its size when it moves on", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 1, 100);
+  await s.cloud.picture('T', 'pic', 100_000);
+  const rec = s.rows('storageOwners').find((o) => o.storageId === 'pic')!;
+  await s.ctx.db.patch(rec._id, { bytes: 0 });
+  await s.move('T', MINI, s.cloud, s.mini);
+  assert.ok(s.rows('storageOwners').find((o) => o.storageId === 'pic')!.bytes >= 64 * 1024);
+});
