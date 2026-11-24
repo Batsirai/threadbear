@@ -453,9 +453,6 @@ pub(crate) struct ReviewWindow {
     tabs_follow: Option<usize>,
     /// The review as a board (the `reviewCanvas` experiment, canvas.rs).
     pub(crate) canvas: Option<canvas::CanvasState>,
-    /// A clip or page double-clicked on the board, on the stage to play,
-    /// until Esc or Back to the board.
-    canvas_closer: Option<(usize, usize)>,
     /// The reply box on screen, from its last paint, for scripts that click
     /// in it.
     reply_box: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
@@ -565,7 +562,6 @@ impl ReviewWindow {
             tabs_scroll: ScrollHandle::new(),
             tabs_follow: None,
             canvas: parts.canvas.then(canvas::CanvasState::new),
-            canvas_closer: None,
             reply_box: Default::default(),
             closed: false,
             _poll: poll,
@@ -966,17 +962,13 @@ impl ReviewWindow {
             self.canvas_everything(cx);
             return;
         }
-        if self.canvas_closer.take().is_some() {
-            cx.notify();
-            return;
-        }
         self.session.show_all();
         self.after_move(cx);
     }
 
     /// The board is what's on show, not a clip or page on the stage.
     pub(crate) fn on_canvas(&self) -> bool {
-        self.canvas.is_some() && self.canvas_closer.is_none()
+        self.canvas.is_some()
     }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
@@ -1432,6 +1424,13 @@ impl Render for ReviewWindow {
                 .session
                 .shown_shot()
                 .is_some_and(|s| s.page().is_some());
+        // On the board, the page is the one playing there (canvas_player).
+        let page_shown = if self.on_canvas() {
+            self.canvas_playing_shot()
+                .is_some_and(|s| s.page().is_some())
+        } else {
+            page_shown
+        };
         if !page_shown {
             self.stage.page = None;
         }
@@ -1893,6 +1892,14 @@ pub(crate) async fn automation(
                 if let Some(on) = cmd["canvasNotes"].as_bool() {
                     if v.canvas.as_ref().is_some_and(|c| c.notes_on != on) {
                         v.toggle_notes(cx);
+                    }
+                }
+                // The board flown to an option, by its id, as a click on its
+                // name does.
+                if let Some(id) = cmd["canvasGo"].as_str() {
+                    let at = v.session.review().options.iter().position(|o| o.id == id);
+                    if let Some(at) = at {
+                        v.canvas_go_option(at, cx);
                     }
                 }
                 if let Some(mark) = cmd["canvasMark"].as_object() {

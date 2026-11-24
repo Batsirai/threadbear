@@ -55,7 +55,7 @@ pub(crate) struct StageState {
     /// its file and its view, dropped once another shot shows.
     pub(crate) page: Option<(String, Rc<threadbear_web::PanelPage>)>,
     /// Why the page shot on show couldn't show in place, by its file.
-    page_failed: Option<(String, String)>,
+    pub(super) page_failed: Option<(String, String)>,
     /// What the page is waiting for (the runtime), for the dump.
     page_waiting: Option<String>,
     /// The web runtime watched, so the stage draws again as it starts.
@@ -635,7 +635,7 @@ impl ReviewWindow {
     /// The page's view, placed where it's drawn each frame, or None while the
     /// web runtime isn't running here or the gate won't show the file: then
     /// the still and Open the page, as before.
-    fn stage_page(
+    pub(super) fn stage_page(
         &mut self,
         path: &str,
         window: &mut Window,

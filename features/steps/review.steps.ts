@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 const DEMO_REVIEW = 'review_account_picker';
 /** The review each scenario opened: the demo's unless it made another. */
 const opened = new WeakMap<ThreadbearWorld, string>();
-const reviewId = (world: ThreadbearWorld) => opened.get(world) ?? DEMO_REVIEW;
+export const reviewId = (world: ThreadbearWorld) => opened.get(world) ?? DEMO_REVIEW;
 
 type ReviewState = {
   id: string;
