@@ -128,9 +128,75 @@ asks the helper. The server
 treats a connection as the owner only once the lookup has said so (or it has no
 lookup at all, as in tests); an undefined caller is otherwise refused at the gate.
 A process that has lost its parents (a `nohup`, a backgrounded subshell) still
-counts if it's in a process group a thread's tool command ran in, as the
+counts if it, or a parent it still has, is in a process group a thread's tool command ran in, as the
 registry has noted them, or on Linux in the session its CLI leads (the runner
-starts each CLI in a session of its own). One that deliberately starts a new session and reads
+starts each CLI in a session of its own). **Another runner's thread.** A
+runner's registry knows only its own threads, so a connection it finds under
+none of them isn't yet under no thread at all: a thread of another runner on
+the same Mac (the live runner and a dev runner) could point `tb` at this
+runner's data dir, where tb drops its key and reads this runner's token, and
+used to be taken as the owner (Daybreak finding 177). So the runner also reads
+environments: for a holder it finds under one of its threads' CLIs, those of
+the processes between the holder and that CLI; for one it finds under none
+(or only by its group or session), those of the holder and each of its
+parents, and of their process groups' leaders (on Linux their sessions' too)
+and theirs: on a Mac with `/bin/ps eww`, less what
+`/bin/ps -ww` shows as the arguments (so a prompt that mentions a key isn't
+one), on Linux from `/proc/<pid>/environ`, entry by entry, so a value that mentions
+one isn't one (a Mac's line can't be split so: a value there that mentions a
+key or id reads as one, which only refuses more, except an empty key beside a
+thread id with no key, which only that process's own environment could hold). It looks for thread keys
+(`THREADBEAR_THREAD_KEY`, which every thread's CLI is started with and which
+nothing it runs can change in the CLI) and thread ids
+(`THREADBEAR_THREAD_ID`, which a CLI started before thread keys has alone;
+the old `THREADBARE_` names of both count too). Under one of its threads' CLIs, every key
+there must be that thread's and every id its id (or ones this runner was
+started under): a thread of a dev runner that this runner's thread started
+has its own CLI nearer, so it's turned away rather than given the starting
+thread's access. Under none, a key this runner made for one of its own
+threads (for a thread id beside it in the same environment) makes the
+connection that thread, and every other id beside a key must be that
+thread's or one this runner was started under (an older runner's CLI that
+kept a key it inherited beside its own thread's id is no pass): a process that left its CLI's tree with its key on
+it, as `tb land`'s worker does on a Mac, gets the thread's limits rather than
+the owner's (two such threads' keys close it, as holders under two threads
+do; on Linux that worker is still in the session of the shell that started
+it, whose leader has gone, so it's no answer, as before). Any other key
+that isn't one this runner was itself started under, or, in an environment
+with no key, an id this runner wasn't started under, unless the key's
+variable is there but empty and the runner is itself above the holder or has
+that thread (a patch's action or a worktree's setup a runner
+started has its thread's id and an empty key, may have left its tree, as the
+Land chip's `tb land` worker does or one under a draining runner, and is
+yours, trusted to read the token anyway; a CLI from before thread keys has
+no key variable at all, so a draining older runner's thread, or a live
+thread a `--clone-real` copy knows the id of, gets no pass),
+closes the connection with 4403 (`under another runner's thread`), and so
+does an environment with more than 4 keys or 8 ids, which no CLI's has. A
+look that fails, runs out of time, or finds a process gone before its
+environment was read closes it with 4503. A process the kernel won't show
+(another user's; on Linux one that made itself undumpable, as ssh's session
+process does; on a Mac one of Apple's own programs, such as a shell) reads
+as having none: no thread's CLI is any of them. A group's or session's
+leader that has gone is passed over: on Linux a holder whose session's leader
+has gone is already no answer, but on a Mac a process whose thread's shell
+has exited and that has wiped its own environment leaves nothing to say
+whose it was, so it passes another runner's check (its own runner still
+finds it by the group its tool command ran in), which is the same-user
+boundary in `SECURITY.md`. The keys and ids a runner was started under are
+its own environment's and its parents' (and their leaders'), read once as it
+starts: a dev runner started from a thread's shell (`dev-runner.sh` passes
+the key and id on) takes that thread, and anything under it, as its owner,
+since the thread could have started it anyway, and then takes them out of
+its own environment so what it starts doesn't carry them; a runner started by launchd,
+systemd, a terminal or the app has none. So a thread of runner A gets
+nothing on runner B unless it started B: it's refused, never given B's owner
+(it can't be given its own limits there, as B doesn't have the thread).
+Windows can't read another process's environment, so a Windows runner
+can't make this check: there tb asks first instead (a thread's tb pointed at
+another runner's data dir goes ahead only once its own runner, asked with
+its key, says it's on Full access), which a thread that wipes its own
+environment gets round, as with the rest of the same-user boundary on Windows below. One that deliberately starts a new session and reads
 the token can still pass as the owner, which is why outside Full access
 Claude's file and shell tools are denied the runner's `secrets` folder as well;
 that deny is defence in depth (`SECURITY.md` says what's out of scope). A
@@ -138,9 +204,15 @@ draining runner's own server applies all of this too. `tb runner`
 uses this Mac's keys from disk, so the runner never sees them. Before using them
 it looks at its own environment and each parent's (`/bin/ps eww` on a Mac,
 `/proc/<pid>/environ` on Linux, never a `ps` on `PATH`) for thread keys, with
-three answers (Daybreak finding 174), and looks at its process group's leader and,
-on Linux, its session's leader as well, which a process that left its parents
-behind keeps. A terminal (no thread key in any of them): the runner is asked, at
+three answers (Daybreak finding 174; under a CLI from before thread keys, an id
+with no key variable, it can't tell), and looks at the process group's leader
+and, on Linux, the session's leader of it and of each parent, with each
+leader's own parents (a Mac's tool shell shows no environment, so its CLI
+above it does), which a process that left its parents behind keeps; its own
+session's leader that has gone is no answer, and so is a group's for a
+process orphaned in it, while a terminal pipeline whose first command has
+exited still has its parents. It reads the environment as the runner does
+(arguments taken off on a Mac, entry by entry on Linux, the old names too). A terminal (no thread key in any of them): the runner is asked, at
 the port in its `runner.json` (never `THREADBEAR_URL` or `THREADBEAR_PORT`),
 whether it's a limited thread after all; refused if it says so, allowed if it says
 not or if nothing at all is listening there (the runner stopped); a runner that's
@@ -163,9 +235,9 @@ matched) is a failed look even if it printed something, and on Linux the runner
 reads its process table from `/proc` as well, so needs neither `lsof` nor `ps`. A
 parent missing from the table (other than on Windows, which keeps dead parents'
 ids), or a draining runner's recorded CLI whose start can't be read, is no answer
-either, and a connection hears no broadcasts until its lookup is done. A CLI started by a runner older
-than this has no key and isn't recorded with its thread, so it keeps the old
-`tb` until its next start.
+either, and a connection hears no broadcasts until its lookup is done. A CLI started before thread keys
+has no key and isn't recorded with its thread, so its `tb` is turned away
+(4403, as an id with no key beside it) until its next start.
 
 **No browsers.** An upgrade with an `Origin` header is turned away with HTTP
 403 before anything else is looked at. Browsers always send one on a

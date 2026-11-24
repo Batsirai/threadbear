@@ -14,7 +14,7 @@ import { MAX_BYLINE } from './needs.ts';
 import { isMoved, mergeSummaries, type Bucket } from './handover.ts';
 import { AUTH_VERSION, authProof, isNonce, isThreadId, newNonce, proofMatches, threadKey, type AuthChannel } from './rpc-auth.ts';
 import type { CallerGate } from './rpc-gate.ts';
-import type { PeerCaller, PeerSocket } from './peer.ts';
+import { ForeignPeer, type PeerCaller, type PeerSocket } from './peer.ts';
 import { cutSafely } from './safe-cut.ts';
 import { wellFormedJson } from './well-formed-json.ts';
 import { fetchPr, fetchPrFiles, forgetStates, parsePrUrl, prAct, prStates, type PrAction, type PrRef } from './github-pr.ts';
@@ -384,7 +384,9 @@ export class RpcServer {
   // nobody holding the socket) closes the connection too, on every system,
   // the owner token's and a key's alike: an unplaced owner token used to be
   // taken as the owner, which a thread with its key wiped could ride
-  // (Daybreak finding 175). The app and tb connect again.
+  // (Daybreak finding 175). The app and tb connect again. One under another
+  // runner's thread, nearer than any of this runner's (ForeignPeer), closes
+  // with 4403 (Daybreak finding 177).
   private unlock(conn: Conn, keyThread?: string): void {
     conn.caller = keyThread;
     const find = this.opts.callerOf;
@@ -421,6 +423,9 @@ export class RpcServer {
           else if (keyThread === undefined) conn.owner = true;
         })
         .catch((e) => {
+          // Under another runner's thread (Daybreak finding 177): no use
+          // trying again, so 4403, not 4503.
+          if (e instanceof ForeignPeer) return this.dropConn(conn, 4403, "under another runner's thread");
           this.opts.log.warn('could not tell which thread an RPC client is; closing it', { conn: conn.id, error: String(e) });
           this.dropConn(conn, 4503, 'could not tell which process connected');
         })

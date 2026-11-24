@@ -371,6 +371,15 @@ File references are where to look.
   which process it is and whether it's under a thread's CLI (on Linux it
   reads `/proc` instead of running `lsof`), and closes it if it can't tell
   (`runner/src/peer.ts`, docs/protocol/connection.md "Who's really calling").
+  The runner also reads the environments of that process and the ones
+  above it, up to its thread's CLI or, under none, all the way (`/bin/ps
+  eww` and `/bin/ps -ww`, to leave the arguments out, or
+  `/proc/<pid>/environ` on Linux), for another runner's thread, and reads
+  its own parents' the same way once as it starts. It looks only for
+  `THREADBEAR_THREAD_KEY` and `THREADBEAR_THREAD_ID` (and their old
+  `THREADBARE_` names), keeps nothing from a connection's, and keeps the
+  ones its own parents had (a dev runner's starting thread) in memory while
+  it runs, taking them out of its own environment.
   `tb runner` runs `/bin/ps` (or reads `/proc/<pid>/environ` on Linux) on
   its own parents to see whether it's in a thread's shell
   (`runner/src/tb-connect.ts`).
