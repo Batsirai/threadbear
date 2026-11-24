@@ -786,6 +786,8 @@ impl Threadbear {
             out.push(
                 div()
                     .id(SharedString::from(format!("canvas-area-{key}")))
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(format!("Spotlight {}", area.title)))
                     .absolute()
                     .left(gpui_kit::px(s.x - 6.))
                     .top(gpui_kit::px(s.y - size * 2.))
@@ -873,6 +875,8 @@ impl Threadbear {
         let button = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
+                .role(Role::Button)
+                .aria_label(label)
                 .px(gpui_kit::px(10.))
                 .py(gpui_kit::px(4.))
                 .rounded(gpui_kit::px(8.))
@@ -929,6 +933,8 @@ impl Threadbear {
                 let on = running(&e.id);
                 div()
                     .id(SharedString::from(format!("canvas-strip-{}", e.id)))
+                    .role(Role::Button)
+                    .aria_label(SharedString::from(format!("Open {}", e.title)))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -1022,6 +1028,7 @@ impl Threadbear {
         });
         if let Some(f) = &page.focus {
             window.focus(f, cx);
+            crate::web_panels::keyboard_to_app(window);
         }
         cx.notify();
     }
