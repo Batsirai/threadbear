@@ -953,6 +953,10 @@ impl ThreadPane {
             }
         };
         state.update(cx, |s, cx| s.set_text(text, cx));
+        // Its matches marked while the find bar is up (thread/find.rs).
+        if self.find.is_some() {
+            self.mark_reply(key, &state, cx);
+        }
         state
     }
 

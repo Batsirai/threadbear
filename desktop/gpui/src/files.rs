@@ -1792,12 +1792,20 @@ impl SidePane {
             thread_id.to_owned(),
             thread_id.to_owned(),
         );
+        let find_key = find.clone();
         el.key_context(crate::file_find::CONTEXT)
             .on_action(cx.listener(
                 move |this, _: &gpui_kit::component::input::Search, window, cx| {
                     this.open_find(&find, window, cx)
                 },
             ))
+            // The app's ⌘F (Find in Thread) is this file's while it has the
+            // keys: the thread's find bar is for the thread.
+            .on_action(
+                cx.listener(move |this, _: &crate::shell::FindInThread, window, cx| {
+                    this.open_find(&find_key, window, cx)
+                }),
+            )
             .on_action(cx.listener(move |this, _: &FindNext, window, cx| {
                 this.find_again(&next, false, window, cx)
             }))

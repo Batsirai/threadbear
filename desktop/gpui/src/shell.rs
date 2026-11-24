@@ -393,6 +393,7 @@ actions!(
         CollapseThreads,
         ToggleSidebarPanels,
         AttachFiles,
+        FindInThread,
         ToggleFrameRate,
         AboutApp,
         RestartToUpdate,
@@ -553,6 +554,11 @@ commands!(
         Some(ShortcutCommand::ToggleSidebarPanels)
     ),
     (AttachFiles, AttachFiles, Some(ShortcutCommand::AttachFiles)),
+    (
+        FindInThread,
+        FindInThread,
+        Some(ShortcutCommand::FindInThread)
+    ),
     (ToggleFrameRate, ToggleFrameRate, None),
     (About, AboutApp, None),
     (RestartToUpdate, RestartToUpdate, None),
@@ -1029,6 +1035,13 @@ impl Threadbear {
             Command::CopyTranscript => {
                 if let Some(pane) = self.focused_panel_pane(window, cx).or(self.pane.clone()) {
                     pane.update(cx, |p, cx| p.copy_transcript(cx));
+                }
+            }
+            // Only from outside a thread (a thread's pane and a file in the
+            // pane take ⌘F themselves): the main panel's thread.
+            Command::FindInThread => {
+                if let Some(pane) = self.focused_panel_pane(window, cx).or(self.pane.clone()) {
+                    pane.update(cx, |p, cx| p.open_find(window, cx));
                 }
             }
             Command::Back => self.go_back(window, cx),
@@ -1782,6 +1795,8 @@ impl Threadbear {
                     edit(E::PasteAndMatchStyle),
                     edit(E::Delete),
                     edit(E::SelectAll),
+                    Separator,
+                    item("Find in Thread…", Command::FindInThread).enabled(has_thread),
                 ]
             }),
             TopMenu::new(

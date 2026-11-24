@@ -731,6 +731,30 @@ fn step(
         "terminal" => crate::terminal::automation(app, cmd, window, cx),
         // As the Swift app's: the window in front and key, for pictures on a
         // desktop of what only draws there (its Terminal's text).
+        // The find bar over the open thread (thread/find.rs): `find` types
+        // the words, `next`, `previous` and `done` press ›, ‹ and Done.
+        "threadFind" => {
+            let pane = app.read(cx).pane.clone().ok_or("no thread open")?;
+            pane.update(cx, |p, cx| {
+                if let Some(query) = cmd["find"].as_str() {
+                    p.find_typed(query, window, cx);
+                }
+                if cmd["next"].as_bool() == Some(true) {
+                    p.find_again(false, window, cx);
+                }
+                if cmd["previous"].as_bool() == Some(true) {
+                    p.find_again(true, window, cx);
+                }
+                if cmd["done"].as_bool() == Some(true) {
+                    p.close_find(window, cx);
+                }
+            });
+            let line = pane.read(cx).find_dump().map_or_else(
+                || "no find bar".to_owned(),
+                |d| d["line"].as_str().unwrap_or_default().to_owned(),
+            );
+            Ok(json!(format!("ok {line}")))
+        }
         "front" => {
             cx.activate(true);
             window.activate_window();

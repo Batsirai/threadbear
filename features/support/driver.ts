@@ -110,6 +110,8 @@ export type Dump = {
     hasMoreAbove?: boolean;
     /** The spinner in the middle while it's read (the GPUI app's; the Swift dump has only `state`). */
     spinner?: boolean;
+    /** The find bar over the transcript while it's up (GPUI only): its line ("upload: 2 of 5") and the row with the picked match. */
+    threadFind?: { line: string; row: string | null } | null;
     rows: Row[];
   };
   banner?: { style: string; text: string; detail?: string } | null;

@@ -161,6 +161,18 @@ to the step it's about: click
 it and the work opens there, with that step lit up. A link to another
 thread opens that thread.
 
+To find something said earlier, press ⌘F (Ctrl-F on Windows and Linux) in
+the new desktop app: a find bar comes up over the thread and counts the
+matches as you type. Return or ⌘G goes to the next one and Shift-Return or
+⇧⌘G to the one before, going round at either end; Escape or Done closes it.
+It finds words in the work too, so a match in a command's output or a
+thought opens that line, and the "Worked for" line it's folded into, and
+folds them again when you move on. Matches in a reply are marked in its
+words, and a bar beside the row says which one you're on. It searches the
+part of the thread that's loaded: going back past the first match loads
+the earlier part. With a file showing in the pane and clicked into, ⌘F
+finds in the file instead.
+
 An agent can draw a diagram or a small page in its reply: a ```` ```mermaid ````
 block shows as the diagram (drawn with [Pele](https://pele.run/), in
 Threadbear's colours, light or dark), and an ```` ```html ```` block as the
@@ -1887,6 +1899,7 @@ key:
 - Stop: `stop`, ⌘.
 - Copy Transcript as Markdown: `copyTranscript`, ⇧⌘C
 - Attach Images or Markdown (the new desktop app only): `attachFiles`, ⇧⌘A, opens the message box's + > Attach images or Markdown… picker
+- Find in Thread (the new desktop app only): `findInThread`, ⌘F, in the Edit menu; ⌘G and ⇧⌘G then go to the next and previous match
 - Back: `back`, ⌘[
 - Forward: `forward`, ⌘]
 - Next Inbox Thread: `nextInboxThread`, ⌥⌘↓

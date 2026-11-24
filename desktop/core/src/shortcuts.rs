@@ -211,11 +211,14 @@ pub enum ShortcutCommand {
     /// ⇧⌘A opens the message box's "Attach images or Markdown…" picker. The
     /// GPUI app's own.
     AttachFiles,
+    /// ⌘F with a thread showing: the find bar over its transcript. A file
+    /// in the pane keeps ⌘F for its own find bar. The GPUI app's own.
+    FindInThread,
     Settings,
 }
 
 impl ShortcutCommand {
-    pub const ALL: [ShortcutCommand; 29] = [
+    pub const ALL: [ShortcutCommand; 30] = [
         Self::NewThread,
         Self::Archive,
         Self::Hibernate,
@@ -244,6 +247,7 @@ impl ShortcutCommand {
         Self::CollapseThreads,
         Self::ToggleSidebarPanels,
         Self::AttachFiles,
+        Self::FindInThread,
         Self::Settings,
     ];
 
@@ -277,6 +281,7 @@ impl ShortcutCommand {
             Self::CollapseThreads => "collapseThreads",
             Self::ToggleSidebarPanels => "toggleSidebarPanels",
             Self::AttachFiles => "attachFiles",
+            Self::FindInThread => "findInThread",
             Self::Settings => "settings",
         }
     }
@@ -315,6 +320,7 @@ impl ShortcutCommand {
             Self::CollapseThreads => "Collapse Threads",
             Self::ToggleSidebarPanels => "Show Sidebar Panels",
             Self::AttachFiles => "Attach Images or Markdown",
+            Self::FindInThread => "Find in Thread",
             Self::Settings => "Settings…",
         }
     }
@@ -349,6 +355,8 @@ impl ShortcutCommand {
             Self::ToggleSidebarPanels => Some(ShortcutKey::with("b", false, false, true)),
             // A for attach; ⌘U and ⌘O stay free for formatting and opening.
             Self::AttachFiles => Some(ShortcutKey::with("a", false, false, true)),
+            // Every editor's and browser's key for finding words.
+            Self::FindInThread => Some(ShortcutKey::new("f")),
             Self::Hibernate
             | Self::ShowHibernating
             | Self::ShowArchived
@@ -534,7 +542,7 @@ mod tests {
             unique.len(),
             "two commands can't start on one key"
         );
-        assert_eq!(ShortcutCommand::ALL.len(), 29);
+        assert_eq!(ShortcutCommand::ALL.len(), 30);
         // The Swift app's names and keys, as both apps read shortcuts.json.
         assert_eq!(
             ShortcutCommand::from_name("previousTab"),

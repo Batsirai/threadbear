@@ -301,6 +301,8 @@ impl ThreadPane {
                 crate::selection_bar::pressed(self.summary.id.clone(), &row),
             )
             .children(glow)
+            // The row with the find bar's picked match (thread/find.rs).
+            .children(self.find_rail(&row.id, cx))
             .child(body)
             .context_menu(move |menu, window, cx| {
                 // An open tool or thinking row says Collapse, as a group does.
