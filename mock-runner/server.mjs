@@ -163,6 +163,18 @@ if (process.env.TB_MOCK_REVIEWERS) {
     { id: 'opencode-main', provider: 'opencode', title: 'OpenCode', configDir: '~/.config/opencode', models: [{ id: 'google/gemini-4-neon', model: 'google/gemini-4-neon', title: 'google/gemini-4-neon', effortLevels: ['low', 'medium', 'high'] }, { id: 'zai/glm-5', model: 'zai/glm-5', title: 'zai/glm-5' }] },
   ];
 }
+// TB_MOCK_GROK_OUT: a Grok login with the reading Grok's _x.ai/billing gave
+// Mike's on 24 Nov 2026 (the week's share used up, back when it resets), for
+// pictures of the Usage panel's Grok row. Off by default so the design set
+// stays as it was.
+if (process.env.TB_MOCK_GROK_OUT) {
+  const grokOut = {
+    id: 'grok-main', provider: 'grok', title: 'Grok', configDir: '~/.grok', plan: 'X Premium+',
+    models: [{ id: 'grok-4.7', model: 'grok-4.7', title: 'Grok 4.7', effortLevels: ['low', 'medium', 'high', 'xhigh'] }],
+    usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: hoursFromNow(23) }], readAt: new Date().toISOString(), source: 'live', blocked: true },
+  };
+  accounts = [...accounts.filter((a) => a.id !== 'grok-main'), grokOut];
+}
 // TB_MOCK_SIGN_INS: claude-4 signed out and claude-3's sign-in ending in two
 // days, for pictures of the Usage panel's sign-in lines (docs/protocol/settings.md,
 // Pools, "Signed out"). Off by default so the design set stays as it was.

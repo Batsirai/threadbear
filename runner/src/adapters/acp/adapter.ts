@@ -117,7 +117,10 @@ export function withoutHookNote(call: AcpToolCall, meta: unknown): AcpToolCall {
 
 function notFound(e: unknown): boolean {
   if (e instanceof AcpRpcError && e.code === -32002) return true;
-  return /not found|no such session|does not exist/i.test(e instanceof Error ? e.message : String(e));
+  // The agent's own message only: a reason from an error's data (a file
+  // "not found" behind an "Internal error") isn't the session gone.
+  const said = e instanceof AcpRpcError ? (e.rpcMessage ?? '') : e instanceof Error ? e.message : String(e);
+  return /not found|no such session|does not exist/i.test(said);
 }
 
 type Limits = Extract<AdapterOutput, { kind: 'limits' }>;
