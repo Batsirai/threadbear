@@ -102,7 +102,7 @@ test('a flood of tags upstream costs a check a few reads, once', async () => {
   git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
   let reads = 0;
   const { gitBytes } = await import('../../src/upstream.ts');
-  const up = upstreamFor(w.theirs, w.home, new FakeClock(LATER), { gitBytes: (cwd: string, args: string[]) => (reads++, gitBytes(cwd, args)) });
+  const up = upstreamFor(w.theirs, w.home, new FakeClock(LATER), { gitBytes: (cwd: string, args: string[]) => (args[1] === 'tag' && reads++, gitBytes(cwd, args)) });
   // 25 fakes dated after it: 20 a check, then the real one.
   let s = await up.check();
   assert.equal(reads, 20);
@@ -159,7 +159,7 @@ test('a huge tag is turned down unread, and one an older runner left is taken ou
   git(w.mike, 'push', '-q', 'origin', 'main', 'refs/tags/release/2026-11-04');
   let reads = 0;
   const { gitBytes } = await import('../../src/upstream.ts');
-  const s = await upstreamFor(w.theirs, w.home, new FakeClock(LATER), { gitBytes: (cwd: string, args: string[]) => (reads++, gitBytes(cwd, args)) }).check();
+  const s = await upstreamFor(w.theirs, w.home, new FakeClock(LATER), { gitBytes: (cwd: string, args: string[]) => (args[1] === 'tag' && reads++, gitBytes(cwd, args)) }).check();
   assert.equal(s.release?.commit, real, s.reason ?? '');
   assert.equal(kept(w.theirs, '2026-11-05'), '');
   assert.ok(reads <= 3);
@@ -232,14 +232,15 @@ for (const when of ['list', 'fetch'] as const) {
     const w = world();
     // The usual deadline for the first check, which a busy Mac can need; a
     // short one only for the hang (Upstream reads it at each git call).
-    const deps = { home: w.home, checkout: w.theirs, clock: new FakeClock(LATER), log: nullLogger, fetchTimeoutMs: undefined as number | undefined };
+    const deps = { home: w.home, checkout: w.theirs, clock: new FakeClock(LATER), log: nullLogger, localRemotes: true, fetchTimeoutMs: undefined as number | undefined, uploadPack: undefined as string | undefined };
     const up = new Upstream(deps);
     assert.equal((await up.check()).release?.tag, 'release/2026-10-01');
     fs.rmSync(path.join(w.root, 'calls'), { force: true });
     commit(w.mike, 'b.txt', 'Newer');
     signedTag(w.mike, 'release/2026-11-06', w.mikeKey.priv);
     git(w.mike, 'push', '-q', 'origin', 'main', '--tags');
-    const pids = hangingUpstream(w, when);
+    const hang = hangingUpstream(w, when);
+    deps.uploadPack = hang.uploadPack;
     const before = objectsIn(w.theirs);
     // Long enough for a busy Mac to reach the hang before the deadline.
     deps.fetchTimeoutMs = 3000;
@@ -251,7 +252,7 @@ for (const when of ['list', 'fetch'] as const) {
     assert.equal(s.release?.tag, 'release/2026-10-01', 'keeps the release it knew of');
     await new Promise((r) => setTimeout(r, 200));
     // And it did hang, rather than fail some other way before it got there.
-    const hung = pids();
+    const hung = hang.pids();
     assert.ok(hung.length > 0, 'the upstream hung');
     for (const pid of hung) assert.ok(!alive(pid), `pid ${pid} still running`);
     assert.deepEqual([...objectsIn(w.theirs)].filter((o) => !before.has(o)), []);

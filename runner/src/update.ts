@@ -26,7 +26,7 @@ import type { UpdateFailure } from './fix-update.ts';
 import { machineTrouble } from './machine-trouble.ts';
 import { cleanGitError, followOrigin as fetchAndFollowOrigin, oldestMissingAt, type OriginResult } from './follow-origin.ts';
 import { LAND_TIMES_FILE } from './land-queue.ts';
-import { FETCH_TIMEOUT_MS, gitAsync as gitWithin, repoKey } from './upstream.ts';
+import { FETCH_TIMEOUT_MS, fetchableUrl, gitAsync as gitWithin, repoKey, UPLOAD_PACK } from './upstream.ts';
 
 export const CHECK_INTERVAL_MS = 5 * 60_000;
 // After main's ref changes in the checkout (a commit or merge landing), the
@@ -502,8 +502,13 @@ export async function onMikesMain(checkout: string, commit: string): Promise<str
     }
     if (repoKey(url) !== MIKES_REPO) continue;
     const main = `refs/remotes/${remote}/main`;
+    // By its URL, as the release check fetches (upstream.ts, release git):
+    // none of the remote's own settings in this checkout's config (an
+    // uploadpack, a remote helper) run.
+    const from = fetchableUrl(url);
+    if (!from) continue;
     try {
-      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', remote, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS });
+      await gitWithin(checkout, ['fetch', '--quiet', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', UPLOAD_PACK, from, `+refs/heads/main:${main}`], { timeoutMs: FETCH_TIMEOUT_MS, network: 'remote' });
       await gitWithin(checkout, ['merge-base', '--is-ancestor', commit, main]);
       return `${remote}/main has this commit, and a landing's check passed them there`;
     } catch {

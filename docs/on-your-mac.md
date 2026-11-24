@@ -671,7 +671,9 @@ File references are where to look.
   every 2 minutes and lets go on battery below 15%.
 - **Mike's releases** (`runner/src/upstream.ts`): every 6 hours (15 minutes
   after a look that failed) it lists
-  `upstream`'s `release/*` tags, fetches the newest few into a folder of
+  `upstream`'s `release/*` tags (at its https or ssh address, with git told
+  to run nothing your checkout's own git config names and to read no system
+  or global config), fetches the newest few into a folder of
   their own (`<home>/runner/upstream-fetch`, deleted after each check),
   checks each with `ssh-keygen -Y verify` against the pinned key (the
   signature goes in a temp file under `$TMPDIR` for a moment), fetches

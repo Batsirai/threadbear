@@ -71,7 +71,8 @@ it (section 4).
 Then settle the clashes before you ask, so a go goes straight to the
 checks (Ville Lahdenvuo-Malta, 22 Nov 2026: about 5 minutes of a 35-minute
 bring-in was settling clashes after go). Run the preview again with a new
-folder of this thread's own, outside every checkout:
+folder of this thread's own, outside every checkout (even when it merges
+cleanly: the merge after go uses that folder):
 
 ```sh
 scripts/merge-preview.sh --prepare "${TMPDIR:-/tmp}/tb-bring-in-<thread id>" <commit>
@@ -106,8 +107,8 @@ but git's objects.
 ## 4. Once they say go: merge, settle clashes, check
 
 Threads in this repo get a worktree of their own (docs/thread-worktrees.md),
-so main doesn't move until you land. With the clashes settled in a
-prepared folder (section 2), merge there with:
+so main doesn't move until you land. With the prepared folder (section 2),
+its clashes settled, merge there with:
 
 ```sh
 scripts/merge-prepared.sh "${TMPDIR:-/tmp}/tb-bring-in-<thread id>" -m "Bring in Mike's release <date>"
@@ -118,11 +119,20 @@ the settled files in. If main has moved on since, or a settled file still
 has markers, it changes nothing and says so: run the preview with
 `--prepare` again and settle only what's new. If git clashes in a file the
 preview didn't settle, it stops with the merge unfinished and names it:
-settle that in the worktree and `git commit --no-edit`. Without a prepared
-folder, merge there with:
+settle that in the worktree and `git commit --no-edit`.
+
+It merges the commit as its id names it: git's replacement objects and
+grafts (`refs/replace/`, `.git/info/grafts`) can have git read a different,
+unsigned commit in place of the one the signature covers, so the preview,
+this and `replay-over-format.sh --merge` refuse a checkout that has either,
+and read with both off (Daybreak, 24 Nov 2026). If one refuses, say so and
+ask before removing them (`git replace -d <id>`, or that file). Without a
+prepared folder (git older than 2.40, which the preview needs), check
+`git for-each-ref refs/replace/` prints nothing and `.git/info/grafts`
+isn't there, then merge with both off:
 
 ```sh
-git merge --no-ff -m "Bring in Mike's release <date>" <commit>
+GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git merge --no-ff -m "Bring in Mike's release <date>" <commit>
 ```
 
 Always a merge, never a rebase or a cherry-pick: Mike's commits have to

@@ -98,7 +98,7 @@ export function parseFormatList(text: string): FormatEntry[] {
 
 type Run = { ok: boolean; code: number; stdout: string; stderr: string };
 
-const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false'];
+const GIT_SAFE = ['-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'advice.graftFileDeprecated=false'];
 
 function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -106,7 +106,22 @@ function cleanEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   // And config handed down from a `git -c` or a hook, which would beat GIT_SAFE.
   for (const k of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_PARAMETERS', 'GIT_CONFIG_COUNT']) delete env[k];
   for (const k of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)) delete env[k];
-  return { ...env, GIT_TERMINAL_PROMPT: '0', ...extra };
+  // Replacement objects and grafts off, after the caller's: an id is that
+  // object, so a release's signed commit merges as itself, never what a
+  // refs/replace/ entry or info/grafts in this checkout puts in its place
+  // (Daybreak 180, 24 Nov 2026). --merge refuses a checkout with either.
+  return { ...env, GIT_TERMINAL_PROMPT: '0', ...extra, GIT_NO_REPLACE_OBJECTS: '1', GIT_GRAFT_FILE: '/dev/null' };
+}
+
+// Why a release can't be merged here as its id names it, or undefined: the
+// checkout has replacement refs or grafts (scripts/merge-preview.sh says
+// the same).
+export async function substitutes(cwd: string): Promise<string | undefined> {
+  const replaced = (await git(cwd, ['for-each-ref', '--count=1', '--format=%(refname)', 'refs/replace/'])).stdout.trim();
+  if (replaced) return `This checkout has git replacement refs (${replaced}), which could have git merge other objects in place of the release's: remove them (git replace -d) first.`;
+  const common = (await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir'])).stdout.trim();
+  if (common && fs.existsSync(path.join(common, 'info', 'grafts'))) return `This checkout has git grafts (${path.join(common, 'info', 'grafts')}), which could have git merge other history in place of the release's: remove that file first.`;
+  return undefined;
 }
 
 export function git(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Run> {
@@ -958,6 +973,11 @@ async function cli(argv: string[]): Promise<number> {
     }
     const mi = argv.indexOf('-m');
     const message = mi > 0 ? argv[mi + 1] : undefined;
+    const substituted = await substitutes(top);
+    if (substituted) {
+      say(substituted);
+      return 1;
+    }
     const r = await mergeAcross(top, target, { message, leave: true });
     for (const n of r.notes) say(n);
     if (r.ok) {

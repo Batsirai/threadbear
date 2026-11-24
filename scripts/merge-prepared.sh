@@ -15,13 +15,25 @@ usage='usage: scripts/merge-prepared.sh <dir> -m "<merge message>"'
 msg=$3
 [ -f "$1/base" ] && [ -f "$1/commit" ] || { echo "$1 isn't a folder scripts/merge-preview.sh --prepare made." >&2; exit 2; }
 dir=$(cd "$1" && pwd -P)
-[ -f "$dir/clashes" ] || { echo "$dir has no prepared clashes: merge with git merge as usual (docs/bringing-in-updates.md, section 4)." >&2; exit 2; }
+[ -f "$dir/clashes" ] || { echo "$dir has no prepared merge: run scripts/merge-preview.sh --prepare again, and if it says the release has a format commit, merge with scripts/replay-over-format.sh --merge (docs/bringing-in-updates.md, section 4)." >&2; exit 2; }
 base=$(cat "$dir/base")
 commit=$(cat "$dir/commit")
 for id in "$base" "$commit"; do
   case "$id" in ""|*[!0-9a-f]*) echo "$dir/base or $dir/commit isn't a commit id: run the preview with --prepare again." >&2; exit 2 ;; esac
 done
-cd "$(git rev-parse --show-toplevel)"
+top=$(git rev-parse --show-toplevel)
+cd "$top"
+# Replacement objects and grafts off, and a checkout with either refused:
+# git reads a refs/replace/ entry or info/grafts in place of the object an
+# id names, so the release's signed commit could merge as another, unsigned
+# one (Daybreak 180, 24 Nov 2026).
+export GIT_NO_REPLACE_OBJECTS=1
+unset GIT_GRAFT_FILE GIT_REPLACE_REF_BASE
+common=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)
+if [ -n "$(git -C "$top" for-each-ref --count=1 --format='%(refname)' refs/replace/)" ] || [ -e "$common/info/grafts" ]; then
+  echo "This checkout has git replacement refs (refs/replace/) or grafts ($common/info/grafts), which could have git read other objects in place of the release's: remove them (git replace -d, or that file) first." >&2
+  exit 1
+fi
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "The worktree has uncommitted changes: commit or drop them first." >&2; exit 1; }
 
 # Every settled file has no markers left before anything changes.

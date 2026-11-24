@@ -181,3 +181,60 @@ test('clashes settled before go go in with the merge', () => {
   assert.equal(git(repo, 'log', '-1', '--format=%s'), 'Bring it in');
   assert.equal(git(repo, 'status', '--porcelain'), '');
 });
+
+// Daybreak 180, 24 Nov 2026: a refs/replace/ entry or info/grafts in the
+// checkout has git read another commit in place of the release's signed one,
+// so a merge would take an unsigned tree under the signed id. The preview,
+// the prepared merge and the format replay refuse such a checkout, and their
+// git reads the release as itself; a clean preview merges with the same
+// helper as one with clashes.
+const REPLAY = path.join(import.meta.dirname, '../../../scripts/replay-over-format.sh');
+
+test("a replacement ref or grafts stop the preview, the merge and the format replay, which merge the release's own commit", () => {
+  const root = tmpDir('tb-preview-replace-');
+  const repo = path.join(root, 'r');
+  fs.mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  git(repo, 'config', 'core.autocrlf', 'false');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'base\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-qm', 'base');
+  const base = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'checkout', '-q', '-b', 'release');
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'signed\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-qm', 'signed');
+  const release = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'checkout', '-q', '-b', 'evil', base);
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'evil\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-qm', 'evil');
+  const evil = git(repo, 'rev-parse', 'HEAD');
+  git(repo, 'checkout', '-q', '-b', 'thread', 'main');
+  const run = (...args: string[]) => spawnSync(SHELL[0], args, { cwd: repo, encoding: 'utf8', env: ENV });
+  const prep = path.join(root, 'prep');
+  const preview = () => run(shPath(SCRIPT), '--prepare', shPath(prep), release);
+  const apply = () => run(shPath(PREPARED), shPath(prep), '-m', 'Bring it in');
+  const r = preview();
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(prep, 'clashes'), 'utf8'), '', 'a clean merge leaves an empty list');
+
+  git(repo, 'replace', release, evil);
+  for (const [what, out] of [['preview', preview()], ['merge', apply()], ['format replay', run(shPath(REPLAY), '--merge', release, '-m', 'Bring it in')]] as const) {
+    assert.notEqual(out.status, 0, what);
+    assert.match(out.stderr + out.stdout, /replacement refs/, what);
+  }
+  git(repo, 'replace', '-d', release);
+  fs.writeFileSync(path.join(repo, '.git', 'info', 'grafts'), `${release} ${evil}\n`);
+  for (const [what, out] of [['preview', preview()], ['merge', apply()], ['format replay', run(shPath(REPLAY), '--merge', release, '-m', 'Bring it in')]] as const) {
+    assert.notEqual(out.status, 0, what);
+    assert.match(out.stderr + out.stdout, /grafts/, what);
+  }
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), base, 'nothing merged');
+  fs.rmSync(path.join(repo, '.git', 'info', 'grafts'));
+
+  const done = apply();
+  assert.equal(done.status, 0, done.stderr + done.stdout);
+  assert.equal(git(repo, 'rev-parse', 'HEAD^2'), release);
+  assert.equal(fs.readFileSync(path.join(repo, 'b.txt'), 'utf8'), 'signed\n');
+});
