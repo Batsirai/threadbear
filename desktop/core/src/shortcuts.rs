@@ -197,6 +197,10 @@ pub enum ShortcutCommand {
     ToggleThreads,
     TogglePanels,
     ToggleTerminal,
+    /// ⌃`, a second key for the Terminal: VS Code's and Cursor's own (Mike,
+    /// 24 Nov: "command tilde usually opens up terminal"). Not ⌘`, which is
+    /// macOS's key for the app's next window.
+    ToggleTerminalAlso,
     ResetPanelLayout,
     /// ⌘/ folds the Threads panel away and back, keeping its place and width.
     CollapseThreads,
@@ -237,6 +241,7 @@ impl ShortcutCommand {
         Self::ToggleThreads,
         Self::TogglePanels,
         Self::ToggleTerminal,
+        Self::ToggleTerminalAlso,
         Self::ResetPanelLayout,
         Self::CollapseThreads,
         Self::ToggleSidebarPanels,
@@ -269,6 +274,7 @@ impl ShortcutCommand {
             Self::ToggleThreads => "toggleThreads",
             Self::TogglePanels => "togglePanels",
             Self::ToggleTerminal => "toggleTerminal",
+            Self::ToggleTerminalAlso => "toggleTerminalAlso",
             Self::ResetPanelLayout => "resetPanelLayout",
             Self::CollapseThreads => "collapseThreads",
             Self::ToggleSidebarPanels => "toggleSidebarPanels",
@@ -306,6 +312,7 @@ impl ShortcutCommand {
             Self::ToggleThreads => "Show Threads",
             Self::TogglePanels => "Show Panels",
             Self::ToggleTerminal => "Show Terminal",
+            Self::ToggleTerminalAlso => "Show Terminal (second key)",
             Self::ResetPanelLayout => "Reset Panel Layout",
             Self::CollapseThreads => "Collapse Threads",
             Self::ToggleSidebarPanels => "Show Sidebar Panels",
@@ -339,6 +346,13 @@ impl ShortcutCommand {
             Self::TogglePanels => Some(ShortcutKey::with("p", true, false, false)),
             // VS Code's and T3 Code's key for their terminal.
             Self::ToggleTerminal => Some(ShortcutKey::new("j")),
+            Self::ToggleTerminalAlso => Some(ShortcutKey {
+                key: "`".into(),
+                command: false,
+                option: false,
+                control: true,
+                shift: false,
+            }),
             Self::CollapseThreads => Some(ShortcutKey::new("/")),
             Self::ToggleSidebarPanels => Some(ShortcutKey::with("b", false, false, true)),
             // A for attach; ⌘U and ⌘O stay free for formatting and opening.
@@ -539,6 +553,18 @@ mod tests {
         assert_eq!(
             ShortcutCommand::OpenAnythingAlso.default_key(),
             Some(key("cmd+p"))
+        );
+        assert_eq!(
+            ShortcutCommand::ToggleTerminalAlso.default_key(),
+            Some(key("ctrl+`"))
+        );
+        assert_eq!(
+            ShortcutCommand::ToggleTerminalAlso.default_key().unwrap().chord(true),
+            "ctrl-`"
+        );
+        assert_eq!(
+            ShortcutCommand::from_name("toggleTerminalAlso"),
+            Some(ShortcutCommand::ToggleTerminalAlso)
         );
         assert_eq!(
             ShortcutCommand::CollapseThreads.default_key(),

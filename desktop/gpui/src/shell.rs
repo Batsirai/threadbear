@@ -387,6 +387,7 @@ actions!(
         ToggleThreads,
         TogglePanels,
         ToggleTerminal,
+        ToggleTerminalAlso,
         ResetPanelLayout,
         CollapseThreads,
         ToggleSidebarPanels,
@@ -529,6 +530,12 @@ commands!(
         ToggleTerminal,
         ToggleTerminal,
         Some(ShortcutCommand::ToggleTerminal)
+    ),
+    // ⌃`: the Terminal from a second key, with no menu item of its own.
+    (
+        ToggleTerminalAlso,
+        ToggleTerminalAlso,
+        Some(ShortcutCommand::ToggleTerminalAlso)
     ),
     (
         ResetPanelLayout,
@@ -1065,7 +1072,9 @@ impl Threadbear {
             Command::ActualSize => self.set_zoom(zoom::DEFAULT_PERCENT, window, cx),
             Command::ToggleThreads => self.toggle_threads_panel(cx),
             Command::TogglePanels => self.toggle_panels(cx),
-            Command::ToggleTerminal => crate::terminal::toggle(self, window, cx),
+            Command::ToggleTerminal | Command::ToggleTerminalAlso => {
+                crate::terminal::toggle(self, window, cx)
+            }
             Command::ResetPanelLayout => self.reset_panel_layout(cx),
             Command::CollapseThreads => self.toggle_threads_collapsed(cx),
             Command::ToggleSidebarPanels => self.toggle_sidebar_panels(cx),

@@ -61,6 +61,7 @@ pub fn group(command: ShortcutCommand) -> Group {
         | ShowScheduled | ShowProjects | ShowLibrarian | ShowHibernating | ShowArchived
         | Settings => Group::Go,
         ZoomIn | ZoomOut | ActualSize | ToggleThreads | TogglePanels | ToggleTerminal
+        | ToggleTerminalAlso
         | ResetPanelLayout | CollapseThreads | ToggleSidebarPanels => Group::View,
     }
 }

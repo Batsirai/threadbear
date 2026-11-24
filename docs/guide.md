@@ -1014,7 +1014,7 @@ started. Threadbear remembers your layout between launches.
 ### Terminal
 <!-- slug: terminal -->
 
-⌘J opens a terminal under the thread, and ⌘J again hides it. It's a real
+⌘J (or ⌃`, as in VS Code) opens a terminal under the thread, and the same key again hides it. It's a real
 one, with your login shell, its colours and full-screen programs like vim
 or htop, and it takes the keyboard as it opens. Each thread has a shell
 of its own, started in the thread's folder (its worktree, when it has
@@ -1926,7 +1926,7 @@ key:
 - Collapse Threads: `collapseThreads`, ⌘/
 - Show Sidebar Panels (the new desktop app only): `toggleSidebarPanels`, ⇧⌘B, closes Runners, Connectors, Updates, Usage and Setup and keeps the Threads list
 - Show Panels: `togglePanels`, ⌥⌘P
-- Show Terminal: `toggleTerminal`, ⌘J
+- Show Terminal: `toggleTerminal`, ⌘J, and `toggleTerminalAlso`, ⌃` (the new desktop app only), as VS Code has it
 - Reset Panel Layout: `resetPanelLayout`, no key
 
 In the file, a key is its modifiers and then the key, joined with `+`: `cmd`,
