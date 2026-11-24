@@ -97,6 +97,11 @@
 #                 again. tb land uses it to find which landing of a group
 #                 broke the group's check (THREADBEAR_CHECK_ONLY is the same
 #                 thing, for a check command it can't add options to).
+#   --part linux|mac  just the steps a Linux host can run (LINUX_STEPS in
+#                 scripts/check-remote.sh), or just the rest, which need a
+#                 Mac. check-remote.sh splits a landing's check this way
+#                 across a Linux and a Mac check host, run at the same time;
+#                 the steps of the other part print nothing.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -114,6 +119,7 @@ E2E=0
 SHOTS=""
 LOCAL=0
 ONLY=""
+PART=""
 # tb land runs whatever command the repo's patch names as its check, so it
 # asks for --only through the environment; from here on it's the option, which
 # is what reaches a check host.
@@ -153,6 +159,9 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] && [ -n "$2" ] || { echo "--only needs the steps to run" >&2; exit 2; }
       ONLY="$2"
       shift ;;
+    --part)
+      case "${2:-}" in linux|mac) PART="$2" ;; *) echo "--part takes linux or mac" >&2; exit 2 ;; esac
+      shift ;;
     -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
@@ -177,6 +186,23 @@ fi
 plain() {
   local LC_ALL=C
   [[ "$1" =~ $2 ]]
+}
+# --part: which steps a Linux host runs is check-remote.sh's list, which
+# also decides which host a run can go to, so the two can't differ. A step
+# the list doesn't name is a Mac's, so a new one runs on a Mac until it's
+# added there.
+LINUX_STEPS=""
+if [ -n "$PART" ]; then
+  LINUX_STEPS="$(sed -n "s/^LINUX_STEPS='\(.*\)'\$/\1/p" "$ROOT/scripts/check-remote.sh" 2>/dev/null | head -1)"
+  [ -n "$LINUX_STEPS" ] || { echo "--part needs LINUX_STEPS from scripts/check-remote.sh, and it isn't there." >&2; exit 2; }
+fi
+# in_part <step>: whether the step is this run's to run or skip (always,
+# without --part). The steps that install packages are in both: they only
+# run when the packages are missing, and either part may need them.
+in_part() {
+  [ -n "$PART" ] || return 0
+  [ "${1% packages}" = "$1" ] || return 0
+  if plain "$1" "$LINUX_STEPS"; then [ "$PART" = linux ]; else [ "$PART" = mac ]; fi
 }
 # Step names and test file paths only: it's passed to a check host's shell
 # and its file names to node.
@@ -355,6 +381,7 @@ swift_needed() {
 IOS_NEEDS="^ios/|^shared/cases/$(links_out ios '.')"
 
 skip() {
+  in_part "$1" || return 0
   printf 'skip  %-20s (%s; --all runs it)\n' "$1" "$2"
 }
 
@@ -367,6 +394,7 @@ if [ -z "$XCODE_DIR" ]; then XCODE_DIR="$(xcode-select -p 2>/dev/null || true)";
 NO_XCODE=""
 if [ -z "$XCODE_DIR" ] || [ "${XCODE_DIR%/CommandLineTools}" != "$XCODE_DIR" ]; then NO_XCODE=1; fi
 swift_test_step() {
+  in_part "$1" || return 0
   if [ -n "$NO_XCODE" ]; then
     printf 'skip  %-20s (needs Xcode; only the Command Line Tools are here)\n' "$1"
   else
@@ -472,6 +500,8 @@ ran_asked() {
 # asked for need them.
 left_out() {
   [ "${1% packages}" = "$1" ] || return 1
+  # The other part's step: its own run says how it went.
+  in_part "$1" || return 0
   only_entry "$1" >/dev/null && return 1
   printf 'skip  %-20s (--only left it out)\n' "$1"
 }
@@ -887,7 +917,7 @@ pick_cargo() {
 # desktop/'s Rust as cargo fmt writes it (desktop/rustfmt.toml, with the
 # rustfmt of rust-toolchain.toml), --quick included: no build, a few seconds,
 # so it runs wherever this does, this Mac included. The log ends with the fix.
-if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
+if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ] && in_part "desktop format"; then
   if needed '^desktop/|^rust-toolchain\.toml$'; then
     FMT_CARGO="$(pick_cargo)"
     if [ -n "$FMT_CARGO" ]; then
@@ -1043,6 +1073,8 @@ fi
 # Convex's Swift library (convex-swift) ships for Apple silicon only, so
 # on an Intel Mac the kit can't build at all.
 if [ "$RUNNER_ONLY" = 1 ]; then
+  :
+elif ! in_part "iphone kit tests"; then
   :
 elif [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" != arm64 ]; then
   printf 'skip  %-20s (%s)\n' "iphone kit tests" "Convex's Swift library is Apple silicon only"

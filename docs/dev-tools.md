@@ -327,7 +327,15 @@ rest, and `tb <command> --help` explains one.
   host: other checks, GPUI builds,
   measurements and Tinker Desk's `heavy` jobs say they're letting it go
   first (`scripts/host-turn.sh` says how). It still waits for what's
-  running; it doesn't get a slot of its own. A host short of disk is passed over
+  running; it doesn't get a slot of its own. A landing's check that needs a
+  Mac is split when a Linux host and a Mac both answer: the steps a Linux
+  host can run (`LINUX_STEPS` in check-remote.sh, `check.sh --part linux`)
+  go to the cloud box and the rest (`--part mac`: the Swift ones) to Tinker
+  Desk, at the same time, and it passes only if both halves do. Its output
+  shows each half's lines marked `[no Mac]` and `[Mac]` as they come, then
+  the two merged as one check, `Checking on cloud+tinker-desk`. With only
+  one kind of host answering it runs whole as before; a Linux half no Linux
+  host could take runs on the Mac too. A host short of disk is passed over
   (8 GiB free for Swift or desktop/'s Rust, 2 otherwise), and if none has
   room the check fails and names them. A check that fails on a host that ran
   under 1 GiB free during it is run again on another host (or the same one,

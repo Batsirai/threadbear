@@ -436,6 +436,19 @@ const HOST_NAME = /^[A-Za-z0-9][A-Za-z0-9._@-]*$/;
 function askedHosts(v: string | undefined): string[] {
   return (v ?? '').split(',').map((h) => h.trim()).filter((h) => HOST_NAME.test(h));
 }
+// Where a check ran, as its "Checking on" line says: a host, or a split
+// check's <linux>+<mac> pair (scripts/check-remote.sh, split_run), which
+// check-remote.sh takes as the host list and routes each step back to the
+// host of the pair it ran on.
+const CHECKED_ON = /^[A-Za-z0-9][A-Za-z0-9._@-]*(\+[A-Za-z0-9][A-Za-z0-9._@-]*)?$/;
+// Whether a run of what failed went where the group's check ran it: the same
+// host, or for a pair, the pair or one host of it (a run of steps of one kind
+// goes only to that kind's host of the pair).
+export function sameCheckHost(ran: string | undefined, groupRan: string | undefined): boolean {
+  if (ran === groupRan) return true;
+  if (!ran || !groupRan || !groupRan.includes('+')) return false;
+  return groupRan.split('+').includes(ran);
+}
 // A group's check runs in the holder's tb, with the holder's environment, so
 // what the others asked for went nowhere: on 13 Nov a landing that set
 // THREADBEAR_CHECK_HOST=cloud to keep off Tinker Desk's long builds was
@@ -1649,6 +1662,8 @@ async function findBroken(a: {
   // here goes to that host and no other: a test that fails only on the Linux
   // box (13 Nov had one) would otherwise pass for a landing run on the Mac
   // and fail for the next one run on Linux, which would be refused for it.
+  // A split check's <linux>+<mac> pair goes as it is: check-remote.sh sends
+  // each step back to the host of the pair it ran on.
   host?: string;
   env: NodeJS.ProcessEnv;
   shell?: string[];
@@ -1702,7 +1717,7 @@ async function findBroken(a: {
     // group's own line can be lost off the front of a long output; with no
     // host known the runs aren't sent to one, and then none may name one).
     // Nor one no host could run (out of disk, every host unreachable).
-    if (r.stopped || times.host !== a.host || r.code === CHECK_HOSTS_UNAVAILABLE) return { state: 'unknown', text: r.text };
+    if (r.stopped || !sameCheckHost(times.host, a.host) || r.code === CHECK_HOSTS_UNAVAILABLE) return { state: 'unknown', text: r.text };
     // Failed means the check ran to its end and named a step that failed.
     return { state: r.ok ? 'passed' : onlyFailed(r.text) ? 'failed' : 'unknown', text: r.text };
   };
@@ -2122,7 +2137,7 @@ async function landLocked(
           const failedOn = parseCheckTimes(r.text).host;
           const result = await findBroken({
             t, common, main, own, group, check, only, env: groupEnv, shell: opts.shell, timesFile: times.file,
-            ...(failedOn && HOST_NAME.test(failedOn) ? { host: failedOn } : {}),
+            ...(failedOn && CHECKED_ON.test(failedOn) ? { host: failedOn } : {}),
           });
           const found = typeof result === 'object' ? result : undefined;
           // Main fails some of what failed by itself: a fix may be its

@@ -662,7 +662,11 @@ The runner's updater reads it too: a commit with a passing line here from
 a check host, with the runner's typecheck and unit tests run, is built
 without running them again (docs/dev-tools.md, "The runner updating
 itself"). `host` and `steps` are the last run's: a host that dropped out
-partway, or a run that fell back to this Mac, leaves none of its own.
+partway, or a run that fell back to this Mac, leaves none of its own. A
+check split across a Linux host and a Mac (docs/dev-tools.md, section 4)
+has both, `"host":"cloud+tinker-desk"`, and the steps of both halves; tb
+land runs what failed in one on that pair, which sends each step back to
+the host it ran on.
 
 ## Cleaning up
 

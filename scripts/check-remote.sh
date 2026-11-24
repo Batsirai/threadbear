@@ -13,6 +13,18 @@
 # doesn't touch ios/, app/ or dock/ (each brings in Swift), with no --shots.
 # Mike asked on 6 Nov, when nine threads' checks queued at once.
 #
+# A landing's check (THREADBEAR_CHECK_FIRST) that needs a Mac, with a Linux
+# host and a Mac host both answering, is split in two run at the same time
+# (split_run, below): the steps a Linux host can run (LINUX_STEPS) there, the
+# rest on the Mac, each half a run of this script of its own (--part), and
+# it passes only if both do. On 24 Nov 34 of 39 landing checks went wholly to
+# Tinker Desk, as nearly every group had a desktop/ or iPhone change, and
+# took 13 to 36 minutes there while the cloud box, twice as quick at the
+# runner's unit tests, sat idle. A split check says "Checking on
+# <linux>+<mac>", and that pair as the host list routes each step the same
+# way again, and only there: tb land runs what failed on the host it failed
+# on (worktrees.ts, findBroken).
+#
 # Mike asked on 6 Nov 2026, after three threads' unit suites, a swift test
 # and three debug apps took his M5 to a load of 75 and a test's window came
 # up over his browser. The host he picked (Tinker Desk) is also where he
@@ -303,6 +315,20 @@ fi
 # ---- On this Mac
 HOST_LIST="${1:?usage: check-remote.sh <ssh host>[,<ssh host>...] [check.sh options]}"
 shift
+# <linux>+<mac>: a split check's pair (above), from its "Checking on" line.
+HOST_RE='^[A-Za-z0-9][A-Za-z0-9._@-]*$'
+PAIR_L="" PAIR_M=""
+case "$HOST_LIST" in
+  *+*)
+    PAIR_L="${HOST_LIST%%+*}" PAIR_M="${HOST_LIST#*+}"
+    if ! [[ "$PAIR_L" =~ $HOST_RE ]] || ! [[ "$PAIR_M" =~ $HOST_RE ]]; then
+      echo "A host pair is <linux host>+<mac host>, not: $HOST_LIST" >&2
+      exit 2
+    fi
+    HOST_LIST="$PAIR_L,$PAIR_M"
+    # Nothing else is tried: each step goes back where it ran.
+    unset THREADBEAR_CHECK_PREFER ;;
+esac
 read -ra HOSTS <<<"$(printf '%s' "$HOST_LIST" | tr ',' ' ')"
 # THREADBEAR_CHECK_PREFER: hosts to try first, the rest of the list still
 # behind them. tb land sets it for a group's check from what each landing in
@@ -480,6 +506,7 @@ over_time() {
 ARGS=()
 SHOTS=""
 ONLY=""
+PART=""
 QUICK=0
 RUNNER_ONLY=0
 ALL=0
@@ -493,6 +520,8 @@ while [ $# -gt 0 ]; do
     --all) ALL=1; ARGS+=("$1") ;;
     # Its value goes with it, whatever it looks like (check.sh has checked it).
     --only) ONLY="${2:-}"; ARGS+=("$1" "${2:-}"); shift ;;
+    # One half of a split check (split_run): check.sh runs only its steps.
+    --part) PART="${2:-}"; ARGS+=("$1" "${2:-}"); shift ;;
     *) ARGS+=("$1") ;;
   esac
   shift
@@ -536,7 +565,9 @@ if [ "$RUNNER_ONLY" = 1 ] && [ -z "$SHOTS" ]; then linux_ok=1; fi
 # this a failure on the Linux box could never be looked into there (Codex's
 # review, 17 Nov). With --all too: tb land asks for it on main's run there,
 # and with --only it only forces the steps named (Codex's review, 17 Nov).
-LINUX_STEPS='^(runner typecheck|app tools parse|convex typecheck|web typecheck|web tests|site build|feature pairing|runner unit tests|desktop format|desktop lint|desktop core tests|desktop app check|desktop app check \(as installed\)|[a-z ]+ packages)$'
+# check.sh --part reads this line too (keep it one line, in single quotes):
+# its Linux half runs exactly these, its Mac half the rest.
+LINUX_STEPS='^(runner typecheck|app tools parse|convex typecheck|web typecheck|web tests|lint|site build|feature pairing|features typecheck|runner unit tests|desktop format|desktop lint|desktop core tests|desktop app check|desktop app check \(as installed\)|[a-z ]+ packages)$'
 if [ -n "$ONLY" ] && [ "$QUICK" = 1 ] && [ -z "$SHOTS" ]; then
   linux_ok=1
   only_rest="$ONLY;"
@@ -546,6 +577,8 @@ if [ -n "$ONLY" ] && [ "$QUICK" = 1 ] && [ -z "$SHOTS" ]; then
     [[ "${only_name%%=*}" =~ $LINUX_STEPS ]] || linux_ok=0
   done
 fi
+# The Linux half of a split check runs only what a Linux host can.
+if [ "$PART" = linux ] && [ "$QUICK" = 1 ] && [ -z "$SHOTS" ]; then linux_ok=1; fi
 # Why it needs a Mac, for the message when only Linux hosts answered.
 MAC_WHY="it isn't --quick"
 if [ "$QUICK" = 1 ]; then
@@ -949,6 +982,139 @@ TURN=after
 if [ "${THREADBEAR_CHECK_FIRST:-}" = 1 ]; then
   TURN=first
   stay_secs=999999999
+fi
+
+# ---- Split across a Linux host and a Mac (the comment at the top). Each
+# half is this script again with --part, given only the hosts of its kind,
+# so a step can't drift to the other kind of host. Its output is shown as
+# it comes, each line marked with its half, then once more, merged, as one
+# check's: one "Checking on" line naming both hosts, each half's lines from
+# its last run (a half moves on from a host that drops out), and one "To
+# run only what failed again" and one "--only ran" line for both, which is
+# what tb land reads (worktrees.ts, parseCheckTimes, onlyFailed, onlyRan).
+# What a half exits with when no host could take it, told to it and turned
+# back into this run's BUSY_EXIT (or 255) here.
+SPLIT_BUSY=69
+# names_linux_step: whether any step of the run is a Linux host's: every
+# --quick run's runner typecheck, or one --only names.
+names_linux_step() {
+  [ -n "$ONLY" ] || return 0
+  local rest="$ONLY;" name
+  while [ -n "$rest" ]; do
+    name="${rest%%;*}"
+    rest="${rest#*;}"
+    [[ "${name%%=*}" =~ $LINUX_STEPS ]] && return 0
+  done
+  return 1
+}
+# can_split: a --quick run that needs a Mac and has steps a Linux host can
+# take. Not --shots (Desk Runner's), not --runner (all Linux), not a half.
+can_split() {
+  [ -z "$PART" ] && [ "$QUICK" = 1 ] && [ "$RUNNER_ONLY" = 0 ] && [ -z "$SHOTS" ] && [ "$linux_ok" = 0 ] && names_linux_step
+}
+# host_os <host>: what the probe says it runs, or nothing.
+host_os() {
+  local out
+  out="$(timed 30 "${SSH[@]}" "$1" "$probe" 2>/dev/null </dev/null)" || return 0
+  sed -n 2p <<<"$out"
+}
+# half <label> <hosts> <part> <out file> [max secs]: one half, its output
+# kept in <out file> and shown marked, its exit in <out file>.code.
+half() {
+  (
+    env -u THREADBEAR_CHECK_PREFER THREADBEAR_CHECK_BUSY_EXIT="$SPLIT_BUSY" ${5:+"THREADBEAR_CHECK_MAX_SECS=$5"} \
+      /bin/bash "$ROOT/scripts/check-remote.sh" "$2" ${ARGS[@]+"${ARGS[@]}"} --part "$3" </dev/null 2>&1
+    echo "$?" >"$4.code"
+  ) | tee "$4" | LC_ALL=C awk -v p="[$1] " '{ print p $0; fflush() }'
+}
+couldnt_run() { [ "$1" = "$SPLIT_BUSY" ] || [ "$1" = 255 ]; }
+# A half's last run (tb land's lastRun), where it ran, and its copy's time.
+last_run_of() { awk '/^Checking on [^ ]+ \(/ { n = 0; next } { l[++n] = $0 } END { for (i = 1; i <= n; i++) print l[i] }' "$1"; }
+host_of() { sed -n 's/^Checking on \([^ ]*\) (.*/\1/p' "$1" | tail -n 1; }
+copy_of() { grep -E '^Checking on [^ ]+ \(' "$1" | tail -n 1 | sed -n 's/^Checking on [^ ]* (copied in \([0-9]*\)s.*/\1/p'; }
+# split_run <linux hosts> <mac hosts>: runs both halves and exits as the
+# check: failed if either failed, else no host if either couldn't run.
+split_run() {
+  local lh="$1" mh="$2" sd lpid mpid lcode mcode f a r again="" ran="" said_ran=0 lhost mhost on copy="" c code=0
+  rm -f "$files" "$changed" "$left_out"
+  sd="$(mktemp -d "${TMPDIR:-/tmp}/tb-check-split.XXXXXX")" || { echo "Couldn't make a folder for the split check's output." >&2; exit 1; }
+  echo "Splitting this check: the steps that need no Mac run on $lh, the ones that need a Mac on $mh, at the same time."
+  half "no Mac" "$lh" linux "$sd/linux" &
+  lpid=$!
+  half "Mac" "$mh" mac "$sd/mac" &
+  mpid=$!
+  wait "$lpid"
+  lcode="$(cat "$sd/linux.code" 2>/dev/null)"
+  # No Linux host could take its half (gone, out of room): the Mac hosts
+  # can run it too, after their own half, rather than nothing pass. Not for
+  # a pair, where each step goes back only to where it ran.
+  if [ -z "$PAIR_L" ] && couldnt_run "${lcode:-1}"; then
+    echo "No host of $lh could take the half that needs no Mac, so it runs on $mh as well."
+    c=$((DEADLINE - $(date +%s)))
+    [ "$c" -ge 60 ] || c=60
+    half "no Mac" "$mh" linux "$sd/linux" "$c" &
+    lpid=$!
+  fi
+  wait "$mpid"
+  wait "$lpid"
+  lcode="$(cat "$sd/linux.code" 2>/dev/null)" mcode="$(cat "$sd/mac.code" 2>/dev/null)"
+  lcode="${lcode:-1}" mcode="${mcode:-1}"
+  lhost="$(host_of "$sd/linux")" mhost="$(host_of "$sd/mac")"
+  for f in "$sd/linux" "$sd/mac"; do
+    last_run_of "$f" >"$f.last"
+    a="$(sed -n 's/^To run only what failed again: \(\.\/check\.sh \)\{0,1\}--only "\(.*\)"$/\2/p' "$f.last" | tail -n 1)"
+    [ -z "$a" ] || again+="${again:+;}$a"
+    if grep -q '^--only ran: "' "$f.last"; then
+      said_ran=1
+      r="$(sed -n 's/^--only ran: "\(.*\)"$/\1/p' "$f.last" | tail -n 1)"
+      [ -z "$r" ] || ran+="${ran:+;}$r"
+    fi
+    c="$(copy_of "$f")"
+    if [ -n "$c" ] && { [ -z "$copy" ] || [ "$c" -gt "$copy" ]; }; then copy="$c"; fi
+  done
+  if [ -n "$lhost" ] && [ -n "$mhost" ] && [ "$lhost" != "$mhost" ]; then on="$lhost+$mhost"; else on="${mhost:-$lhost}"; fi
+  echo
+  [ -z "$on" ] || echo "Checking on $on (${copy:+copied in ${copy}s; }split: the steps that need no Mac on ${lhost:-no host}, the ones that need a Mac on ${mhost:-no host})"
+  for f in "$sd/linux" "$sd/mac"; do
+    grep -vE '^(To run only what failed again: |--only ran: ")' "$f.last"
+  done
+  if [ -n "$again" ]; then
+    echo
+    echo "To run only what failed again: ./check.sh --only \"$again\""
+  fi
+  [ "$said_ran" = 0 ] || echo "--only ran: \"$ran\""
+  rm -rf "$sd"
+  if [ "$lcode" != 0 ] && ! couldnt_run "$lcode"; then code="$lcode"
+  elif [ "$mcode" != 0 ] && ! couldnt_run "$mcode"; then code="$mcode"
+  elif [ "$lcode" = 255 ] && [ "$mcode" = 255 ]; then
+    echo "None of $lh, $mh can be reached, so this check can't run on any of them now." >&2
+    code=255
+  elif [ "$lcode" != 0 ] || [ "$mcode" != 0 ]; then
+    couldnt_run "$mcode" && echo "No host of $mh could take the half of this check that needs a Mac, so it didn't pass." >&2
+    couldnt_run "$lcode" && echo "No host could take the half of this check that needs no Mac, so it didn't pass." >&2
+    code="$BUSY_EXIT"
+  fi
+  exit "$code"
+}
+if [ -n "$PAIR_L" ] && [ -z "$PART" ]; then
+  if [ "$linux_ok" = 1 ]; then
+    HOSTS=("$PAIR_L")
+  elif can_split; then
+    split_run "$PAIR_L" "$PAIR_M"
+  else
+    HOSTS=("$PAIR_M")
+  fi
+  HOST_LIST="${HOSTS[0]}"
+elif [ "${THREADBEAR_CHECK_FIRST:-}" = 1 ] && [ "${#HOSTS[@]}" -gt 1 ] && can_split; then
+  split_l="" split_m=""
+  for h in "${HOSTS[@]}"; do
+    case "$h" in -*|"") continue ;; esac
+    case "$(host_os "$h")" in
+      Linux) split_l+="${split_l:+,}$h" ;;
+      Darwin) split_m+="${split_m:+,}$h" ;;
+    esac
+  done
+  [ -z "$split_l" ] || [ -z "$split_m" ] || split_run "$split_l" "$split_m"
 fi
 while :; do
   # A disk that's filled up since (the check that won may have done it) is no

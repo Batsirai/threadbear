@@ -84,6 +84,10 @@ run_copy() {
       echo "log at $b/tmp-$id/threadbear-check.Ab12/step.log"
       echo "near $d/home/Xcache/threadbear-check/tmp-$id/threadbear-check.Ab12/step.log"
     fi
+    # A host's "says" file: what its check prints, as check.sh would; its
+    # "exits" file: what the check exits with.
+    [ ! -f "$d/says" ] || cat "$d/says"
+    [ ! -f "$d/exits" ] || exit "$(cat "$d/exits")"
     # A host's "out-of-disk" file: its next that many checks fail, with the
     # lowest the disk went during each (the sampler's file) under 1 GiB.
     n="$(cat "$d/out-of-disk" 2>/dev/null || echo 0)"
@@ -183,7 +187,7 @@ export const GiB = 1024 * 1024;
 
 // df: what the host's df prints (plenty free, if not given). dfAfter: what it
 // prints once a copy or a run has failed there. os: Linux, if not a Mac.
-type Host = { state: string; lose?: number; looksFree?: boolean; base?: string; df?: string; dfAfter?: string; os?: string; hang?: boolean; hangCopy?: boolean; drop?: boolean; dropDead?: boolean; stubborn?: boolean; queue?: number; loseAck?: boolean; freeAfter?: number; slow?: number; outOfDisk?: number };
+type Host = { state: string; lose?: number; looksFree?: boolean; base?: string; df?: string; dfAfter?: string; os?: string; hang?: boolean; hangCopy?: boolean; drop?: boolean; dropDead?: boolean; stubborn?: boolean; queue?: number; loseAck?: boolean; freeAfter?: number; slow?: number; outOfDisk?: number; says?: string; exits?: number };
 export function setup(hosts: Record<string, Host>, opts: { home?: string } = {}) {
   const tmp = tmpDir('check-remote-');
   const home = opts.home ?? shortHome();
@@ -213,6 +217,8 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
     if (s.loseAck) fs.writeFileSync(path.join(fake, h, 'lose-ack'), '');
     if (s.slow !== undefined) fs.writeFileSync(path.join(fake, h, 'slow'), String(s.slow));
     if (s.outOfDisk !== undefined) fs.writeFileSync(path.join(fake, h, 'out-of-disk'), String(s.outOfDisk));
+    if (s.says !== undefined) fs.writeFileSync(path.join(fake, h, 'says'), s.says);
+    if (s.exits !== undefined) fs.writeFileSync(path.join(fake, h, 'exits'), String(s.exits));
     if (s.hangCopy) fs.writeFileSync(path.join(fake, h, 'hang-copy'), '');
     if (s.dfAfter !== undefined) fs.writeFileSync(path.join(fake, h, 'df-after'), s.dfAfter);
     fs.writeFileSync(path.join(fake, h, 'df-out'), s.df ?? macDf(100 * GiB));
