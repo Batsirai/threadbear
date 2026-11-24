@@ -200,7 +200,13 @@ phase "making the tools folder on $host"
 # be this account's own and closed to others, or the run stops: a group with
 # write on the cache could otherwise swap one in between (Codex's review of
 # Daybreak 114/116, 13 Nov). A fresh boot folder each run, never one found there.
-"${SSH[@]}" "$host" "umask 077 && mkdir -p $base && for d in .cache ${base%/*} $base; do [ -d \$d ] && [ ! -L \$d ] && [ -O \$d ] && chmod go-w \$d || { echo \"remote.sh: ~/\$d on $host isn't a folder of this account's own\" >&2; exit 1; }; done && rm -rf $boot && mkdir -m 700 $boot"
+# A link is let through only to a folder no other account can change, or
+# swap out from above (scripts/own-folders.sh: cloud's cache is on a volume).
+# Read first: a script that couldn't be read would be bash -c '', a pass.
+own_folders="$(sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' "$root/scripts/own-folders.sh")" && [ -n "$own_folders" ] \
+  || { echo "remote.sh: couldn't read scripts/own-folders.sh" >&2; exit 1; }
+own_folders="bash -c $(single_quoted "$own_folders") own-folders"
+"${SSH[@]}" "$host" "umask 077 && mkdir -p $base && $own_folders $(single_quoted "$host") .cache ${base%/*} $base && rm -rf $boot && mkdir -m 700 $boot"
 phase "copying the helpers to $host"
 for helper in perf-lock.pl perf-children.pl hangup-guard.sh; do
   "${SSH[@]}" "$host" "cat > $boot/$helper" <"$root/scripts/$helper"

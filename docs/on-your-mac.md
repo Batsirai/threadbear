@@ -511,7 +511,10 @@ File references are where to look.
   `runner.json` (never `checkHosts`), copies the clone's files (not its history) with rsync over
   ssh to the first of them that's a Mac, answers and is free, builds there under
   `~/.cache/threadbear-check/gpui` and copies the two binaries back with scp
-  (`desktop/scripts/remote.sh`). Remote commands and performance tools keep
+  (`desktop/scripts/remote.sh`). Those folders must be the ssh account's own
+  and closed to others, or it stops; one may be a symlink (to a bigger disk)
+  only to a folder of that account's under folders only root or it can
+  change (`scripts/own-folders.sh`). Remote commands and performance tools keep
   `~/.cache/threadbear-perf.lock` and `~/.cache/threadbear-check/lock` on the
   host while they run, waiting for other builds, checks and measurements.
   Everything goes in through `~/.cache/threadbear-check/gate` there first,
