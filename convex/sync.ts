@@ -13,7 +13,7 @@ import { clear, command, machines } from './machines';
 import { CLEAR_RETRY_MS, clearStateFrom } from './clearStates';
 import { steppingFor } from './stepping';
 import { COMMAND_KEEP_MS as KEEP_MS, TAKEN_LEASE_MS as LEASE_MS } from './commandMachine';
-import { actAs, checkRunnerId, withoutCredentials, forbidden, hasLiveKey, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor, boxOfRunner, MACHINE_ID } from './lib';
+import { actAs, checkRunnerId, withoutCredentials, forbidden, hasAllowance, hasLiveKey, ownerFenced, SHARE_REKEY_DONE, SHARE_REKEY_STALE_MS, SHARE_REKEY_STARTED, isSeq, pageLimit, PRESENCE_FRESH_MS, presentAt, readRunnerOrder, runnerAuth, runnerStatsRows, saveRunnerOrder, sha256, watchRunnersFor, boxOfRunner, MACHINE_ID } from './lib';
 import { scrubDoc, scrubEveryString, SCRUB_RULES_VERSION, HELD_BACK } from './redaction';
 import { dropHead, seedHeads, syncHead, syncHeads } from './projectHeads';
 import { dropNotes, putNotes, syncNotes } from './projectNotes';
@@ -100,12 +100,33 @@ async function threadRow(ctx: QueryCtx | MutationCtx, threadId: string) {
 // its runner's thread, there or not: its write is dropped and its read is
 // empty, the same either way, so a key learns nothing about other runners'
 // ids, and a runner that deleted the thread meanwhile doesn't retry for ever.
+// The owner key gets "none" too for a thread whose runner has a live key of
+// its own (ownerFenced), as actAs refuses it that runner.
 async function ownThread(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string): Promise<'yes' | 'none'> {
-  if (caller.owner) return 'yes';
   const row = await threadRow(ctx, threadId);
+  if (caller.owner) return (await ownerKeptOut(ctx, caller, threadId, row)) ? 'none' : 'yes';
   if (!row || !mayTouch(caller, row.runnerId, threadId)) return 'none';
   // On its way to the owner (threadClears): no longer its runner's to write.
   return (await ctx.db.query('threadClears').withIndex('by_threadId', (q) => q.eq('threadId', threadId)).first()) ? 'none' : 'yes';
+}
+
+// The owner key kept off a thread id's rows (messages, tool output,
+// pictures, the thread itself) because they're a runner's with a live key
+// of its own (lib.ts ownerFenced): the thread's row says whose it is, and
+// an id with no row is fenced if any runner that had it (a tombstone, a
+// sidebar row) has one, so a forged message can't wait under a thread id
+// for its runner to bring the thread back (Daybreak 178).
+// An id whose rows are going (threadClears: the owner taking the thread
+// over, or its removal) isn't: nothing goes in under it meanwhile, and the
+// owner's writes are answered as left out, to send again once it's clear.
+async function ownerKeptOut(ctx: QueryCtx | MutationCtx, caller: Caller, threadId: string, row: Doc<'threads'> | null): Promise<boolean> {
+  if (!caller.owner || (await closedId(ctx, threadId))) return false;
+  if (row) return ownerFenced(ctx, caller, row.runnerId);
+  const had = new Set<string>();
+  for await (const t of ctx.db.query('threadTombstones').withIndex('by_threadId', (q) => q.eq('threadId', threadId))) had.add(t.runnerId);
+  for await (const t of ctx.db.query('threadIndex').withIndex('by_threadId', (q) => q.eq('threadId', threadId))) had.add(t.runnerId);
+  for (const id of had) if (await ownerFenced(ctx, caller, id)) return true;
+  return false;
 }
 
 // Whether the caller may make a row under a thread id: its own row's, or one
@@ -1210,6 +1231,11 @@ export const removeThreads = mutation({
       // A runner key leaves alone what isn't its own thread, there or not (ownThread).
       if (!caller.owner && !(row && mayTouch(caller, row.runnerId, threadId))) continue;
       if (runnerId !== undefined && row && row.runnerId !== runnerId) continue;
+      // The owner key, in either form, leaves alone a thread (or what's left
+      // under an id) of a runner with a live key of its own, as actAs would
+      // refuse it that runner: the form without `runnerId`, which older
+      // runners send, never checked it (Daybreak 178).
+      if (await ownerKeptOut(ctx, caller, threadId, row)) continue;
       await archiveSoon(ctx, threadId);
       await dropThread(ctx, threadId, row, !caller.box);
     }
@@ -1908,23 +1934,31 @@ export const appendMessages = mutation({
 });
 
 // A message or tool body under `runnerId` whose thread is now another
-// runner's (a move's page that ran late, say): it goes to that runner
-// (counted against it) or to none if that's the owner's, and true. False,
-// and nothing changed, while the thread is still `runnerId`'s or has no row.
+// runner's (a move's page that ran late, say): "given" when it has gone to
+// that runner (counted against it) or to none if that's the owner's.
+// "mine", and nothing changed, while the thread is still `runnerId`'s or
+// has no row. "held", and nothing changed, when that runner has no room for
+// it now (its allowance is never passed: Daybreak 181, 24 Nov 2026): the
+// move's rehome gives it over, making room as that runner's own writes do,
+// and until then it isn't `runnerId`'s to delete either, so its write waits.
 // What a runner key's quota deletes is checked with this first, so its
 // allowance never reaches past the threads it has now (Daybreak, 15 Nov 2026).
 // `owners` keeps each thread's runner for the call, as evictions run
 // through many rows of a few threads.
-async function handedOn(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: Doc<'messages'> | Doc<'eventBodies'>, runnerId: string, owners: Map<string, string | null>): Promise<boolean> {
+async function handedOn(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: Doc<'messages'> | Doc<'eventBodies'>, runnerId: string, owners: Map<string, string | null>): Promise<'mine' | 'given' | 'held'> {
   if (!owners.has(row.threadId)) owners.set(row.threadId, (await threadRow(ctx, row.threadId))?.runnerId ?? null);
   const now = owners.get(row.threadId);
-  if (!now || now === runnerId) return false;
+  if (!now || now === runnerId) return 'mine';
   const { _id, _creationTime, runnerId: _r, ...rest } = row;
-  if (await hasLiveKey(ctx, now)) {
+  if (await hasAllowance(ctx, now)) {
+    const size = docBytes({ ...rest, runnerId: now });
+    const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', now)).unique();
+    const used = table === 'messages' ? (usage?.messageBytes ?? 0) : (usage?.bodyBytes ?? 0);
+    if (used + size > (table === 'messages' ? CAP.messageBytes : CAP.bodyBytes)) return 'held';
     await ctx.db.patch(_id, { runnerId: now });
-    await (table === 'messages' ? countMessageBytes : countBodyBytes)(ctx, now, docBytes({ ...rest, runnerId: now }));
+    await (table === 'messages' ? countMessageBytes : countBodyBytes)(ctx, now, size);
   } else await ctx.db.patch(_id, { runnerId: undefined });
-  return true;
+  return 'given';
 }
 
 // A row of the caller's own thread left under another runner's id: the
@@ -1948,7 +1982,7 @@ async function takenBack<T extends Doc<'messages'> | Doc<'eventBodies'>>(ctx: Mu
 // skips the row, and the runner sends it again).
 // `onlyThread`: a box's, which evicts its own thread's rows only; the oldest
 // being another's means no room (it waits) rather than that one going.
-async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, insertedNow: Set<string>, budget: { evicted: number; owners: Map<string, string | null> }, growing?: Id<'messages'>, onlyThread?: string): Promise<boolean> {
+export async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, insertedNow: Set<string>, budget: { evicted: number; owners: Map<string, string | null> }, growing?: Id<'messages'>, onlyThread?: string): Promise<boolean> {
   const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
   let used = usage?.messageBytes ?? 0;
   while (used + size > CAP.messageBytes && budget.evicted < CAP.evictPerWrite) {
@@ -1965,8 +1999,11 @@ async function roomForMessage(ctx: MutationCtx, runnerId: string, size: number, 
     if (!victim && onlyThread !== undefined) break;
     // Under this runner's id but in a thread that's since gone to another:
     // that one's, not this one's to delete. It goes to the thread's runner,
-    // and counts as one this call has seen to.
-    if (victim && (await handedOn(ctx, 'messages', victim, runnerId, budget.owners))) {
+    // and counts as one this call has seen to; while that one has no room
+    // for it, there's none here either.
+    const handed = victim ? await handedOn(ctx, 'messages', victim, runnerId, budget.owners) : 'mine';
+    if (handed === 'held') break;
+    if (victim && handed === 'given') {
       used = Math.max(0, used - storedBytes(victim));
       budget.evicted++;
       continue;
@@ -2300,6 +2337,14 @@ const UPLOAD_BYTES_PER_HOUR = 200 * 1024 * 1024;
 const STORED_BYTES_PER_RUNNER = 150 * 1024 * 1024;
 const MIN_UPLOAD_CHARGE = 64 * 1024;
 
+// Whether a runner may keep `bytes` more in file storage, within what any
+// upload of its may keep (STORED_BYTES_PER_RUNNER): a moved thread's
+// pictures going to it are held to this too (moves.ts rehomeFile).
+export async function roomToStore(ctx: QueryCtx | MutationCtx, runnerId: string, bytes: number): Promise<boolean> {
+  const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
+  return (usage?.bytes ?? 0) + bytes <= STORED_BYTES_PER_RUNNER;
+}
+
 // A move's chunk may also take up to a whole move's worth on top of what
 // the runner may keep, so a thread as big as a move can be still moves
 // from a runner with pictures stored; only while the move holds them, as
@@ -2519,6 +2564,17 @@ async function mirrorGone(ctx: { db: MutationCtx['db'] }, scheduleId: string): P
 
 function visibleTo<T extends { runnerId: string }>(caller: Caller, row: T | undefined): T | undefined {
   return row && mayTouch(caller, row.runnerId) ? row : undefined;
+}
+
+// A schedule whose run the caller may record or let go of: its runner's
+// alone, as only its runner claims one (claimSchedule, actAs). So the owner
+// key doesn't reach one of a runner with a live key of its own (lib.ts
+// ownerFenced): an old copy of it can't move that schedule's next time or
+// write its runs (Daybreak 178). Putting a schedule on that runner, or
+// asking it to run one (requestScheduleRun), stays the owner's.
+async function runOf(ctx: MutationCtx, caller: Caller, scheduleId: string) {
+  const row = visibleTo(caller, await scheduleRow(ctx, scheduleId));
+  return row && !(await ownerFenced(ctx, caller, row.runnerId)) ? row : undefined;
 }
 
 // Whether any row with this schedule id, owned or an old mirrored one (from
@@ -2742,8 +2798,8 @@ export const releaseSchedule = mutation({
   handler: async (ctx, { key, scheduleId, holder }) => {
     const caller = await runnerAuth(ctx, key, 'releaseSchedule');
     // Another runner's schedule is as good as missing to a runner key: no
-    // refusal to say it's there or whose it is.
-    const row = visibleTo(caller, await scheduleRow(ctx, scheduleId));
+    // refusal to say it's there or whose it is. A run is its runner's own.
+    const row = await runOf(ctx, caller, scheduleId);
     if (row?.claim?.holder === holder) await ctx.db.patch(row._id, { claim: undefined });
     return null;
   },
@@ -2769,8 +2825,8 @@ export const scheduleRan = mutation({
     const caller = await runnerAuth(ctx, key, 'scheduleRan');
     lastRun = clean(lastRun);
     // Another runner's schedule is as good as missing to a runner key: no
-    // refusal to say it's there or whose it is.
-    const row = visibleTo(caller, await scheduleRow(ctx, scheduleId));
+    // refusal to say it's there or whose it is. A run is its runner's own.
+    const row = await runOf(ctx, caller, scheduleId);
     if (!row) return null;
     // One it has already, or older (THREADBEAR-15): the runner tells a run
     // again until it hears back, so one whose answer got lost comes again,
@@ -3254,6 +3310,13 @@ export const pendingCommands = query({
   },
 });
 
+// Taking a command is its runner's: mayTake, and for the owner key not one
+// for a runner with a live key of its own (lib.ts ownerFenced), which
+// pendingCommands (actAs) never lists to it. "any" stays the owner's.
+async function mayConsume(ctx: QueryCtx | MutationCtx, caller: Caller, c: { runnerId: string; threadId?: string }): Promise<boolean> {
+  return mayTake(caller, c) && !(await ownerFenced(ctx, caller, c.runnerId));
+}
+
 export const takeCommand = mutation({
   // attempt (API 85): the runner's id for this take, the same each time it
   // asks again after an error. Without one (an older runner) a second ask
@@ -3270,11 +3333,11 @@ export const takeCommand = mutation({
     // command and leave it taken with nobody running it. The machine's
     // sameAttempt guard says yes, and nothing changes.
     if (c.state === 'taken' && attempt !== undefined) {
-      if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
+      if (!(await mayConsume(ctx, caller, c))) throw forbidden("take that command: it isn't for its runner");
       return (await command.send(ctx, commandId, { type: 'TAKE', attempt })).status === 'done';
     }
     if (c.state !== 'pending') return false;
-    if (!mayTake(caller, c)) throw forbidden("take that command: it isn't for its runner");
+    if (!(await mayConsume(ctx, caller, c))) throw forbidden("take that command: it isn't for its runner");
     // A thread's command is for the runner that has the thread now: one
     // queued before the thread moved to another runner (or went) isn't
     // applied by the runner that had it, which may keep a copy.
@@ -3314,7 +3377,7 @@ export const finishCommand = mutation({
     const ends = c !== null && (c.commandState.kind === 'taken' || c.commandState.kind === 'lapsed');
     const caller = await runnerAuth(ctx, key, 'finishCommand', { housekeeping: !ends || (held === true && c?.kind === 'save') });
     if (!c) return null;
-    if (!mayFinish(caller, c)) throw forbidden("finish that command: it isn't for its runner");
+    if (!mayFinish(caller, c) || (await ownerFenced(ctx, caller, c.runnerId))) throw forbidden("finish that command: it isn't for its runner");
     // Only a taken command finishes, or one whose lease ran out, which its
     // runner's answer still settles: the machine refuses the rest. One
     // already done or failed (finished before, cancelled, expired) stays as
@@ -3470,6 +3533,39 @@ function strippedBody(row: Doc<'eventBodies'>) {
   return rest;
 }
 
+// Room in a runner's CAP.bodyBytes for a row of `size` bytes, in place of
+// `existing` (the row it replaces) if any: past it, its oldest go first, at
+// most CAP.bodyEvictPerWrite a call (`budget` counts them), never the row
+// being replaced. True, and the bytes counted, when there's room; false
+// when there isn't (some may have gone to make room even so).
+// `onlyThread`: a box's, which evicts its own thread's rows only; another's
+// being the oldest means no room. A move's rows going to a runner come
+// through here as that runner's own writes do (moves.ts rehomeRows).
+export async function roomForBody(ctx: MutationCtx, runnerId: string, size: number, existing: Doc<'eventBodies'> | null, budget: { evicted: number; owners: Map<string, string | null> }, onlyThread?: string): Promise<boolean> {
+  const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId)).unique();
+  const had = existing ? docBytes(strippedBody(existing)) : 0;
+  let used = (usage?.bodyBytes ?? 0) - had;
+  while (used + size > CAP.bodyBytes && budget.evicted < CAP.bodyEvictPerWrite) {
+    const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', runnerId)).first();
+    // A box evicts its own thread's only: another's waits rather than go.
+    if (!oldest || oldest._id === existing?._id || (onlyThread !== undefined && oldest.threadId !== onlyThread)) break;
+    // In a thread that's since gone to another runner: that one's (handedOn),
+    // and while that one has no room for it, there's none here either.
+    const handed = await handedOn(ctx, 'eventBodies', oldest, runnerId, budget.owners);
+    if (handed === 'held') break;
+    if (handed === 'mine') await ctx.db.delete(oldest._id);
+    used = Math.max(0, used - docBytes(strippedBody(oldest)));
+    budget.evicted++;
+  }
+  if (used + size > CAP.bodyBytes) {
+    if (usage) await ctx.db.patch(usage._id, { bodyBytes: used + had });
+    return false;
+  }
+  if (usage) await ctx.db.patch(usage._id, { bodyBytes: used + size });
+  else await ctx.db.insert('runnerStorage', { runnerId, bytes: 0, bodyBytes: used + size });
+  return true;
+}
+
 // skipped: a runner key's that wouldn't fit even after making room, or that's too
 // big. The runner doesn't send them again: the tool shows as kept on that runner.
 export const appendBodies = mutation({
@@ -3480,8 +3576,7 @@ export const appendBodies = mutation({
     const skipped: string[] = [];
     const closed = new Set<string>();
     const checked = new Map<string, 'yes' | 'none'>();
-    let evicted = 0;
-    const owners = new Map<string, string | null>();
+    const budget = { evicted: 0, owners: new Map<string, string | null>() };
     const now = Date.now();
     for (const given of bodies) {
       if (!checked.has(given.threadId)) checked.set(given.threadId, await ownThread(ctx, caller, given.threadId));
@@ -3510,31 +3605,12 @@ export const appendBodies = mutation({
       if (existing && existing.runnerId !== caller.runnerId) continue;
       const row = { ...b, runnerId: caller.runnerId, at: existing?.at ?? now };
       const size = docBytes(row);
-      if (size > CAP.bodyDoc) {
-        skipped.push(`${b.threadId}:${b.seq}`);
-        continue;
-      }
-      const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', caller.runnerId)).unique();
-      let used = (usage?.bodyBytes ?? 0) - (existing ? docBytes(strippedBody(existing)) : 0);
-      while (used + size > CAP.bodyBytes && evicted < CAP.bodyEvictPerWrite) {
-        const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', caller.runnerId)).first();
-        // A box evicts its own thread's only: another's waits rather than go.
-        if (!oldest || oldest._id === existing?._id || !ownThreadOnly(caller, oldest.threadId)) break;
-        // In a thread that's since gone to another runner: that one's (handedOn).
-        if (!(await handedOn(ctx, 'eventBodies', oldest, caller.runnerId, owners))) await ctx.db.delete(oldest._id);
-        used = Math.max(0, used - docBytes(strippedBody(oldest)));
-        evicted++;
-      }
-      if (used + size > CAP.bodyBytes) {
-        // Some may have gone to make room, even so.
-        if (usage) await ctx.db.patch(usage._id, { bodyBytes: used + (existing ? docBytes(strippedBody(existing)) : 0) });
+      if (size > CAP.bodyDoc || !(await roomForBody(ctx, caller.runnerId, size, existing, budget, caller.box?.threadId))) {
         skipped.push(`${b.threadId}:${b.seq}`);
         continue;
       }
       if (existing) await ctx.db.replace(existing._id, row);
       else await ctx.db.insert('eventBodies', row);
-      if (usage) await ctx.db.patch(usage._id, { bodyBytes: used + size });
-      else await ctx.db.insert('runnerStorage', { runnerId: caller.runnerId, bytes: 0, bodyBytes: used + size });
     }
     return { skipped, ...(closed.size ? { closed: [...closed] } : {}) };
   },

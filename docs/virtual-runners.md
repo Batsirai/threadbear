@@ -276,7 +276,9 @@ The backend's first slice (18 Nov 2026), with tests in
   `convex/runnerAccess.ts` is what it may call, and `ownThreadOnly` holds
   every row check (`mayWrite`, `mayTouch`, `mayClaim`, `mayTake`, the
   moves' `mustBe`, `fileRequest`) to its one thread. Its upload URLs die
-  with its key.
+  with its key. What it holds counts against its runner id's allowances as
+  a runner key's does, a thread moved to it included (`lib.ts
+  hasAllowance`), never as the owner's.
 - **Cloud tokens** (decision 10): `boxes:setCloudToken` (owner, an action)
   seals with AES-GCM under `BOX_SEAL_KEY` (a Convex env var: 32 random
   bytes in base64, `npx convex env set BOX_SEAL_KEY "$(openssl rand

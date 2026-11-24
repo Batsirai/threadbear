@@ -28,7 +28,7 @@ ended in the last day) and acts on the state:
 | `ready` | S waits for the thread's turn and sub-agents to end, then freezes it: `moves:moveFrozen` | `packing` |
 | `packing` | S packs, seals, uploads: `moves:movePacked { moveId, chunks, sha256, bytes }` | `unpacking` |
 | `unpacking` | T downloads (`moves:moveChunks`, T only, the chunks' URLs), checks, opens and unpacks into staging, then `moves:moveClaim` | `claimed` |
-| `claimed` | T adopts the thread and mirrors it: `moves:moveDone`. The move ends once the thread's mirrored rows have all gone to T too (`moves:rehomeRows`, a page at a time); until then it stays `claimed`, so the thread can't start another move | `done` |
+| `claimed` | T adopts the thread and mirrors it: `moves:moveDone`. The move ends once the thread's mirrored rows have all gone to T too (`moves:rehomeRows`, a page at a time); until then it stays `claimed`, so the thread can't start another move. T takes them as its own writes are taken (Daybreak 181, 24 Nov 2026): a runner key's runner or a box (`lib.ts hasAllowance`; a box's key isn't a `runnerKeys` row, but it's charged like one) within its message and tool-output allowances, its oldest going first to make room a call's worth at a time, the page running again until they fit (one that can't make any room waits for the sweep, `expireMoves`), and a picture's file only if it has room to store it, else the backend's copy goes (T's runner sends its own again when it has room). The owner's take no allowance, as before | `done` |
 | `done` | S puts its copy away (`<home>/moved/<id>`, kept 7 days), unless a later move has brought the thread back | |
 
 Any state before `claimed` can go to `failed` (`moves:moveFailed { moveId,

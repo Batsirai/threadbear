@@ -14,7 +14,7 @@ import { loadConfig, paths, readRunnerJson } from '../../src/config.ts';
 import { downgradeFetch, redirectTrap } from '../helpers/redirect-trap.ts';
 import { scrubText } from '../../src/redaction.ts';
 import { Scrubber } from '../../src/scrub.ts';
-import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION, MESSAGE_WAKE_REASON_API_VERSION, LOGIN_STATE_API_VERSION } from '../../src/sync.ts';
+import { SCRUB_API_VERSION, isConvexCloud, MESSAGE_PICTURES_API_VERSION, MESSAGE_WAKE_REASON_API_VERSION, LOGIN_STATE_API_VERSION, sendFrom } from '../../src/sync.ts';
 import { makePng } from '../helpers/png.ts';
 import { ConvexUseTally } from '../../src/convex-use.ts';
 
@@ -954,6 +954,20 @@ test('messages: the first start against a deployment sends whole histories once,
   const second = await start([{ threadId: a.id, lastSeq: lastA }, { threadId: b.id, lastSeq: 1 }]);
   assert.ok(second.posts.some((p) => p.fn === 'sync:messageHeads'));
   assert.equal(second.sent.filter((m) => m.role !== 'tool').length, 0);
+  // A head past the thread's own log isn't one this runner sent (an old copy
+  // of the main key writing as it, Daybreak 178): taken as the head, nothing
+  // after it would ever go up. The whole history goes again instead.
+  const third = await start([{ threadId: a.id, lastSeq: 2 ** 49 }, { threadId: b.id, lastSeq: 1 }]);
+  assert.equal(third.sent.filter((m) => m.threadId === a.id && m.role !== 'tool').length, 26, 'a forged head suppresses nothing');
+  assert.equal(third.sent.filter((m) => m.threadId === b.id).length, 0, "b's real head still holds");
+});
+
+test("a start's head is believed only up to the thread's own last seq", () => {
+  assert.equal(sendFrom({ lastSeq: 40 }, undefined), 0);
+  assert.equal(sendFrom({ lastSeq: 40 }, 12), 12);
+  assert.equal(sendFrom({ lastSeq: 40 }, 40), 40);
+  assert.equal(sendFrom({ lastSeq: 40 }, 41), 0);
+  assert.equal(sendFrom({ lastSeq: 40 }, 2 ** 49), 0);
 });
 
 test('a tool call becomes one line: the description, the file, the search, else the title', () => {
