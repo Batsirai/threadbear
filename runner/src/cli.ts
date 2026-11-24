@@ -11,7 +11,7 @@ import { providerName } from './providers.ts';
 import type { Account, ImageRef, Pool, LibrarianStatus, PersistedEvent, Project, RunnerDefaults, Schedule, ThreadSummary } from './protocol.ts';
 import type { Settings } from './settings.ts';
 import { backgroundFlag } from './protocol.ts';
-import { parseWhen as parseLater, relativeFuture } from './when.ts';
+import { parseIsoTime, parseWhen as parseLater, relativeFuture } from './when.ts';
 import { DEV_HELP, formatModels, logsCommand, runDev } from './tb-dev.ts';
 import { findWorktreePatch, isInside } from './patches.ts';
 import { TRUST_ALL } from './patch-trust.ts';
@@ -1057,8 +1057,8 @@ function parseWhen(s: string): string {
     const ms = Number(m[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] as 'm' | 'h' | 'd'];
     return new Date(Date.now() + ms).toISOString();
   }
-  const t = Date.parse(s);
-  if (Number.isNaN(t)) throw new Error(`Can't read the time ${s}`);
+  const t = parseIsoTime(s);
+  if (t === undefined) throw new Error(`Can't read the time ${s}`);
   return new Date(t).toISOString();
 }
 
