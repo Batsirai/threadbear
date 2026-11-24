@@ -940,6 +940,10 @@ fi
 if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
   if ! needed "$DESKTOP_NEEDS"; then
     skip "desktop core tests" "nothing desktop/ reads changed"
+  elif ! in_part "desktop core tests" && { [ "$PART" != mac ] || [ "$QUICK" = 0 ] || [ "$(uname -s)" != Darwin ] || [ "$FALLBACK" = 1 ] || [ "$E2E" = 1 ]; }; then
+    # The other part's: nothing here builds Rust (but the Mac part's macOS
+    # check of the app, below, on a check host).
+    :
   elif [ "$FALLBACK" = 1 ] || { [ "$E2E" = 1 ] && [ "$LOCAL" = 0 ]; }; then
     # This is the Mac someone's working on (no check host could take the run,
     # or --e2e, which runs here for the claude login), and Rust builds stay
@@ -1008,6 +1012,15 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
       # here rather than in self-update. Two forks' updates were stuck on
       # just that (emilsbauga's and TeeLusk's, 14 to 16 Nov).
       cargo_step "desktop app check (as installed)" check --locked -p threadbear-gpui --features frame-stats
+      # Those two run on the Linux host when a landing's check is split
+      # (--part, scripts/check-remote.sh), which builds none of the app's
+      # macOS code: its #[cfg(target_os = "macos")] Rust and the Objective-C
+      # and Swift shims desktop/gpui/build.rs compiles. So the Mac half
+      # checks the app as installed on macOS too (Codex's review). Without
+      # --part, a run on a Mac has that in the two above already.
+      if [ "$PART" = mac ] && [ "$(uname -s)" = Darwin ]; then
+        cargo_step "desktop macos check" check --locked -p threadbear-gpui --features frame-stats
+      fi
     fi
     [ "$QUICK" = 1 ] || cargo_step "desktop build" check --locked --workspace --all-targets
   fi

@@ -610,7 +610,7 @@ DESKTOP_NEEDS="$(sed -n "s/^DESKTOP_NEEDS='\(.*\)'\$/\1/p" "$ROOT/check.sh" 2>/d
 builds_rust=0
 if [ -n "$DESKTOP_NEEDS" ] && [ "$RUNNER_ONLY" = 0 ]; then
   if [ -n "$ONLY" ]; then
-    rust_steps=';desktop (core tests|lint|app check|build)'
+    rust_steps=';desktop (core tests|lint|app check|macos check|build)'
     [[ ";$ONLY" =~ $rust_steps ]] && builds_rust=1
   elif [ "$ALL" = 1 ] || [ ! -s "$changed" ] || grep -E "$DESKTOP_NEEDS|^check\.sh\$" "$changed" >/dev/null; then
     builds_rust=1
@@ -926,9 +926,12 @@ drop_copylock() {
   rm -f "$release"
   holder="" release=""
 }
+# A split check's folder for its halves' output (split_run).
+split_dir=""
 finish() {
   drop_copylock
   [ -z "$sentinels" ] || rm -rf "$sentinels"
+  [ -z "$split_dir" ] || rm -rf "$split_dir"
 }
 trap finish EXIT
 # A signal stops everything this started, the ssh to the check host among
@@ -1038,6 +1041,7 @@ split_run() {
   local lh="$1" mh="$2" sd lpid mpid lcode lfirst mcode f a r again="" ran="" said_ran=0 lhost mhost on copy="" c code=0
   rm -f "$files" "$changed" "$left_out"
   sd="$(mktemp -d "${TMPDIR:-/tmp}/tb-check-split.XXXXXX")" || { echo "Couldn't make a folder for the split check's output." >&2; exit 1; }
+  split_dir="$sd"
   echo "Splitting this check: the steps that need no Mac run on $lh, the ones that need a Mac on $mh, at the same time."
   # Each half gets what's left of this run's MAX_SECS, not a whole one of
   # its own from when it starts (Codex's review).
@@ -1063,6 +1067,12 @@ split_run() {
   wait "$lpid"
   lcode="$(cat "$sd/linux.code" 2>/dev/null)" mcode="$(cat "$sd/mac.code" 2>/dev/null)"
   lcode="${lcode:-1}" mcode="${mcode:-1}"
+  # A half no host could run says nothing about the check: not where it
+  # ran, nor what failed in it (a disk that filled, every try), which tb
+  # land would otherwise look for in the landings (Gemini's review). Its
+  # own lines, shown marked above, say why.
+  couldnt_run "$lcode" && : >"$sd/linux"
+  couldnt_run "$mcode" && : >"$sd/mac"
   lhost="$(host_of "$sd/linux")" mhost="$(host_of "$sd/mac")"
   for f in "$sd/linux" "$sd/mac"; do
     last_run_of "$f" >"$f.last"
@@ -1088,7 +1098,15 @@ split_run() {
   fi
   [ "$said_ran" = 0 ] || echo "--only ran: \"$ran\""
   rm -rf "$sd"
-  if [ "$lcode" != 0 ] && ! couldnt_run "$lcode"; then code="$lcode"
+  split_dir=""
+  # Only some of what --only asked for ran (tb land's runs of what failed,
+  # main's among them): not a pass or a failure of the rest, so no host
+  # could run it, rather than main or a landing being blamed for a step that
+  # never ran (Gemini's review).
+  if [ -n "$ONLY" ] && { couldnt_run "$lcode" || couldnt_run "$mcode"; }; then
+    echo "Half of this run of named steps couldn't run on any host, so it says nothing about them." >&2
+    code="$BUSY_EXIT"
+  elif [ "$lcode" != 0 ] && ! couldnt_run "$lcode"; then code="$lcode"
   elif [ "$mcode" != 0 ] && ! couldnt_run "$mcode"; then code="$mcode"
   elif [ "$lcode" = 255 ] && [ "$mcode" = 255 ] && [ "$lfirst" = 255 ]; then
     # (A Linux host that answered but couldn't take it, 69 the first time, is

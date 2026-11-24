@@ -130,7 +130,12 @@ test("a split check's host pair sends each step back to the host of its kind, an
   const gone = run('runner unit tests;app mock tests', { h1: { state: 'free' } });
   assert.equal(gone.status, 1, gone.stdout + gone.stderr);
   assert.deepEqual(gone.copies, ['h1']);
-  assert.match(gone.stderr, /No host could take the half of this check that needs no Mac/);
+  assert.match(gone.stderr, /couldn't run on any host/);
+  // And with the Mac's half failing: still no host's answer, not a failure
+  // of main or a landing for steps of which only some ran (Gemini's review).
+  const s = setup({ h1: { state: 'free', exits: 1, says: 'FAIL  app mock tests         70s  /tmp/x.log\nTo run only what failed again: ./check.sh --only "app mock tests"\n--only ran: "app mock tests"\n' } });
+  const half = s.run('h2+h1', 3600, '', { ...ENV, THREADBEAR_CHECK_BUSY_EXIT: '69' }, ['--only', 'runner unit tests;app mock tests', '--all']);
+  assert.equal(half.status, 69, half.stdout + half.stderr);
 });
 
 test('a run of what failed counts only when it went where the group ran it', () => {
@@ -204,8 +209,11 @@ test('check.sh --part runs just the Linux steps or just the Mac ones, which toge
       assert.ok(mac.steps.includes(name), `${name}: ${mac.out}`);
       assert.ok(!lin.steps.includes(name), `${name}: ${lin.out}`);
     }
-    // Every step, skipped ones too, in exactly one part.
-    assert.deepEqual([...lin.steps, ...mac.steps].sort(), [...whole.steps].sort());
+    // Every step, skipped ones too, in exactly one part. And on a Mac, its
+    // part checks the desktop app's macOS build, which the Linux host can't.
+    const macOnly = process.platform === 'darwin' ? ['desktop macos check'] : [];
+    assert.deepEqual(mac.steps.filter((x) => macOnly.includes(x)), macOnly, mac.out);
+    assert.deepEqual([...lin.steps, ...mac.steps].filter((x) => !macOnly.includes(x)).sort(), [...whole.steps].sort());
     assert.notEqual(check(['--part', 'both']).status, 0);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
