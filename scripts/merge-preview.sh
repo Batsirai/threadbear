@@ -33,19 +33,25 @@ top=$(git rev-parse --show-toplevel)
 # git reads a refs/replace/ entry or info/grafts in place of the object an
 # id names, so the release's signed commit could merge as another, unsigned
 # one (Daybreak 180, 24 Nov 2026).
-# No lazy fetch either: a partial clone missing the release's commit would
+# No fetching either: a partial clone missing the release's commit would
 # fetch it through this checkout's own ssh command before anything's shown.
+# GIT_NO_LAZY_FETCH needs git 2.44, so every transport is refused by name
+# too (a protocol's own setting in the repo's config beats protocol.allow).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
 unset GIT_GRAFT_FILE GIT_REPLACE_REF_BASE
-common=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)
-if [ -n "$(git -C "$top" for-each-ref --count=1 --format='%(refname)' refs/replace/)" ] || [ -e "$common/info/grafts" ]; then
+here() {
+  git -C "$top" -c protocol.allow=never -c protocol.ext.allow=never -c protocol.fd.allow=never -c protocol.file.allow=never \
+    -c protocol.git.allow=never -c protocol.http.allow=never -c protocol.https.allow=never -c protocol.ssh.allow=never "$@"
+}
+common=$(here rev-parse --path-format=absolute --git-common-dir)
+if [ -n "$(here for-each-ref --count=1 --format='%(refname)' refs/replace/)" ] || [ -e "$common/info/grafts" ]; then
   echo "This checkout has git replacement refs (refs/replace/) or grafts ($common/info/grafts), which could have git read other objects in place of the release's: remove them (git replace -d, or that file) first." >&2
   exit 1
 fi
-objects=$(cd "$top" && git rev-parse --path-format=absolute --git-path objects)
-format=$(git -C "$top" rev-parse --show-object-format 2>/dev/null || echo sha1)
-base_id=$(git -C "$top" rev-parse --verify "$base^{commit}")
-commit_id=$(git -C "$top" rev-parse --verify "$commit^{commit}")
+objects=$(here rev-parse --path-format=absolute --git-path objects)
+format=$(here rev-parse --show-object-format 2>/dev/null || echo sha1)
+base_id=$(here rev-parse --verify "$base^{commit}")
+commit_id=$(here rev-parse --verify "$commit^{commit}")
 if [ -n "$prepare" ]; then
   real_top=$(cd "$top" && pwd -P)
   inside() {

@@ -447,7 +447,7 @@ function stdinGit(cwd: string, args: string[], input: string, extra: NodeJS.Proc
 
 function gitBuffer(cwd: string, object: string): Promise<Buffer | undefined> {
   return new Promise((resolve) => {
-    execFile('git', [...GIT_SAFE, '-C', cwd, 'cat-file', 'blob', object], { env: cleanEnv(), encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, killSignal: 'SIGKILL' }, (err, stdout) =>
+    execFile('git', [...GIT_SAFE, ...(noCommitGraph ? ['-c', 'core.commitGraph=false'] : []), '-C', cwd, 'cat-file', 'blob', object], { env: cleanEnv(), encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 60_000, killSignal: 'SIGKILL' }, (err, stdout) =>
       resolve(err ? undefined : stdout),
     );
   });

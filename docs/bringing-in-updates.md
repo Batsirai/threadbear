@@ -34,12 +34,12 @@ docs/setup-and-updates.md section 2.3 explains the thinking behind it.
   checked. If `tb updates` no
   longer lists the release, or names a different commit for it, stop and
   say so rather than merging anything.
-- Mike's changes: `git --no-replace-objects log --no-merges main..<commit>`
+- Mike's changes: `git --no-replace-objects log --no-show-signature --no-merges main..<commit>`
   (`--no-replace-objects` on every git command that reads the release, so
   it's read as its id names it; section 4 says why). His commit
   messages say why, not just what.
 - Their changes since they last brought a release in:
-  `git --no-replace-objects log --no-merges <commit>..main`. This is what you must keep.
+  `git --no-replace-objects log --no-show-signature --no-merges <commit>..main`. This is what you must keep.
 
 ## 2. Look at the merge without checking anything out
 
@@ -64,7 +64,7 @@ Mike's changes against main with no external diff or textconv program:
 
 ```sh
 git --no-replace-objects diff --no-ext-diff --no-textconv main...<commit>
-git --no-replace-objects log --no-merges --no-ext-diff --no-textconv main..<commit>
+git --no-replace-objects log --no-show-signature --no-merges --no-ext-diff --no-textconv main..<commit>
 ```
 
 and for each clash, both sides' commits, so you can say how you'd settle
@@ -135,7 +135,7 @@ prepared folder (git older than 2.40, which the preview needs), check
 isn't there, then merge with both off:
 
 ```sh
-GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git merge --no-ff -m "Bring in Mike's release <date>" <commit>
+GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null git -c core.commitGraph=false merge --no-ff -m "Bring in Mike's release <date>" <commit>
 ```
 
 Always a merge, never a rebase or a cherry-pick: Mike's commits have to
@@ -167,7 +167,7 @@ release's commit as its id names it (stop if `git for-each-ref
 refs/replace/` prints anything or `.git/info/grafts` is there: section 4):
 
 ```sh
-git --no-replace-objects show <commit>:runner/src/format-replay.ts > "${TMPDIR:-/tmp}/format-replay.ts"
+git --no-replace-objects -c core.commitGraph=false show <commit>:runner/src/format-replay.ts > "${TMPDIR:-/tmp}/format-replay.ts"
 node "${TMPDIR:-/tmp}/format-replay.ts" --merge <commit> -m "Bring in Mike's release <date>"
 ```
 
