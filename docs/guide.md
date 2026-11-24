@@ -202,7 +202,9 @@ the `web-runtime` folder of Threadbear's data folder.
 The installed Mac runner checks the web runtime's CEF pin daily while a
 runtime is installed. Updates and
 `tb status` warn if it is two weeks behind stable, or the check has failed
-for three days. Bringing in a Threadbear update carries a newer pin when
+for three days. The warning says whether an agent can update it now, or
+whether it's waiting on cef-rs, the Rust bindings Threadbear needs for that
+CEF. Bringing in a Threadbear update carries a newer pin when
 one is available. Chromium's sandbox stays off so the runtime can be
 downloaded on first use; keep these updates current.
 
