@@ -215,23 +215,32 @@ test("a replacement ref or grafts stop the preview, the merge and the format rep
   const prep = path.join(root, 'prep');
   const preview = () => run(shPath(SCRIPT), '--prepare', shPath(prep), release);
   const apply = () => run(shPath(PREPARED), shPath(prep), '-m', 'Bring it in');
+  const replay = () => run(shPath(REPLAY), '--merge', release, '-m', 'Bring it in');
+  const grafts = path.join(repo, '.git', 'info', 'grafts');
+  // Each substitution, refused by each step, before go and after.
+  const substitutions: [string, () => void, () => void][] = [
+    ['replacement refs', () => git(repo, 'replace', release, evil), () => git(repo, 'replace', '-d', release)],
+    ['grafts', () => fs.writeFileSync(grafts, `${release} ${evil}\n`), () => fs.rmSync(grafts)],
+  ];
+  for (const [what, add, remove] of substitutions) {
+    add();
+    for (const [step, out] of [['preview', preview()], ['format replay', replay()]] as const) {
+      assert.notEqual(out.status, 0, `${step} with ${what}`);
+      assert.match(out.stderr + out.stdout, new RegExp(what), `${step} with ${what}`);
+    }
+    remove();
+  }
   const r = preview();
   assert.equal(r.status, 0, r.stderr);
   assert.equal(fs.readFileSync(path.join(prep, 'clashes'), 'utf8'), '', 'a clean merge leaves an empty list');
-
-  git(repo, 'replace', release, evil);
-  for (const [what, out] of [['preview', preview()], ['merge', apply()], ['format replay', run(shPath(REPLAY), '--merge', release, '-m', 'Bring it in')]] as const) {
-    assert.notEqual(out.status, 0, what);
-    assert.match(out.stderr + out.stdout, /replacement refs/, what);
-  }
-  git(repo, 'replace', '-d', release);
-  fs.writeFileSync(path.join(repo, '.git', 'info', 'grafts'), `${release} ${evil}\n`);
-  for (const [what, out] of [['preview', preview()], ['merge', apply()], ['format replay', run(shPath(REPLAY), '--merge', release, '-m', 'Bring it in')]] as const) {
-    assert.notEqual(out.status, 0, what);
-    assert.match(out.stderr + out.stdout, /grafts/, what);
+  for (const [what, add, remove] of substitutions) {
+    add();
+    const out = apply();
+    assert.notEqual(out.status, 0, `merge with ${what}`);
+    assert.match(out.stderr + out.stdout, new RegExp(what), `merge with ${what}`);
+    remove();
   }
   assert.equal(git(repo, 'rev-parse', 'HEAD'), base, 'nothing merged');
-  fs.rmSync(path.join(repo, '.git', 'info', 'grafts'));
 
   const done = apply();
   assert.equal(done.status, 0, done.stderr + done.stdout);

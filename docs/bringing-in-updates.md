@@ -127,7 +127,8 @@ It merges the commit as its id names it: git's replacement objects and
 grafts (`refs/replace/`, `.git/info/grafts`) can have git read a different,
 unsigned commit in place of the one the signature covers, so the preview,
 this and `replay-over-format.sh --merge` refuse a checkout that has either,
-and read with both off (Daybreak, 24 Nov 2026). If one refuses, say so and
+and read with both off, and with the commit-graph off, a file git reads a
+commit's tree from in place of the commit (Daybreak, 24 Nov 2026). If one refuses, say so and
 ask before removing them (`git replace -d <id>`, or that file). Without a
 prepared folder (git older than 2.40, which the preview needs), check
 `git for-each-ref refs/replace/` prints nothing and `.git/info/grafts`

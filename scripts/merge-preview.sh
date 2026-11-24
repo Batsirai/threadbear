@@ -33,7 +33,9 @@ top=$(git rev-parse --show-toplevel)
 # git reads a refs/replace/ entry or info/grafts in place of the object an
 # id names, so the release's signed commit could merge as another, unsigned
 # one (Daybreak 180, 24 Nov 2026).
-export GIT_NO_REPLACE_OBJECTS=1
+# No lazy fetch either: a partial clone missing the release's commit would
+# fetch it through this checkout's own ssh command before anything's shown.
+export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
 unset GIT_GRAFT_FILE GIT_REPLACE_REF_BASE
 common=$(git -C "$top" rev-parse --path-format=absolute --git-common-dir)
 if [ -n "$(git -C "$top" for-each-ref --count=1 --format='%(refname)' refs/replace/)" ] || [ -e "$common/info/grafts" ]; then

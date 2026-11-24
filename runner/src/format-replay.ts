@@ -124,9 +124,15 @@ export async function substitutes(cwd: string): Promise<string | undefined> {
   return undefined;
 }
 
+// Bringing in a release (--merge): the commit-graph off too, a file in the
+// checkout's objects git reads a commit's tree and parents from in place of
+// the commit (Codex's review of Daybreak 180). Not for tb land's replays,
+// which carry the owner's own commits.
+let noCommitGraph = false;
+
 export function git(cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Run> {
   return new Promise((resolve) => {
-    execFile('git', [...GIT_SAFE, '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
+    execFile('git', [...GIT_SAFE, ...(noCommitGraph ? ['-c', 'core.commitGraph=false'] : []), '-C', cwd, ...args], { env: cleanEnv(extra), maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60_000, killSignal: 'SIGKILL' }, (err, stdout, stderr) => {
       const e = err as { code?: unknown; signal?: unknown } | null;
       const code = !e ? 0 : typeof e.code === 'number' ? e.code : e.signal ? -1 : 1;
       resolve({ ok: !err, code, stdout: String(stdout), stderr: String(stderr) });
@@ -973,6 +979,7 @@ async function cli(argv: string[]): Promise<number> {
     }
     const mi = argv.indexOf('-m');
     const message = mi > 0 ? argv[mi + 1] : undefined;
+    noCommitGraph = true;
     const substituted = await substitutes(top);
     if (substituted) {
       say(substituted);

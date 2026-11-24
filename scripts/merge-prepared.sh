@@ -34,6 +34,10 @@ if [ -n "$(git -C "$top" for-each-ref --count=1 --format='%(refname)' refs/repla
   echo "This checkout has git replacement refs (refs/replace/) or grafts ($common/info/grafts), which could have git read other objects in place of the release's: remove them (git replace -d, or that file) first." >&2
   exit 1
 fi
+# And the commit-graph off for the merge: it's a file in this checkout's
+# objects that git reads a commit's tree and parents from in place of the
+# commit itself.
+g() { git -c core.commitGraph=false "$@"; }
 [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "The worktree has uncommitted changes: commit or drop them first." >&2; exit 1; }
 
 # Every settled file has no markers left before anything changes.
@@ -45,15 +49,15 @@ done < "$dir/clashes"
 [ -z "$left" ] || { echo "Still has conflict markers under $dir/files:$left" >&2; exit 1; }
 
 # The settled files are against the main the preview used.
-if main=$(git rev-parse -q --verify refs/heads/main) && ! git merge-base --is-ancestor "$main" "$base"; then
+if main=$(g rev-parse -q --verify refs/heads/main) && ! g merge-base --is-ancestor "$main" "$base"; then
   echo "main has moved on since the preview: run scripts/merge-preview.sh --prepare again and settle only what's new." >&2
   exit 1
 fi
-head=$(git rev-parse HEAD)
+head=$(g rev-parse HEAD)
 if [ "$head" != "$base" ]; then
   # A thread's branch starts from main as it was: catch it up first.
-  if git merge-base --is-ancestor "$head" "$base"; then
-    git merge -q --ff-only "$base"
+  if g merge-base --is-ancestor "$head" "$base"; then
+    g merge -q --ff-only "$base"
   else
     echo "This branch isn't where the preview had main ($base): run scripts/merge-preview.sh --prepare again and settle what changed." >&2
     exit 1
@@ -61,7 +65,7 @@ if [ "$head" != "$base" ]; then
 fi
 
 st=0
-out=$(git merge --no-ff -m "$msg" "$commit" 2>&1) || st=$?
+out=$(g merge --no-ff -m "$msg" "$commit" 2>&1) || st=$?
 unmerged=$(git diff --name-only --diff-filter=U)
 if [ "$st" -ne 0 ] && [ -z "$unmerged" ]; then
   printf '%s\n' "$out" >&2

@@ -236,3 +236,60 @@ test('180: Mike\'s runner holds its release while his checkout has replacement r
   assert.match(up.status().held?.why ?? '', /replacement refs/);
   assert.equal(git(w.mike, 'tag', '--list', 'release/2026-*'), 'release/2026-10-01');
 });
+
+// Codex's review of this fix: Mike's own publishing, with the checkout's
+// config set to run things at each of its steps.
+test("179: Mike's runner tags, checks and pushes its release running nothing his checkout's own config names", NO_SH, async () => {
+  const w = world();
+  const ran = path.join(w.root, 'ran');
+  commit(w.mike, 'b.txt', 'Newer work');
+  git(w.mike, 'push', '-q', 'origin', 'main');
+  const committed = Number(git(w.mike, 'log', '-1', '--format=%ct')) * 1000;
+  git(w.mike, 'config', 'gpg.ssh.program', sentinel(w.root, 'gpg-ssh', ran));
+  git(w.mike, 'config', 'gpg.program', sentinel(w.root, 'gpg', ran));
+  git(w.mike, 'config', 'core.sshCommand', sentinel(w.root, 'sshcommand', ran));
+  git(w.mike, 'config', 'credential.helper', `!${sentinel(w.root, 'credential', ran)}`);
+  git(w.mike, 'config', 'remote.origin.receivepack', sentinel(w.root, 'receivepack', ran, 'exec git-receive-pack "$@"'));
+  git(w.mike, 'config', 'remote.origin.uploadpack', sentinel(w.root, 'uploadpack', ran, 'exec git-upload-pack "$@"'));
+  git(w.mike, 'config', 'push.gpgSign', 'true');
+  git(w.mike, 'config', 'log.showSignature', 'true');
+  for (const hook of ['pre-push', 'reference-transaction', 'post-update']) {
+    fs.writeFileSync(path.join(w.mike, '.git', 'hooks', hook), `#!/bin/sh\necho ${hook}-hook >> '${ran}'\n`, { mode: 0o755 });
+  }
+  const up = upstreamFor(w.mike, w.home, new FakeClock(committed + 2 * 60 * 60_000), { publish: { publish: true, signingKey: w.mikeKey.priv }, runningMainSettled: () => true });
+  const tag = await up.publishOnce();
+  assert.deepEqual(ranIn(ran), []);
+  assert.ok(tag, up.status().held?.why ?? 'not tagged');
+  assert.ok(git(w.mike, 'ls-remote', 'origin', `refs/tags/${tag}`), 'and pushed');
+});
+
+test('180: a revocation whose object is missing fails the check rather than not happening', async () => {
+  const w = world();
+  const next = key(w.root, 'next-key');
+  fs.writeFileSync(signersPath(w.home), `${keyLine(w.mikeKey)}\n${keyLine(next)}\n`);
+  // The newer key revokes the older one (only it or a newer key can).
+  const signed = release(w, 'release/2026-11-06', next.priv, { 'scripts/release-keys-revoked': `${pubOf(w.mikeKey)}\n` });
+  const blob = git(w.mike, 'rev-parse', `${signed}:scripts/release-keys-revoked`);
+  const up = upstreamFor(w.theirs, w.home, new FakeClock(LATER), {
+    gitBytes: (cwd: string, args: string[]) => (args[1] === 'blob' && args[2] === blob ? Promise.reject(new Error('fatal: not a valid object')) : gitBytes(cwd, args)),
+  });
+  const s = await up.check();
+  assert.equal(s.state, 'failed');
+  assert.match(s.reason ?? '', /can't be read/);
+  assert.deepEqual(pinnedKeys(w.home), [pubOf(w.mikeKey), pubOf(next)], 'nothing changed');
+  // And read as it is, the revocation happens.
+  const after = await upstreamFor(w.theirs, w.home).check();
+  assert.equal(after.release?.commit, signed, after.reason ?? '');
+  assert.deepEqual(pinnedKeys(w.home), [pubOf(next)], 'revoked');
+});
+
+test("179: a config setting whose name isn't UTF-8 stops release git rather than slip past being switched off", NO_SH, async () => {
+  const w = world();
+  const ran = path.join(w.root, 'ran');
+  // A config hook (git 2.54) named with byte 0xff, which -c can't name.
+  fs.appendFileSync(path.join(w.theirs, '.git', 'config'), Buffer.concat([Buffer.from('[hook "'), Buffer.from([0xff]), Buffer.from(`"]\n\tevent = reference-transaction\n\tcommand = ${sentinel(w.root, 'hook', ran)}\n`)]));
+  const s = await upstreamFor(w.theirs, w.home).check();
+  assert.deepEqual(ranIn(ran), []);
+  assert.equal(s.state, 'failed');
+  assert.match(s.reason ?? '', /isn't UTF-8/);
+});

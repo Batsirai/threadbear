@@ -89,7 +89,10 @@ setting in the checkout's own config that would run something switched off
 on the command line just before each command (`safe-git.ts`
 `repoProofConfig`: hooks, fsmonitor, filters, diff drivers, credential
 helpers, ssh and askpass programs, protocols it allows; and signing
-programs, `log.showSignature`, push signing and submodules); only `https`
+programs, `log.showSignature`, push signing and submodules; the ssh
+command, signing programs and credential helpers are set to the owner's
+own or git's defaults every time, whatever the checkout's config says, and
+a setting whose name isn't UTF-8, which `-c` can't name, stops git); only `https`
 and `ssh` to a remote, with git's own upload-pack and receive-pack named;
 and the remote given as a URL rebuilt from `remote.<name>.url` as
 configured, an https or ssh address of a plain host and path (anything
@@ -102,7 +105,7 @@ Mike's runner holds its release with the reason. A release's
 `scripts/release-signers` and `scripts/release-keys-revoked` are read
 object by object from the signed commit (commit, trees, blob), each one's
 bytes hashed and checked against its id, so a forged object fails the
-check rather than counting. A runner from before 7 Nov 2026 fetched every tag into
+check rather than counting, and so does one it names that can't be read. A runner from before 7 Nov 2026 fetched every tag into
 `refs/threadbear/upstream-incoming/*`, unchecked; each check deletes
 anything left there. Verified
 means: the tag object is `object`, `type commit`, `tag <the name it came

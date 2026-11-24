@@ -8,7 +8,7 @@ import { claudeCommands } from '../../src/claude-trust.ts';
 import { trackedNodeModules } from '../../src/tracked-packages.ts';
 import { git as worktreeGit } from '../../src/worktrees.ts';
 import { changedFiles } from '../../src/move-git.ts';
-import { untrustedGit, untrustedGitSync } from '../../src/safe-git.ts';
+import { untrustedGit, untrustedGitSync, parseConfigListBytes } from '../../src/safe-git.ts';
 
 // A folder that arrived with its own .git (a zip, a shared drive), whose
 // .git/config names an fsmonitor program. Nothing the runner does before
@@ -221,4 +221,13 @@ test('untrustedGit runs no diff.external, and only the commands it has been look
   assert.ok((await untrustedGit(repo, ['worktree', 'list', '--porcelain'], quiet)).ok);
   assert.equal(fs.existsSync(marker), false);
   assert.throws(() => untrustedGitSync(repo, ['diff']), /listings/);
+});
+
+// Codex's review of Daybreak 179, 24 Nov 2026: a setting named with a byte
+// that isn't UTF-8 (a config hook's name) read as text comes back as U+FFFD,
+// and switching that off on the command line names another setting.
+test("a config setting whose name isn't UTF-8 can't be switched off, so git isn't run", () => {
+  const listing = (key: Buffer, value: string) => Buffer.concat([Buffer.from('local\0'), key, Buffer.from(`\n${value}\0`)]);
+  assert.deepEqual(parseConfigListBytes(listing(Buffer.from('hook.é.command'), 'x')), [{ scope: 'local', key: 'hook.é.command', value: 'x' }]);
+  assert.throws(() => parseConfigListBytes(listing(Buffer.concat([Buffer.from('hook.'), Buffer.from([0xff]), Buffer.from('.command')]), 'x')), /isn't UTF-8/);
 });

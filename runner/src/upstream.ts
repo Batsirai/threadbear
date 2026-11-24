@@ -49,7 +49,7 @@ import { IS_WINDOWS } from './platform.ts';
 import { killGroup } from './proc.ts';
 import { ADD_DELAY_MS, applyKeyChanges, KeysBusy, keysIn, revokedPath, REVOKED_FILE, signerKey, SIGNERS_FILE } from './release-keys.ts';
 import { changelogFor, type ReleaseChangelog } from './changelog.ts';
-import { LISTING_GIT_CONFIG, parseConfigList, repoProofConfig, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
+import { LISTING_GIT_CONFIG, parseConfigListBytes, repoProofConfig, TRUSTED_SCOPES, untrustedGitEnv } from './safe-git.ts';
 
 export const FETCH_INTERVAL_MS = 6 * 60 * 60_000;
 // After a look that failed (no network yet after waking, GitHub down) the
@@ -410,14 +410,19 @@ const RELEASE_CONFIG: readonly string[] = [
   '-c', 'push.recurseSubmodules=no',
   '-c', 'advice.graftFileDeprecated=false',
 ];
-// The signing programs (only `git tag -s` on Mike's runner signs), each the
-// owner's own or git's default whatever the checkout names.
-const SIGNING_PROGRAMS: { key: RegExp; fallback: string }[] = [
-  { key: /^gpg\.program$/, fallback: 'gpg' },
-  { key: /^gpg\.openpgp\.program$/, fallback: 'gpg' },
-  { key: /^gpg\.x509\.program$/, fallback: 'gpgsm' },
-  { key: /^gpg\.ssh\.program$/, fallback: 'ssh-keygen' },
-  { key: /^gpg\.ssh\.defaultkeycommand$/, fallback: '' },
+// The programs a release's git could run that are named by one setting each:
+// the ssh command and the signing programs (only `git tag -s` on Mike's
+// runner signs). Each is set every time, to the owner's own or git's default,
+// whatever the checkout's config says, so it holds even if that config
+// changes between the look at it and the command (Codex's review, 24 Nov
+// 2026); credential helpers too (releaseGitConfig).
+const PROGRAMS: { key: string; fallback: string }[] = [
+  { key: 'core.sshcommand', fallback: 'ssh' },
+  { key: 'gpg.program', fallback: 'gpg' },
+  { key: 'gpg.openpgp.program', fallback: 'gpg' },
+  { key: 'gpg.x509.program', fallback: 'gpgsm' },
+  { key: 'gpg.ssh.program', fallback: 'ssh-keygen' },
+  { key: 'gpg.ssh.defaultkeycommand', fallback: '' },
 ];
 // git's own, by name, whatever a remote's settings say (a remote named by its
 // URL is one too).
@@ -446,23 +451,27 @@ export function releaseGitEnv(opts: Pick<GitOptions, 'env' | 'owner'> = {}): Nod
 
 // The -c settings for release git in `cwd`, from its config as git reads it
 // with `env`. Throws when it can't be read, or has a setting -c can't reach.
+// What's switched off by name (a config hook's, a filter's) is what this
+// look found: one the checkout's config gains between the look and the
+// command isn't, as for a thread's move (safe-git.ts untrustedGit); the
+// programs above are set whatever it says.
 export async function releaseGitConfig(cwd: string, env: NodeJS.ProcessEnv, opts: Pick<GitOptions, 'network' | 'files'> = {}): Promise<string[]> {
-  const listed = await new Promise<string>((resolve, reject) => {
-    execFile('git', [...LISTING_GIT_CONFIG, '-C', cwd, ...bareRepoArgs(cwd), 'config', '--list', '--show-scope', '-z'], { env, timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
-      err ? reject(new Error(`couldn't read the checkout's git config: ${String(stderr).trim() || err.message}`)) : resolve(String(stdout)),
+  const listed = await new Promise<Buffer>((resolve, reject) => {
+    execFile('git', [...LISTING_GIT_CONFIG, '-C', cwd, ...bareRepoArgs(cwd), 'config', '--list', '--show-scope', '-z'], { env, encoding: 'buffer', timeout: 10_000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) =>
+      err ? reject(new Error(`couldn't read the checkout's git config: ${String(stderr).trim() || err.message}`)) : resolve(stdout),
     );
   });
-  const entries = parseConfigList(listed);
+  const entries = parseConfigListBytes(listed);
   const out = [...repoProofConfig(entries, opts.network === 'remote' ? 'remote' : opts.network === 'local' ? 'bundle' : undefined), ...RELEASE_CONFIG];
   // repoProofConfig lets a remote be a folder too (a thread's move needs
   // that); a release's never is.
   if (opts.network === 'remote' && !opts.files) out.push('-c', 'protocol.file.allow=never');
-  for (const p of SIGNING_PROGRAMS) {
-    for (const key of new Set(entries.filter((e) => p.key.test(e.key) && !TRUSTED_SCOPES.has(e.scope)).map((e) => e.key))) {
-      const own = entries.filter((e) => e.key === key && TRUSTED_SCOPES.has(e.scope)).pop();
-      out.push('-c', `${key}=${own ? own.value : p.fallback}`);
-    }
-  }
+  const own = (match: (k: string) => boolean) => entries.filter((e) => match(e.key) && TRUSTED_SCOPES.has(e.scope));
+  for (const p of PROGRAMS) out.push('-c', `${p.key}=${own((k) => k === p.key).pop()?.value ?? p.fallback}`);
+  // An empty helper empties the list git has so far (any URL's too); then
+  // the owner's own, in order.
+  out.push('-c', 'credential.helper=');
+  for (const e of own((k) => /^credential\.(.+\.)?helper$/.test(k))) out.push('-c', `${e.key}=${e.value}`);
   return out;
 }
 
@@ -517,7 +526,7 @@ async function runGit(cwd: string, args: string[], opts: GitOptions): Promise<Bu
       if (watch) clearInterval(watch);
       // The reason first: a check's status keeps only the start of it.
       if (why) reject(new Error(`git ${args.find((a) => !a.startsWith('-') && !a.includes('=')) ?? ''} ${why} (git ${args.join(' ')})`));
-      else if (code !== 0) reject(new Error(`git ${args.join(' ')} failed: ${err.trim() || `exit ${code ?? signal}`}`));
+      else if (code !== 0) reject(Object.assign(new Error(`git ${args.join(' ')} failed: ${err.trim() || `exit ${code ?? signal}`}`), { exitCode: code }));
       else resolve(Buffer.concat(out));
     });
   });
@@ -730,7 +739,13 @@ export class Upstream {
   private async checkNow(): Promise<UpstreamStatus> {
     const checkout = this.deps.checkout;
     if (!checkout) return this.status();
-    const urls = await this.remotes(checkout);
+    let urls: { origin?: string; upstream?: string };
+    try {
+      urls = await this.remotes(checkout);
+    } catch (e) {
+      this.deps.log.warn('could not check upstream for releases', { error: String(e) });
+      return this.set({ state: 'failed', checkedAt: new Date(this.deps.clock.now()).toISOString(), reason: String((e as Error).message ?? e).slice(0, 300) });
+    }
     if (!urls.upstream) return this.set({ state: 'off', reason: "this copy has no upstream remote (Mike's repo), so it has no releases to follow" });
     if (urls.origin && repoKey(urls.origin) === repoKey(urls.upstream)) return this.set({ state: 'off', reason: 'upstream is this repo' });
     const from = this.url(urls.upstream);
@@ -829,8 +844,16 @@ export class Upstream {
     return { origin, upstream };
   }
 
+  // Undefined when there's none (git config's exit 1); anything else that
+  // stops git (a config it won't run with) throws.
   private configuredUrl(checkout: string, name: string): Promise<string | undefined> {
-    return this.git(checkout, ['config', '--get-all', `remote.${name}.url`]).then((out) => out.split('\n')[0]?.trim() || undefined, () => undefined);
+    return this.git(checkout, ['config', '--get-all', `remote.${name}.url`]).then(
+      (out) => out.split('\n')[0]?.trim() || undefined,
+      (e: unknown) => {
+        if ((e as { exitCode?: unknown }).exitCode === 1) return undefined;
+        throw e;
+      },
+    );
   }
 
   // Fetches a bounded few of upstream's release tags into a folder of their
@@ -1042,22 +1065,28 @@ export class Upstream {
     const read = this.deps.gitBytes ?? gitBytes;
     const commit = OBJECT_ID.test(rev) ? rev : await this.git(cwd, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]).catch(() => '');
     if (!commit) return '';
-    const object = async (type: 'commit' | 'tree' | 'blob', oid: string): Promise<Buffer | undefined> => {
-      const body = await read(cwd, ['cat-file', type, oid]).catch(() => undefined);
-      if (body && !objectIs(type, oid, body)) throw new Error(`the ${type} ${oid.slice(0, 12)} in this checkout's objects isn't the one its id names, so the release's ${file} can't be read`);
+    // An object the commit or a tree names that can't be read, or isn't
+    // what its id says, fails the read: taken as no file, a revocation
+    // whose blob went missing would just not happen (Codex's review).
+    const object = async (type: 'commit' | 'tree' | 'blob', oid: string): Promise<Buffer> => {
+      const body = await read(cwd, ['cat-file', type, oid]).catch((e: unknown) => {
+        throw new Error(`the ${type} ${oid.slice(0, 12)} can't be read from this checkout's objects, so the release's ${file} can't be (${String(e).slice(0, 120)})`);
+      });
+      if (!objectIs(type, oid, body)) throw new Error(`the ${type} ${oid.slice(0, 12)} in this checkout's objects isn't the one its id names, so the release's ${file} can't be read`);
       return body;
     };
-    const head = (await object('commit', commit))?.toString('latin1');
-    let oid = head && /^tree ([0-9a-f]{40}|[0-9a-f]{64})\n/.exec(head)?.[1];
+    const tree = /^tree ([0-9a-f]{40}|[0-9a-f]{64})\n/.exec((await object('commit', commit)).toString('latin1'))?.[1];
+    if (!tree) throw new Error(`the commit ${commit.slice(0, 12)} names no tree`);
+    let oid = tree;
     const parts = file.split('/');
-    for (let i = 0; oid && i < parts.length; i++) {
-      const tree = await object('tree', oid);
-      const entry = tree && treeEntry(tree, parts[i]!, oid.length / 2);
+    for (let i = 0; i < parts.length; i++) {
+      const entry = treeEntry(await object('tree', oid), parts[i]!, oid.length / 2);
       const last = i === parts.length - 1;
-      oid = entry && (last ? /^100(644|755)$/.test(entry.mode) : entry.mode === '40000') ? entry.oid : undefined;
+      // Not there (or a link, or a folder where a file should be): no file.
+      if (!entry || !(last ? /^100(644|755)$/.test(entry.mode) : entry.mode === '40000')) return '';
+      oid = entry.oid;
     }
-    if (!oid) return '';
-    return (await object('blob', oid))?.toString('utf8') ?? '';
+    return (await object('blob', oid)).toString('utf8');
   }
 
   // Whether `commit` is on upstream's main as this check staged it.

@@ -131,6 +131,24 @@ export function parseConfigList(out: string): ConfigEntry[] {
   return list;
 }
 
+// The same from git's own bytes. A setting's name is bytes to git, and node
+// hands -c to git as UTF-8, so a name that isn't UTF-8 (a hook named with
+// byte 0xff) read as text comes back as U+FFFD and switching it off would
+// name a different setting, leaving the repo's on (Codex's review of
+// Daybreak 179, 24 Nov 2026): it fails instead, as one -c can't carry does.
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+export function parseConfigListBytes(out: Buffer): ConfigEntry[] {
+  return parseConfigList(out.toString('latin1')).map((e) => {
+    let key: string;
+    try {
+      key = UTF8.decode(Buffer.from(e.key, 'latin1'));
+    } catch {
+      throw new Error(`This repo's git config has a setting whose name isn't UTF-8 text (${JSON.stringify(e.key.slice(0, 80))}), which Threadbear can't switch off, so it left git alone.`);
+    }
+    return { scope: e.scope, key, value: Buffer.from(e.value, 'latin1').toString('utf8') };
+  });
+}
+
 // A name git's -c can carry: it splits `key=value` at the first =.
 function settable(key: string): string {
   if (key.includes('=') || key.includes('\n')) throw new Error(`This repo's git config has a setting Threadbear can't switch off (${JSON.stringify(key.slice(0, 80))}), so it left git alone.`);
@@ -210,13 +228,13 @@ export async function untrustedGit(dir: string, args: readonly string[], opts: U
   if (!sub || !SUBCOMMANDS.has(sub) || (sub === 'worktree' && rest[0] !== 'list')) return { ok: false, code: 1, stdout: '', stderr: `untrustedGit doesn't run git ${[sub, sub === 'worktree' ? rest[0] : undefined].filter(Boolean).join(' ')}: nobody has looked at what a repo's config could make it run.` };
   // The same variables as the command, so it reads the config the command will.
   const started = Date.now();
-  const listed = await execGit(dir, [...LISTING_GIT_CONFIG, '-C', dir, 'config', '--list', '--show-scope', '-z'], { ...untrustedGitEnv(), GIT_NO_LAZY_FETCH: '1', ...opts.env }, Math.min(10_000, timeout));
+  const listed = await execGit(dir, [...LISTING_GIT_CONFIG, '-C', dir, 'config', '--list', '--show-scope', '-z'], { ...untrustedGitEnv(), GIT_NO_LAZY_FETCH: '1', ...opts.env }, Math.min(10_000, timeout), true);
   // Outside a repo it still lists the owner's own config (empty is 0 too);
   // a config git can't parse fails the listing, and so this.
   if (!listed.ok) return { ok: false, code: listed.code || 1, stdout: '', stderr: `couldn't read the repo's git config: ${listed.stderr.trim() || `git config exited ${listed.code}`}` };
   let config: string[];
   try {
-    config = repoProofConfig(parseConfigList(listed.stdout), opts.network);
+    config = repoProofConfig(parseConfigListBytes(listed.bytes ?? Buffer.from(listed.stdout)), opts.network);
   } catch (e) {
     return { ok: false, code: 1, stdout: '', stderr: e instanceof Error ? e.message : String(e) };
   }
