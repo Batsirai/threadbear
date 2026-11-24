@@ -355,10 +355,10 @@ export const movePacked = mutation({
     if (!Number.isSafeInteger(a.bytes) || a.bytes < 1 || a.bytes > MAX_MOVE_CHUNKS * MAX_RUNNER_UPLOAD_BYTES) throw bad('bytes is out of range');
     for (const id of a.chunks) {
       if (!(await ctx.db.system.get(id))) throw bad('a chunk is not stored');
-      if (!caller.owner) {
-        const owners = await ctx.db.query('storageOwners').withIndex('by_storageId', (q) => q.eq('storageId', id)).collect();
-        if (!owners.some((o) => o.runnerId === caller.runnerId)) throw forbidden("use a stored file its runner didn't upload");
-      }
+      const owners = await ctx.db.query('storageOwners').withIndex('by_storageId', (q) => q.eq('storageId', id)).collect();
+      if (!caller.owner && !owners.some((o) => o.runnerId === caller.runnerId)) throw forbidden("use a stored file its runner didn't upload");
+      // The main key's own chunks have no record: one with a keyed runner's is that runner's upload (Gemini's review of Daybreak 178).
+      for (const o of owners) if (caller.owner && (await hasLiveKey(ctx, o.runnerId))) throw forbidden("use a stored file its runner didn't upload");
     }
     await step(ctx, m, { type: 'PACK', chunks: a.chunks, sha256: a.sha256, bytes: a.bytes }, 'be packed');
     return null;

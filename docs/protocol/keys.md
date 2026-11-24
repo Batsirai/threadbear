@@ -121,8 +121,8 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   cache sends its history once more and takes those rows as its own), a row of
   its own thread it sends again takes the one at that seq back with its
   own words if they differ, in one step (counted against it, making room
-  only among its rows older than that one, waiting when there's none, and
-  letting it go if it's older than everything it has), and the runner itself doesn't take a head past the thread's own
+  only among its rows older than that one, and when it's older than
+  everything it has, letting that row go and putting its own in as new), and the runner itself doesn't take a head past the thread's own
   last seq, which none of its own can be: it sends the whole history
   again. This keeps a forgotten copy of the owner key from carrying on as
   that runner; it isn't a fence against someone holding the owner key on

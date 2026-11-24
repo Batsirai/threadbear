@@ -1899,17 +1899,17 @@ export const appendMessages = mutation({
         const replacement = differs ? { ...m, ...(existing.pagedAt ? { pagedAt: existing.pagedAt } : {}) } : undefined;
         const age: RowAge = { before: existing._creationTime };
         const taken = await takenBack(ctx, 'messages', existing, caller.runnerId, (size) => roomForMessage(ctx, caller.runnerId, size, insertedNow, budget, undefined, caller.box?.threadId, age), replacement);
-        // Older than all it has, with no room: what its allowance would let go first goes.
+        // Older than all it has, with no room: the old row goes as its
+        // allowance's oldest would, and what was sent goes in as a new row
+        // (a row planted early at its seq mustn't cost it its message).
         if (!taken && age.oldest) {
           await letGo(ctx, 'messages', existing);
-          continue;
-        }
-        if (!taken) {
+          existing = null;
+        } else if (!taken) {
           skipped.push(`${m.threadId}:${m.seq}`);
           continue;
-        }
-        if (differs) continue;
-        existing = taken;
+        } else if (differs) continue;
+        else existing = taken;
       }
       if (!existing) {
         // A runner key's messages stay within CAP.messageBytes: past it, its
@@ -1997,12 +1997,23 @@ async function handedOn(ctx: MutationCtx, table: 'messages' | 'eventBodies', row
     const used = table === 'messages' ? (usage?.messageBytes ?? 0) : (usage?.bodyBytes ?? 0);
     if (used + size > (table === 'messages' ? CAP.messageBytes : CAP.bodyBytes)) {
       // That runner's oldest, as its room-making picks it (roomForMessage, roomForBody).
+      // Only against a row of a thread it has now, or of one now
+      // `runnerId`'s (the two waiting on each other): one of a thread on its
+      // way to a third runner isn't what its own room-making would take
+      // (handedOn gives it on), so this waits for that (Gemini's review,
+      // round three).
+      const its = async (o: { threadId: string } | null) => {
+        if (!o) return false;
+        if (!owners.has(o.threadId)) owners.set(o.threadId, (await threadRow(ctx, o.threadId))?.runnerId ?? null);
+        const has = owners.get(o.threadId);
+        return has === now || has === runnerId;
+      };
       if (table === 'messages') {
         const oldest = await ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', now)).first();
-        return oldest && row._creationTime <= oldest._creationTime ? 'mine' : 'held';
+        return oldest && (await its(oldest)) && row._creationTime <= oldest._creationTime ? 'mine' : 'held';
       }
       const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', now)).first();
-      return oldest && (row as Doc<'eventBodies'>).at <= oldest.at ? 'mine' : 'held';
+      return oldest && (await its(oldest)) && (row as Doc<'eventBodies'>).at <= oldest.at ? 'mine' : 'held';
     }
     await ctx.db.patch(_id, { runnerId: now });
     await (table === 'messages' ? countMessageBytes : countBodyBytes)(ctx, now, size);
@@ -3691,19 +3702,28 @@ export const appendBodies = mutation({
         .first();
       // The thread is this runner key's (ownThread): a row of it under
       // another runner's id is this one's again, if it has room for it.
-      if (existing && !caller.owner) {
-        const age: RowAge = { before: existing.at };
-        const taken = await takenBack(ctx, 'eventBodies', existing, caller.runnerId, (size) => roomForBody(ctx, caller.runnerId, size, null, budget, caller.box?.threadId, age));
-        if (!taken && age.oldest) {
-          await letGo(ctx, 'eventBodies', existing);
-          continue;
-        }
-        if (!taken) {
+      if (existing && !caller.owner && existing.runnerId !== caller.runnerId) {
+        // Its own words in place of one that differs, sized as they'll be
+        // stored, in one step (as appendMessages does; Codex's round three).
+        const replacement = sameBody(existing, b) ? undefined : { ...b, at: existing.at };
+        if (replacement && docBytes({ ...replacement, runnerId: caller.runnerId }) > CAP.bodyDoc) {
           skipped.push(`${b.threadId}:${b.seq}`);
           continue;
         }
-        existing = taken;
+        const age: RowAge = { before: existing.at };
+        const taken = await takenBack(ctx, 'eventBodies', existing, caller.runnerId, (size) => roomForBody(ctx, caller.runnerId, size, null, budget, caller.box?.threadId, age), replacement);
+        // The old row goes as its allowance's oldest would; what was sent
+        // goes in as a new row (a row planted early at its seq mustn't cost it).
+        if (!taken && age.oldest) {
+          await letGo(ctx, 'eventBodies', existing);
+          existing = null;
+        } else if (!taken) {
+          skipped.push(`${b.threadId}:${b.seq}`);
+          continue;
+        } else if (replacement) continue;
+        else existing = taken;
       }
+
       // Sent again after a restart or a lost reply: nothing to write.
       if (existing && sameBody(existing, b)) continue;
       if (caller.owner) {

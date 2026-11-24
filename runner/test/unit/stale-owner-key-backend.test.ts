@@ -251,3 +251,54 @@ test("the main key can't attach a keyed runner's upload to a thread of its own",
   assert.equal(await outcome(s.owner.reply('L', theirs)), 'forbidden');
   assert.equal(s.rows('storageOwners').find((o) => o.storageId === theirs)!.attachedAt, undefined);
 });
+
+// Codex, round three: a tool output was taken back with its old contents,
+// sized as they were, and the runner's own never went in.
+test("a forged tool output is taken back with the runner's own, sized as its own", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  await s.mini.body('M', 'real 1', 1);
+  await s.ctx.db.insert('eventBodies', { threadId: 'M', seq: 2, text: 'FORGED '.padEnd(4_000, 'x'), at: 1 });
+  const CAP = sync.RUNNER_KEY_CAPS as { bodyBytes: number };
+  const was = CAP.bodyBytes;
+  // Room for the runner's small one, not for the big forged one.
+  CAP.bodyBytes = s.rows('runnerStorage').find((u) => u.runnerId === MINI)!.bodyBytes + 500;
+  try {
+    await s.mini.body('M', 'real 2', 2);
+  } finally {
+    CAP.bodyBytes = was;
+  }
+  const two = s.rows('eventBodies').find((b) => b.seq === 2)!;
+  assert.deepEqual([two.text, two.runnerId], ['real 2', MINI]);
+  const { storedBytes } = sync as { storedBytes: (r: Record<string, unknown>) => number };
+  assert.equal(s.rows('runnerStorage').find((u) => u.runnerId === MINI)!.bodyBytes, s.rows('eventBodies').filter((b) => b.runnerId === MINI).reduce((n, b) => n + storedBytes(b), 0));
+});
+
+// Gemini, round three: the tool-output takeback also caught a runner's own
+// row sent again with new contents, and dropped the update.
+test("a runner's own tool output sent again with new contents still replaces it", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  await s.mini.body('M', 'first', 3);
+  await s.mini.body('M', 'second', 3);
+  assert.deepEqual(s.rows('eventBodies').map((b) => b.text), ['second']);
+});
+
+// Gemini, round three: a row planted early at a seq, older than all a full
+// runner has, was let go and the runner's own message at that seq with it.
+test("a full runner's message at a seq a row was planted under still goes in", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  await s.ctx.db.insert('messages', { threadId: 'M', seq: 5, role: 'assistant', text: 'PLANTED', at: 'now' });
+  for (const seq of [1, 2, 3]) await s.mini.append('M', `real ${seq}`, seq);
+  const CAP = sync.RUNNER_KEY_CAPS as { messageBytes: number };
+  const was = CAP.messageBytes;
+  CAP.messageBytes = s.rows('runnerStorage').find((u) => u.runnerId === MINI)!.messageBytes;
+  try {
+    await s.mini.append('M', 'real 5', 5);
+  } finally {
+    CAP.messageBytes = was;
+  }
+  assert.ok(textsOf(s, 'M').includes('real 5'));
+  assert.ok(!textsOf(s, 'M').includes('PLANTED'));
+});
