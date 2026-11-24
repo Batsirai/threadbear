@@ -615,7 +615,13 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     }
     if (!release) {
       const landed = landedMeanwhile();
-      if (landed) return await landedByAnother(t, landed, out);
+      if (landed) {
+        // As once the lock comes: from here a stop doesn't cut moving the
+        // branch short (Codex's and Gemini's reviews). It goes on even if
+        // its tb has gone, as goesOn() lets a landed one.
+        opts.onLocked?.();
+        return await landedByAnother(t, landed, out);
+      }
       err(refused()?.text ?? `${t.branch} was left out of its group's check, so nothing landed. Run tb land again.`);
       return 1;
     }
@@ -2287,6 +2293,10 @@ async function landLocked(
     let mine = ready.commits;
     if (group.length) {
       for (const g of group) {
+        // Asked before its result is written, as ownerWaiting reads a
+        // result as gone, and a waiting tb now moves its own branch as soon
+        // as it sees one, maybe before this gets there (Gemini's review).
+        const waits = g.tip !== g.entry.commit && (await ownerWaiting(common, g.entry));
         const now = readEntry(common, g.entry.id);
         if (now) writeEntry(common, { ...now, result: { landed: g.tip, commits: g.commits, together: [t.branch, ...together.filter((b) => b !== g.entry.branch)] } });
         // One whose tb has gone never hears: move its branch here, as it
@@ -2296,9 +2306,11 @@ async function landLocked(
         // the same commits, as happens within the same second): there's
         // nothing to move, and a note from a commit to itself made its next
         // tb land say it moved the branch (red on GitHub's Linux, 13 Nov).
-        if (g.tip !== g.entry.commit && !(await ownerWaiting(common, g.entry))) {
+        // The note either way: one stopped just after this asked, or left
+        // dirty while it looked, has its next tb land move it.
+        if (g.tip !== g.entry.commit) {
           writeLandedFor(common, g.entry.commit, g.tip);
-          await moveGoneBranch(g.entry, g.tip);
+          if (!waits) await moveGoneBranch(g.entry, g.tip);
         }
       }
       // Through leaveStack, as a commit made since the check was looked at

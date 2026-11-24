@@ -319,9 +319,11 @@ their own.
   already on main is left out, a commit made empty is kept). It
   checks that stack once, in its own worktree with HEAD detached at it, and
   fast-forwards main to the top. Its branch moves to its commits as they
-  landed; each of the others finds its result in its entry when it gets
-  the lock, moves its own branch to its commits as they landed, prints
-  them and which branches were in the same check, and exits.
+  landed; each of the others finds its result in its entry within a few
+  seconds, without waiting for the lock (until 24 Nov it waited for it, an
+  hour once behind other groups' checks), moves its own branch to its
+  commits as they landed, prints them and which branches were in the same
+  check, and exits.
 - The group's check runs in the holder's landing process (its tb's, "A
   landing outlives its tb" above), with its environment, so each
   entry also keeps the check hosts its own tb asked for
@@ -447,9 +449,6 @@ their own.
   as being checked. Older holders' records still work, using their branch
   names. For a landing in the running group, a check that runs past the
   usual time says "longer than usual" instead of guessing how much longer.
-  If its group has already landed but another landing gets the lock first,
-  it says it has landed and is waiting for the lock to finish up, without
-  an estimate for another check.
   It says it again every three minutes.
 
 So a landing waits for at most the check that's running and the next one,

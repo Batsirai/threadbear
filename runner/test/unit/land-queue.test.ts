@@ -186,11 +186,15 @@ test('a landing its group has landed stops waiting for the lock', async () => {
     const landing = land(b, cap.opts);
     await until(() => cap.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
     const [e] = waiting(common);
-    // As the holder of a group check with b in it does once main has moved.
-    const tip = sh(b.path, 'git rev-parse HEAD');
-    sh(main, `git merge -q --ff-only ${b.branch}`);
+    // As the holder of a group check with b in it does once main has moved:
+    // b rebased on the holder's own commit.
+    commit(main, { 'h.txt': 'h\n' }, 'Add h');
+    sh(main, `git cherry-pick ${b.branch} >/dev/null`);
+    const tip = sh(main, 'git rev-parse HEAD');
     writeEntry(common, { ...e, result: { landed: tip, commits: `${tip.slice(0, 9)} Add b`, together: ['thread/h0000000'] } });
     assert.equal(await landing, 0, cap.err.join('\n'));
+    assert.equal(sh(b.path, 'git rev-parse HEAD'), tip, 'its branch moved to b as it landed');
+    assert.equal(sh(b.path, 'git rev-parse --abbrev-ref HEAD'), b.branch);
     assert.match(cap.out.join('\n'), /Landed on main in .*, in one check with thread\/h0000000:/);
     assert.deepEqual(waiting(common), [], 'out of the line');
     assert.ok(!fs.existsSync(path.join(root, 'lock-drop')), 'with the lock still held by the other');
