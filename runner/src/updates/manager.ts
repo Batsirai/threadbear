@@ -667,6 +667,12 @@ export class CliUpdates {
       // On a first start, a latest that won't install still leaves the
       // tested version to try.
       if (o.bootstrap && target !== this.d.codex.testedVersion && !this.copies.currentVersion()) return this.installCodex(this.d.codex.testedVersion, { bootstrap: false });
+      // npm's "latest" can name a release minutes before its download is
+      // up (0.172.0 on 24 Nov). Not a failure: the next check tries again.
+      if (unpublished(r.output, target)) {
+        this.finish('codex', { state: 'unchanged', targetVersion: target, message: `Codex ${target} isn't ready to download yet; the next check tries again.` });
+        return;
+      }
       this.finish('codex', { state: 'failed', targetVersion: target, message: r.message });
       return;
     }
@@ -779,4 +785,9 @@ function stripUndefined<T extends Record<string, unknown>>(o: T): T {
 // replaces or clears it.
 function sameHold(a: CodexHold | undefined, b: CodexHold): boolean {
   return a?.version === b.version && a.reason === b.reason && (a.missing ?? []).join('\n') === (b.missing ?? []).join('\n');
+}
+
+// npm's 404 for the release's own download, as against any other failure.
+export function unpublished(output: string, version: string): boolean {
+  return /\bE404\b/.test(output) && output.includes(`/codex-${version}.tgz`);
 }
