@@ -1706,8 +1706,8 @@ pub(super) fn canvas_key(path: &str) -> String {
 
 impl ReviewWindow {
     /// A clip's or a page's button on its picture: Play (or Show the page),
-    /// or, while it's playing, Stop just over its top right corner, as the
-    /// player covers the picture.
+    /// or, while it's playing, Stop just over its top right corner (under
+    /// it, with the tools' row in the way), as the player covers the picture.
     fn play_button(
         &self,
         scene: &Scene,
@@ -1752,10 +1752,19 @@ impl ReviewWindow {
                 format!("Close {name}'s page"),
             ),
         };
-        let (right, top) = if playing {
+        // Clear of the tools' row, which is drawn over the board and takes
+        // a click aimed at a button under it: Stop goes under the picture
+        // when there's no room over it (a sound's Stop sat under the row and
+        // never stopped it, 24 Nov 2026).
+        let (right, top) = if !playing {
+            (
+                s.x + s.w - 8.,
+                (s.y + 8.).max(PLAY_TOP.min(s.y + s.h - 34.)),
+            )
+        } else if s.y - 34. >= PLAY_TOP || s.y + s.h + 34. > scene.view.1 {
             (s.x + s.w, s.y - 34.)
         } else {
-            (s.x + s.w - 8., s.y + 8.)
+            (s.x + s.w, s.y + s.h + 8.)
         };
         crate::highlights::tipped(
             h_flex()
