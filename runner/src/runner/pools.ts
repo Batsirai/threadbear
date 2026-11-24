@@ -176,16 +176,17 @@ export const poolsPart = {
   onUsageLimit(this: Runner, st: ThreadState, turnId: string): void {
     const { rec } = st;
     // So turning carrying on back on later knows this turn stopped at a limit.
-    rec.limitHitTurn = turnId;
-    this.markDirty(st);
     // The login the turn ran on. If Mike moved the thread off it mid-turn,
-    // that login is the one that's out, and the thread stays where he put it.
+    // that login is the one that's out, and the thread stays where he put
+    // it, not stopped at a limit there.
     const ranOn = st.rt.sessionAccountId ?? rec.accountId;
     if (ranOn !== rec.accountId) {
       const old = this.usableAccounts().find((a) => a.id === ranOn);
       if (old) this.markRanDry(old);
       return;
     }
+    rec.limitHitTurn = turnId;
+    this.markDirty(st);
     const pool = this.poolById(rec.poolId);
     if (!pool) {
       if (this.bucket(rec) !== 'inbox' || rec.queue.length || rec.carryOnAtReset === false) return;
@@ -252,7 +253,10 @@ export const poolsPart = {
     // that counts as back (recordReading): a provider can refuse (a 402)
     // while its own reading still shows room, and reading the same room
     // again shouldn't send the thread back to be refused every 10 minutes.
-    if (!stillDry) this.dryRoom.set(account.id, account.usage?.blocked ? 0 : (accountRoom(account) ?? 0));
+    // With no reading yet, the one its CLI takes after the turn sets it
+    // (Runner.onOutput, limits); none at all, and only the block's own end
+    // lets it back.
+    if (!stillDry) this.dryRoom.set(account.id, account.usage?.blocked ? 0 : (accountRoom(account) ?? Infinity));
     if (account.usage?.blocked) return;
     try {
       this.usage?.record(account.id, { windows: [], blocked: true, blockedUntil: until });
@@ -451,7 +455,8 @@ export const poolsPart = {
     const { rec, rt } = st;
     const w = rec.waitingForRoom;
     if (!w || rt.deleted || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox' || rec.carryOnAtReset === false) return false;
-    if (!this.poolById(rec.poolId) || !this.readBack.has(rec.accountId)) return false;
+    const pool = this.poolById(rec.poolId);
+    if (!pool?.accountIds.includes(rec.accountId) || !this.readBack.has(rec.accountId)) return false;
     const current = this.usableAccounts().find((a) => a.id === rec.accountId);
     return !!current && loginOk(current);
   },

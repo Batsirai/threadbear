@@ -100,6 +100,8 @@ async function turnOn(text: string, billing?: unknown, extraEnv: Record<string, 
   live.push(s);
   s.send({ id: 'm1', text, images: [] });
   await ended;
+  // The login's reading comes just after the result.
+  for (let i = 0; i < 40 && !outputs.some((o) => o.kind === 'limits'); i++) await new Promise((r) => setTimeout(r, 50));
   const logFile = path.join(root, 'agent.log');
   return { outputs, log: () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) };
 }
@@ -149,10 +151,10 @@ test("Grok's 402 turn fails as a usage limit, saying why, with the login's readi
   assert.equal(result.result.errorKind, 'usageLimit');
   assert.equal(result.result.error, `grok-main is out of Grok usage, so Grok stopped before doing anything (${SAID}).`);
   assert.doesNotMatch(result.result.error!, /Internal error/);
-  // The reading came first: the runner moves the thread on the result, and
-  // a reading after that would land on the login it moved to.
+  // The login's reading follows the result (the runner puts it on the
+  // login the CLI runs on, wherever the result moves the thread).
   const at = outputs.findIndex((o) => o.kind === 'limits');
-  assert.ok(at >= 0 && at < outputs.indexOf(result), 'a reading, before the result');
+  assert.ok(at > outputs.indexOf(result), 'a reading, after the result');
   assert.deepEqual(outputs[at], {
     kind: 'limits',
     windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: '2026-11-25T06:53:23.471Z' }],
@@ -234,7 +236,7 @@ for (const bare of [false, true]) {
   });
 }
 
-test("a Grok that exits while its limits are read still gives the turn's usage limit, ahead of the exit", async () => {
+test("a Grok that exits while its limits are read has already given the turn's usage limit", async () => {
   const { outputs } = await turnOn('broke', SPENT, { FAKE_GROK_EXIT_ON_BILLING: '1' });
   const result = outputs.find((o) => o.kind === 'result');
   assert.ok(result && result.kind === 'result', 'the result still went out');
@@ -297,7 +299,7 @@ test('in its pool, the thread moves off the Grok login that ran out and carries 
   const t = h.runner.get(thread.id);
   assert.equal(t.accountId, 'claude-main');
   assert.equal(h.claude.last.opts.account.id, 'claude-main');
-  assert.match(notesOf(h, thread.id).find((n) => n.startsWith('Moved'))!, /^Moved to main@example\.com: Grok hit its weekly limit, back at /);
+  assert.match(notesOf(h, thread.id).find((n) => n.startsWith('Moved'))!, /^Moved to main@example\.com: Grok hit its usage limit\./);
 });
 
 test('with nothing else in its pool with room, it waits for room rather than going to another pool', async () => {
@@ -314,7 +316,12 @@ test('with nothing else in its pool with room, it waits for room rather than goi
   await tick();
   const t = h.runner.get(thread.id);
   assert.equal(t.accountId, 'grok-main');
-  assert.equal(t.waitingForRoom?.until, new Date(Date.parse('2026-11-25T06:53:23.471Z') + 60_000).toISOString());
+  // Looked at again in 30 minutes (the reading comes after the result);
+  // then the reading's reset, a minute after, is what it waits for.
+  assert.ok(t.waitingForRoom);
+  h.clock.advance(31 * 60_000);
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom?.until, new Date(Date.parse('2026-11-25T06:53:23.471Z') + 60_000).toISOString());
   assert.equal(h.claude.sessions.length, 0, 'nothing started on another pool\'s login');
 });
 

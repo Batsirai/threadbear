@@ -731,8 +731,9 @@ thread to another login when the one it's on runs out of room.
   end): one `weekly` window (`monthly`, `daily` or `other` for other
   periods), `blocked` when it's used up and no prepaid balance or on-demand
   room is left, and the tier as `plan`. A Grok thread reads it on its own
-  process before a turn's result when the turn ran out of usage, and at
-  most every 5 minutes after completed turns. A Grok turn that fails with
+  process after a turn that ran out of usage, and at
+  most every 5 minutes after completed turns, just after the turn's result
+  (recorded under the login the CLI ran on). A Grok turn that fails with
   HTTP 402 or Grok's words for running out ("usage balance exhausted", "out
   of credits", "spending limit", "usage limit reached") ends `failed` with
   `errorKind: "usageLimit"`, and its `error` names the login and Grok's

@@ -125,8 +125,7 @@ function notFound(e: unknown): boolean {
 
 type Limits = Extract<AdapterOutput, { kind: 'limits' }>;
 
-// How long a read of a login's limits may take on a thread's own process
-// before the turn's result goes out without it.
+// How long a read of a login's limits on a thread's own process may take.
 export const TURN_LIMITS_MS = 5_000;
 // A completed turn reads the login's limits at most this often per process;
 // one that ran out of usage always does.
@@ -226,9 +225,7 @@ export class AcpAdapter implements AgentAdapter {
 type State = 'starting' | 'ready' | 'turn' | 'closing' | 'closed';
 // failure: what the agent said went wrong in the turn outside the prompt's
 // answer (Grok's retry_state and turn_completed notes), with any HTTP status.
-// result: worked out and waiting on the login's limits (limitsAfter); if the
-// process exits meanwhile, it still goes out, ahead of the exit.
-type Turn = { id?: string; startedAt: number; interrupted: boolean; dropped: string[]; failure?: { message: string; httpStatus?: number }; result?: TurnResult; dispatched?: boolean };
+type Turn = { id?: string; startedAt: number; interrupted: boolean; dropped: string[]; failure?: { message: string; httpStatus?: number }; dispatched?: boolean };
 // cancelled: what a cancelled turn answers it with (a form's differs).
 type Pending = { abort: AbortController; options: PermissionOption[]; cancelled?: unknown };
 type PermissionOption = { optionId?: string; kind?: string };
@@ -1054,13 +1051,7 @@ export class AcpSession implements AgentSession {
       if (!turn.interrupted) Object.assign(result, auth ? { error: (e as Error).message } : this.failureFor(turn, e));
     }
     if (this.turn !== turn) return;
-    // Before the result: the runner moves a thread off a login that ran out
-    // once it has the result. The reading names the session's own login
-    // (sessionAccountId), so it can't land on another.
-    turn.result = result;
     turn.dispatched = dispatched;
-    await this.limitsAfter(result);
-    if (this.turn !== turn) return;
     this.turn = undefined;
     if (this.state === 'turn') this.state = 'ready';
     if (this.mode === 'plan' && result.outcome === 'completed') {
@@ -1068,13 +1059,16 @@ export class AcpSession implements AgentSession {
       if (text) this.sink.output({ kind: 'planProposed', itemId: `${turn.id ?? 'plan'}-plan`, text });
     }
     this.sendResult(turn, result);
+    // After the result, not before it: the runner records a reading under
+    // the login this CLI runs on (sessionAccountId), wherever the result
+    // moves the thread, and a read held before it could be lost to an exit.
+    void this.limitsAfter(result);
     this.next();
   }
 
-  // queued: how many held messages still run here (none once it's exited).
-  private sendResult(turn: Turn, result: TurnResult, queued = this.held.length): void {
+  private sendResult(turn: Turn, result: TurnResult): void {
     const answered = [...(turn.id ? [turn.id] : []), ...turn.dropped];
-    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!turn.dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: queued, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
+    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!turn.dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: this.held.length, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
   }
 
   // What a failed turn says, and whether it failed because the login is out
@@ -1096,8 +1090,8 @@ export class AcpSession implements AgentSession {
 
   // A reading of the login's limits on this thread's own process, for an
   // agent that can say (AcpAgent.limits): after a turn that ran out of
-  // usage, and at most every LIMITS_EVERY_MS after others. Never holds the
-  // result back more than TURN_LIMITS_MS, and a failure is only logged.
+  // usage, and at most every LIMITS_EVERY_MS after others. It gives up
+  // after TURN_LIMITS_MS, and a failure (the process gone) is only logged.
   private async limitsAfter(result: TurnResult): Promise<void> {
     const limits = this.deps.agent.limits;
     if (!limits || !this.proc.alive || result.outcome === 'interrupted') return;
@@ -1224,11 +1218,7 @@ export class AcpSession implements AgentSession {
     this.proc.onRequest = null;
     this.mcp?.close();
     this.emit(this.normalizer.closeOpen('Interrupted'));
-    // A turn whose result was worked out and was waiting on the login's
-    // limits: that result (a usage limit, say) is what happened, not the exit.
-    const done = this.turn?.result ? this.turn : undefined;
     this.turn = undefined;
-    if (done?.result) this.sendResult(done, done.result, 0);
     if (this.ownFolder) removeQuietly(this.ownFolder);
     this.resolveExit();
     this.sink.exited(error);

@@ -2916,11 +2916,22 @@ export class Runner {
         if (o.contextWindow !== undefined) rec.contextWindow = o.contextWindow;
         this.markDirty(st);
         break;
-      case 'limits':
+      case 'limits': {
         // The account's usage lives in D's UsageStore, which tells clients
         // through accounts.updated when it matters.
+        const id = rt.sessionAccountId ?? rec.accountId;
+        // A login that just ran dry: the reading its CLI took after the turn
+        // is what it ran dry at, if less than the reading before it.
+        const was = this.dryRoom.get(id);
+        if (was !== undefined && (this.ranDry.get(id) ?? 0) > this.clock.now()) {
+          const least = o.blocked ? 0 : o.windows.length ? Math.min(...o.windows.map((w) => w.remainingPercent)) : was;
+          this.dryRoom.set(id, Math.min(was, least));
+          // And it holds until the window at its limit resets, if it says.
+          const ends = o.windows.filter((w) => w.remainingPercent < MIN_ROOM_PERCENT && w.resetsAt).map((w) => Date.parse(w.resetsAt!)).filter(Number.isFinite);
+          if (o.blocked && ends.length) this.ranDry.set(id, Math.max(this.ranDry.get(id) ?? 0, ...ends));
+        }
         try {
-          this.usage?.record(rt.sessionAccountId ?? rec.accountId, {
+          this.usage?.record(id, {
             windows: o.windows,
             ...(o.blocked !== undefined ? { blocked: o.blocked } : {}),
             ...(o.email ? { email: o.email } : {}),
@@ -2928,9 +2939,10 @@ export class Runner {
             ...(o.resets ? { resets: o.resets } : {}),
           });
         } catch (e) {
-          this.log.warn('could not record a usage reading', { accountId: rt.sessionAccountId ?? rec.accountId, error: String(e) });
+          this.log.warn('could not record a usage reading', { accountId: id, error: String(e) });
         }
         break;
+      }
       case 'cliVersion': {
         rt.cliVersion = o.version;
         // Started on the version an update wants: nothing to move.
