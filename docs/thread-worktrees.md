@@ -623,6 +623,10 @@ ok    runner unit tests      94s  (skipped 301 test files that passed with what 
   host too (check.sh sends `--no-records` with the run). A run with a
   `THREADBEAR_HOME` of its own (a test's) keeps none unless it names a
   folder, and no test file inherits the folder a check names.
+- Beside them, `test-times` holds how long each runner unit test file took
+  last, and the next run starts the longest first (`node --test` starts
+  them by name, and a long file late in the alphabet held the run up). A
+  file's time only orders the run: it never skips anything.
 
 The runner's code imports itself densely (a test file reaches about 280
 files on median), so a change to `runner/src` still reruns about two

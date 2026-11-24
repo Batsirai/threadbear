@@ -345,7 +345,9 @@ File references are where to look.
   `~/.cache/threadbear/check-passes` (`$XDG_CACHE_HOME`) elsewhere: one
   small file per step or runner test file that passed, named by a hash of
   the files it read and holding when it passed, so the next check skips it
-  (`scripts/check-cache.mjs`). Each is deleted after a week. Off with
+  (`scripts/check-cache.mjs`), and a `test-times` file of how long each
+  runner test file took, so the next run starts the longest first
+  (`runner/test/helpers/run-test-files.mjs`). Each record is deleted after a week. Off with
   `"checkPasses": false` in runner.json or `THREADBEAR_CHECK_PASSES=off`
   (for runs on a check host too); a check host keeps its own in
   `~/.cache/threadbear-check/passes` there.

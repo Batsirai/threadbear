@@ -47,7 +47,8 @@ const CHECK_FILES = ['check.sh', 'scripts/check-cache.mjs', 'scripts/limit-step.
 const REPO_SETTINGS = ['.gitattributes', '.gitignore', 'runner/.gitignore', '.git-blame-ignore-revs', '.npmrc', 'runner/.npmrc', '.nvmrc', 'runner/.nvmrc'];
 // And every test file's: how the tests are run, and the packages they get.
 const TEST_FILES = ['runner/package.json', 'runner/package-lock.json', 'runner/tsconfig.json',
-  'runner/test/helpers/clean-env.ts', 'runner/test/helpers/failed-files-reporter.mjs', 'runner/test/helpers/passed-files-reporter.mjs'];
+  'runner/test/helpers/clean-env.ts', 'runner/test/helpers/failed-files-reporter.mjs', 'runner/test/helpers/passed-files-reporter.mjs',
+  'runner/test/helpers/run-test-files.mjs'];
 
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const blob = (buf) => crypto.createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');

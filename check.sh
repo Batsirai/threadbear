@@ -612,10 +612,22 @@ runner_unit_tests() {
       rm -f "$keys"
     fi
   fi
-  local run=(node --import=./test/helpers/clean-env.ts --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
+  # As node --test runs them, through test/helpers/run-test-files.mjs, which
+  # starts the longest first by the times it keeps beside the pass records:
+  # node starts them in order of name, and the run waited on long files late
+  # in the alphabet (24 Nov 2026). package.json's test script is the same
+  # (update.test.ts holds them together). A test's stand-in checkout without
+  # it runs node --test, as before.
+  local run=(node ./test/helpers/run-test-files.mjs --import=./test/helpers/clean-env.ts --test-timeout=300000 --test-force-exit --test-reporter=spec)
+  local times=()
+  if [ ! -f "$dir/test/helpers/run-test-files.mjs" ]; then
+    run=(node --import=./test/helpers/clean-env.ts --test --test-timeout=300000 --test-force-exit --test-reporter=spec)
+  elif [ -n "$PASSES" ]; then
+    times=(--times="$PASSES/test-times")
+  fi
   if unit_tests "$log" "${run[@]}" --test-reporter-destination=stdout \
       --test-reporter=./test/helpers/failed-files-reporter.mjs --test-reporter-destination="$list" \
-      ${record[@]+"${record[@]}"} ${UNIT_PROGRESS[@]+"${UNIT_PROGRESS[@]}"} "${targets[@]}"; then
+      ${record[@]+"${record[@]}"} ${UNIT_PROGRESS[@]+"${UNIT_PROGRESS[@]}"} ${times[@]+"${times[@]}"} "${targets[@]}"; then
     printf 'ok    %-20s %4ss%s\n' "$name" "$((SECONDS - start))" "$note"
     record_test_passes "$passed"
     return

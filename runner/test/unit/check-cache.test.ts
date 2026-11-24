@@ -388,6 +388,7 @@ function checkout() {
   copy('runner/test/helpers/failed-files-reporter.mjs');
   copy('runner/test/helpers/passed-files-reporter.mjs');
   copy('runner/test/helpers/progress-reporter.mjs');
+  copy('runner/test/helpers/run-test-files.mjs');
   put('runner/package.json', JSON.stringify({ scripts: { typecheck: 'true' } }));
   put('runner/node_modules/.package-lock.json', '{}');
   put('runner/test/helpers/clean-env.ts', '');

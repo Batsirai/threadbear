@@ -1110,6 +1110,13 @@ test("a build's own checks are no more than tb land's: the same steps, command a
   assert.ok(run, "check.sh's test run");
   const words = (cmd: string) => cmd.replace(/"/g, '').split(/\s+/).filter(Boolean).sort();
   assert.deepEqual(words(`${run} test/unit/**/*.test.ts`), words(pkg.scripts.test), "check.sh's run and package.json's test script");
+  // And in each, nothing for node itself before the script that runs the
+  // files: --import there loads clean-env.ts in the driver too, and every
+  // file's temp folder then nests in its, which hung the Codex adapter's
+  // socket tests (24 Nov 2026). Sorted words alone can't tell (Codex's review).
+  const head = (cmd: string) => cmd.replace(/"/g, '').split(/\s+/).filter(Boolean).slice(0, 2);
+  assert.deepEqual(head(run), ['node', './test/helpers/run-test-files.mjs'], "check.sh's run");
+  assert.deepEqual(head(pkg.scripts.test), ['node', './test/helpers/run-test-files.mjs'], "package.json's test script");
   const deploySteps = fs.readFileSync(new URL('../../scripts/deploy-steps.mjs', import.meta.url), 'utf8');
   const deploy = fs.readFileSync(new URL('../../scripts/deploy.mjs', import.meta.url), 'utf8');
   assert.match(deploySteps, /step\(name, checkSh, \['--runner'\]/);
