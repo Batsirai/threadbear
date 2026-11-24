@@ -8,9 +8,13 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { tmpDir } from '../helpers/fakes.ts';
 
-const REPORTER = path.resolve(import.meta.dirname, '../helpers/progress-reporter.mjs');
+// As file URLs: node takes a reporter's absolute Windows path (D:\...) for
+// a URL with the scheme d: and won't load it.
+const REPORTER = pathToFileURL(path.resolve(import.meta.dirname, '../helpers/progress-reporter.mjs')).href;
+const FAILED_FILES = pathToFileURL(path.resolve(import.meta.dirname, '../helpers/failed-files-reporter.mjs')).href;
 
 test('it names the files still running each interval, and the slowest at the end', () => {
   const dir = tmpDir();
@@ -38,7 +42,7 @@ test('it names the files still running each interval, and the slowest at the end
   // As check.sh runs it on GitHub: third of three reporters, on stderr.
   const r = spawnSync(process.execPath, ['--test', '--test-concurrency=4',
     '--test-reporter=spec', '--test-reporter-destination=stdout',
-    `--test-reporter=${path.join(path.dirname(REPORTER), 'failed-files-reporter.mjs')}`, `--test-reporter-destination=${path.join(dir, 'failed')}`,
+    `--test-reporter=${FAILED_FILES}`, `--test-reporter-destination=${path.join(dir, 'failed')}`,
     `--test-reporter=${REPORTER}`, '--test-reporter-destination=stderr',
     'a-stuck.test.mjs', 'b-quick.test.mjs', 'c-broken.test.mjs', 'd-named.test.mjs'], { cwd: dir, env, encoding: 'utf8', timeout: 120_000 });
   assert.equal(r.status, 1, r.stdout + r.stderr);
