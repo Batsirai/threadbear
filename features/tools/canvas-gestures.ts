@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GpuiDriver } from '../support/gpui.ts';
 import { okValue, sleep } from '../support/driver.ts';
-import { assertInFront, recording, swiftTool, windowFrame } from './real-screen.ts';
+import { assertInFront, recording, swiftTool, windowAt, windowFrame } from './real-screen.ts';
 
 type Board = { showing: boolean; entered: string | null; flying: boolean; camera: { s: number; tx: number; ty: number } };
 
@@ -45,7 +45,12 @@ export async function checkCanvasGestures(app: GpuiDriver): Promise<void> {
     execFileSync('caffeinate', ['-u', '-t', '2']);
     await app.do({ cmd: 'front' });
     await sleep(600);
-    const mid = [640, 380];
+    // A spot on the board that's really the app's on screen (a display
+    // tool's floating window sat over the middle on 24 Nov).
+    const [wx, wy] = windowFrame(app.pid!);
+    const mid = [[640, 380], [400, 300], [900, 300], [400, 560], [900, 560], [250, 200]]
+      .find(([x, y]) => windowAt(wx + x, wy + y)?.pid === app.pid);
+    assert(mid, 'no spot on the board is in front');
     const start = await board();
     assert(start.showing, 'the Canvas page did not come up');
     swipe(mid, -6, -4);
