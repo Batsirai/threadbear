@@ -458,3 +458,19 @@ test('recipes: several examples, each drawn as its thread would be', () => {
   assert.deepEqual(r.examples[2], { reply: 'Just a reply.' });
   assert.equal(r.example, '**Yesterday**\n- Shipped it', 'the first, for an app from before examples');
 });
+
+test('recipes: linking a schedule the user already runs makes it the recipe\'s, with its runs, instead of a second one', async () => {
+  const w = world();
+  writeRecipe(w.builtin, 'stay-in-touch', { name: 'Stay in touch', icon: '👋', description: 'x' }, { About: 'Why.', 'Setting it up': 'Ask.', 'Each run': 'Do it.' });
+  writeRecipe(w.builtin, 'other', { name: 'Other', icon: '🧪', description: 'x' }, { About: 'Why.', 'Setting it up': 'Ask.', 'Each run': 'Do it.' });
+  w.schedules.push(schedule('mine', { title: 'Stay in touch' }));
+  w.threads.push(thread('run1', { schedule: { id: 'mine', title: 'Stay in touch' } } as Partial<ThreadSummary>));
+  const r = w.recipes.link('stay-in-touch', ['mine']);
+  assert.equal(r.state, 'on');
+  assert.equal(r.stats.runs, 1);
+  assert.equal(w.started.length, 0, 'no setup thread');
+  assert.throws(() => w.recipes.link('other', ['mine']), /already the stay-in-touch recipe's/);
+  assert.throws(() => w.recipes.link('stay-in-touch', ['nope']), /no schedule "nope"/);
+  await w.recipes.setOn('stay-in-touch', false);
+  assert.equal(w.schedules[0].paused, true);
+});

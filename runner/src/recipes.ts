@@ -387,6 +387,31 @@ export class Recipes {
     return this.summary(f, this.recentThreads());
   }
 
+  /**
+   * Makes schedules the user already runs this recipe's own, on or off as
+   * they are, instead of setting it up again beside them (Mike, 24 Nov 2026:
+   * "make sure we're not duplicating what we're already running"). Their runs
+   * so far count as its runs. Not for a habit (switching one on is agreeing
+   * to its words, on its page) or an experiment's recipe.
+   */
+  link(id: string, scheduleIds: string[]): RecipeSummary {
+    const f = this.file(id);
+    if (f.habit || f.experiment) throw new RpcError(ErrorCode.badParams, `${f.name} isn't set up with schedules, so there's nothing to link`);
+    if (!scheduleIds.length) throw new RpcError(ErrorCode.badParams, 'scheduleIds is empty');
+    const all = this.deps.schedules.list();
+    for (const s of scheduleIds) if (!all.some((x) => x.id === s)) throw new RpcError(ErrorCode.badParams, `no schedule "${s}"`);
+    for (const [other, k] of Object.entries(this.kept)) {
+      const taken = scheduleIds.find((s) => k.schedules.includes(s));
+      if (other !== id && taken) throw new RpcError(ErrorCode.badParams, `schedule "${taken}" is already the ${other} recipe's`);
+    }
+    const k = this.kept[id] ?? { on: true, schedules: [], addedAt: new Date(this.deps.now()).toISOString() };
+    k.schedules = [...new Set([...k.schedules, ...scheduleIds])];
+    k.on = all.some((s) => k.schedules.includes(s.id) && !s.paused);
+    this.kept[id] = k;
+    this.changed();
+    return this.summary(f, this.recentThreads());
+  }
+
   async remove(id: string): Promise<{ removed: true }> {
     const f = this.file(id);
     const k = this.kept[id];
@@ -583,7 +608,7 @@ function setupBrief(f: RecipeFile, cwd: string): string {
   } else {
     lines.push(
       'Make its schedule here, with schedule_message (new_thread true, this folder): only schedules this thread makes count as the recipe\'s, and they appear under it in Recipes. Make one schedule unless the file says otherwise.',
-      'If the user already has a schedule doing this job, say so and ask whether to set this up anyway.',
+      `If the user already has a schedule doing this job, say so, and offer to link it rather than make a second one: \`tb rpc recipes.link '{"id":"${f.id}","scheduleIds":["<its id>"]}'\` makes it this recipe's as it is (list_schedules has its id).`,
     );
   }
   lines.push('Ask what you need in one card, keep anything of theirs out of the recipe\'s own file, and end by telling them what you set up and when it first runs.');
@@ -614,6 +639,10 @@ export function recipeMethods(r: Recipes): Record<string, (p: Record<string, unk
       return { recipe: await r.setOn(id(p), p.on, { name: optStr(p, 'name'), habit: optStr(p, 'habit') }) };
     }),
     'recipes.remove': gate((p) => r.remove(id(p))),
+    'recipes.link': gate((p) => {
+      if (!Array.isArray(p.scheduleIds) || !p.scheduleIds.every((s) => typeof s === 'string')) throw new RpcError(ErrorCode.badParams, 'scheduleIds must be a list of schedule ids');
+      return { recipe: r.link(id(p), p.scheduleIds as string[]) };
+    }),
     'recipes.create': gate((p) => r.create({ text: optStr(p, 'text'), fromThreadId: optStr(p, 'fromThreadId'), editId: optStr(p, 'editId') })),
   };
 }
