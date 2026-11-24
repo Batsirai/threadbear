@@ -1411,7 +1411,13 @@ async function dispatch(client, method, p) {
     }
     case 'threads.markSeen': {
       const t = need(p.threadId);
-      t.summary.lastSeenSeq = Math.max(t.summary.lastSeenSeq, p.seq ?? 0);
+      // Another runner's thread is marked read whole, as the relay does
+      // (relay.ts, `update { markSeen: true }`): the app's seq for its row is
+      // 1 (remote.rs), so taking it kept the row unread, and each
+      // remoteThreads.updated brought another markSeen, a flood that froze
+      // the app on Windows (remote-threads.feature, 24 Nov 2026).
+      const seq = t.runnerId ? t.summary.lastSeq : (p.seq ?? 0);
+      t.summary.lastSeenSeq = Math.max(t.summary.lastSeenSeq, seq);
       if (t.summary.status !== 'waiting') t.summary.needsYou = Boolean(t.summary.pendingReviews);
       delete t.summary.woke;
       broadcastSummary(t.summary.id);
