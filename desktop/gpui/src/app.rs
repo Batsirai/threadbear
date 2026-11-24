@@ -2140,6 +2140,10 @@ impl Threadbear {
         dump["tokenCard"] = self.token_card_dump();
         // Panels pinned to their threads (pinned_panels.rs).
         dump["pinnedPanels"] = self.pinned_panels_dump(cx);
+        // The # thread picker over the box, while it's open (thread_palette.rs).
+        dump["threadPicker"] = self
+            .composer(cx)
+            .map_or(Value::Null, |c| c.read(cx).thread_picker_dump(cx));
         // The tour or a page's intro on show, and Finish setting up (tour.rs, setup_panel.rs).
         dump["tour"] = self.tour_dump(cx);
         dump["setup"] = self.setup_dump(cx);

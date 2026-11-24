@@ -150,6 +150,7 @@ mod text_services;
 mod thread;
 mod thread_link_marks;
 mod thread_map;
+mod thread_palette;
 mod thread_panels;
 mod tips;
 mod token_card;

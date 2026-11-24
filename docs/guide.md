@@ -663,6 +663,14 @@ left still archives it; any other way drags the thread. The agent gets a `thread
 read the thread from, and clicking the chip once it's sent opens that
 thread. An id that isn't one of your threads pastes as plain text.
 
+Or type `#` at the start of a word and a list of your other threads opens
+above the message box, the latest first. What you type after the `#`
+narrows it by title or folder, or by the start of a thread's id, and
+archived threads show once you've typed something, after the rest. Up and
+Down move, Return, Tab or a click puts the thread in as its chip, and Esc
+closes the list. A `#` that matches no thread (`issue #12`, a Markdown
+heading) leaves it shut.
+
 When an agent's reply links another of your threads (one it started, say, or
 one it's waiting on), a small copy of that thread's tile sits just before the
 link and shows how it's getting on, changing as it does: a turning ring while

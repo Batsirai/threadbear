@@ -86,6 +86,7 @@ pub mod terminal;
 pub mod text_file;
 pub mod thread_link;
 pub mod thread_load;
+pub mod thread_mentions;
 pub mod thread_panels;
 pub mod transcript;
 pub mod updates;

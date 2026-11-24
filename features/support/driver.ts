@@ -93,6 +93,8 @@ export type Dump = {
     detail?: { title: string; usage: string; description?: string | null; now?: string | null; also?: string | null; origin: string; path?: string | null; buttons: string[] } | null;
     note?: string | null;
   } | null;
+  /** The # thread picker over the composer while it's open (GPUI only). */
+  threadPicker?: { query: string; threads: { id: string; title: string; folder: string }[]; picked?: string | null } | null;
   /** ⌘K's box while it's up: what's typed, each group's entries as their
    *  lines read ("Inbox | ⌘1"), and the pick's title. */
   anything?: { query: string; groups: { title: string; items: string[] }[]; picked?: string | null; recent: string[] } | null;
