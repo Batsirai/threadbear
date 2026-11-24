@@ -3,7 +3,7 @@ import { Then, When } from '@cucumber/cucumber';
 import type { ThreadbearWorld } from '../support/world.ts';
 
 type Row = { id: string; name: string; state: string; tag: string; stat: string; habit: string | null };
-type Recipes = { loaded: boolean; sidebar: Row[]; cards: Row[]; busy: string[]; open: string | null; page: { id: string; runs: number; example: boolean } | null };
+type Recipes = { loaded: boolean; sidebar: Row[]; cards: Row[]; busy: string[]; open: string | null; page: { id: string; runs: number; example: boolean; examples: number; exampleAt: number } | null };
 const recipes = (d: unknown): Recipes | undefined => (d as { sidebar?: { recipes?: Recipes } }).sidebar?.recipes;
 
 When('I open the Recipes view', async function (this: ThreadbearWorld) {
@@ -65,4 +65,23 @@ Then('the recipe page for {string} has an example and its runs', async function 
     const page = recipes(d)?.page;
     return recipes(d)?.open === id && page?.id === id && page.example && page.runs > 0;
   });
+});
+
+Then('the recipe page for {string} shows example {int} of {int}', async function (this: ThreadbearWorld, id: string, n: number, count: number) {
+  await this.until(`example ${n} of ${count} on ${id}`, (d) => {
+    const page = recipes(d)?.page;
+    return page?.id === id && page.examples === count && page.exampleAt === n - 1;
+  });
+});
+
+When('I go to example {int}', async function (this: ThreadbearWorld, n: number) {
+  await this.app.do({ cmd: 'click', tip: `Example ${n} of 3` });
+});
+
+When('I go back to all recipes', async function (this: ThreadbearWorld) {
+  await this.app.do({ cmd: 'click', tip: 'Back to every recipe' });
+});
+
+Then('the gallery is showing', async function (this: ThreadbearWorld) {
+  await this.until('the gallery', (d) => Boolean(recipes(d)?.loaded) && recipes(d)?.open === null);
 });

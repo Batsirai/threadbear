@@ -121,14 +121,77 @@ pub struct RecipeRun {
     pub archived: bool,
 }
 
+/// The end card of an example run: its headline and its answers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExampleCard {
+    pub headline: String,
+    pub options: Vec<String>,
+}
+
+/// `RecipeExample`: a made-up run as its thread would show it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecipeExample {
+    /// The thread's title.
+    pub title: Option<String>,
+    /// What the user said first, for a habit.
+    pub you: Option<String>,
+    /// The agent's reply, in Markdown.
+    pub reply: String,
+    pub card: Option<ExampleCard>,
+}
+
+impl RecipeExample {
+    fn decode(v: &Value) -> Option<RecipeExample> {
+        let reply = text(&v["reply"]).unwrap_or_default();
+        let you = text(&v["you"]);
+        let card = text(&v["card"]["headline"]).map(|headline| ExampleCard {
+            headline,
+            options: v["card"]["options"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(text)
+                .collect(),
+        });
+        // One with nothing to show is left out.
+        (!reply.is_empty() || you.is_some() || card.is_some()).then(|| RecipeExample {
+            title: text(&v["title"]),
+            you,
+            reply,
+            card,
+        })
+    }
+
+    /// The title its little thread shows: its own, else the recipe's name.
+    pub fn title_or<'a>(&'a self, recipe: &'a Recipe) -> &'a str {
+        self.title.as_deref().unwrap_or(&recipe.name)
+    }
+}
+
 /// `recipes.get`'s answer: the summary and the page's parts.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecipeDetail {
     pub recipe: Recipe,
     pub about: String,
-    pub example: Option<String>,
+    /// Its made-up runs: `examples`, or from a runner before those, `example`
+    /// as one reply.
+    pub examples: Vec<RecipeExample>,
     pub file: String,
     pub runs: Vec<RecipeRun>,
+}
+
+/// "Example 2 of 3", a dot's tip.
+pub fn example_tip(index: usize, count: usize) -> String {
+    format!("Example {} of {count}", index + 1)
+}
+
+/// The example shown after a step of `by` (-1 back, 1 on) from `index`, kept
+/// in range.
+pub fn step_example(index: usize, by: isize, count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    (index as isize + by).clamp(0, count as isize - 1) as usize
 }
 
 fn text(v: &Value) -> Option<String> {
@@ -396,7 +459,27 @@ impl RecipeDetail {
         Some(RecipeDetail {
             recipe,
             about: text(&v["about"]).unwrap_or_default(),
-            example: text(&v["example"]),
+            examples: {
+                let list: Vec<RecipeExample> = v["examples"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(RecipeExample::decode)
+                    .collect();
+                if list.is_empty() {
+                    text(&v["example"])
+                        .map(|reply| RecipeExample {
+                            title: None,
+                            you: None,
+                            reply,
+                            card: None,
+                        })
+                        .into_iter()
+                        .collect()
+                } else {
+                    list
+                }
+            },
             file: text(&v["file"]).unwrap_or_default(),
             runs,
         })
@@ -771,8 +854,35 @@ mod tests {
             d.numbers(),
             [(2, "runs"), (1, "needed you"), (1, "you opened")]
         );
-        assert_eq!(d.example.as_deref(), Some("**Today**"));
+        assert_eq!(d.examples.len(), 1, "an older runner's one example");
+        assert_eq!(d.examples[0].reply, "**Today**");
+        assert_eq!(d.examples[0].title_or(&d.recipe), "X");
         assert_eq!(log_time(ms(2026, 11, 20, 6, 30)), "Fri 20 Nov, 6:30");
+    }
+
+    #[test]
+    fn examples_decode_with_their_title_message_and_card() {
+        let v = json!({
+            "id": "x", "name": "X", "state": "add", "example": "ignored",
+            "examples": [
+                { "title": "Daily standup", "reply": "**Yesterday**", "card": { "headline": "Draft ready", "options": ["Posted", "Skip"] } },
+                { "you": "Too cluttered", "reply": "Three ideas" },
+                { "reply": "" }
+            ]
+        });
+        let d = RecipeDetail::decode(&v).unwrap();
+        assert_eq!(d.examples.len(), 2, "an empty one is left out");
+        assert_eq!(d.examples[0].title_or(&d.recipe), "Daily standup");
+        let card = d.examples[0].card.as_ref().unwrap();
+        assert_eq!(card.headline, "Draft ready");
+        assert_eq!(card.options, vec!["Posted", "Skip"]);
+        assert_eq!(d.examples[1].you.as_deref(), Some("Too cluttered"));
+        assert!(d.examples[1].card.is_none());
+        assert_eq!(example_tip(1, 3), "Example 2 of 3");
+        assert_eq!(step_example(0, -1, 3), 0);
+        assert_eq!(step_example(1, 1, 3), 2);
+        assert_eq!(step_example(2, 1, 3), 2);
+        assert_eq!(step_example(0, 1, 0), 0);
     }
 
     #[test]

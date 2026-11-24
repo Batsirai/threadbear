@@ -41,6 +41,8 @@ const CARD_MAX: f32 = 420.;
 const CARD_GAP: f32 = 16.;
 const CARD_HEADER: f32 = 92.;
 const TILE: f32 = 52.;
+/// The example's little thread: its box scrolls inside this.
+const EXAMPLE_HEIGHT: f32 = 440.;
 
 thread_local! {
     /// The gallery's width last frame, for this frame's columns.
@@ -61,6 +63,10 @@ pub(crate) struct RecipesState {
     list_scroll: ScrollHandle,
     /// The gallery and the page; a scripted click scrolls it to what it's after.
     pub(crate) home_scroll: ScrollHandle,
+    /// The example each page shows (its dots), by recipe id.
+    example_at: HashMap<String, usize>,
+    /// Inside the example's little thread.
+    example_scroll: ScrollHandle,
 }
 
 impl RecipesState {
@@ -72,6 +78,8 @@ impl RecipesState {
             busy: HashSet::new(),
             list_scroll: ScrollHandle::new(),
             home_scroll: ScrollHandle::new(),
+            example_at: HashMap::new(),
+            example_scroll: ScrollHandle::new(),
         }
     }
 
@@ -146,6 +154,11 @@ impl Threadbear {
 
     /// The view, with the gallery or a recipe's page beside it.
     pub(crate) fn show_recipes(&mut self, page: Option<String>, cx: &mut Context<Self>) {
+        // A page or the gallery opens at its top, not where the last was.
+        if self.recipes.open != page {
+            self.recipes.home_scroll.set_offset(Point::default());
+            self.recipes.example_scroll.set_offset(Point::default());
+        }
         self.recipes.open = page.clone();
         self.set_mode(SidebarMode::Recipes, cx);
         // set_mode leaves things be when the view's already up with its page.
@@ -984,33 +997,16 @@ impl Threadbear {
                     d.about.clone()
                 };
                 left = left.child(self.recipe_markdown(format!("recipe-about-{id}"), about, cx));
-                if let Some(example) = d.example.clone() {
+                if !d.examples.is_empty() {
                     // A habit doesn't run: its example is an exchange.
                     let title = if recipe.instant {
-                        "What it changes"
+                        "What it looks like"
                     } else {
                         "What a run looks like"
                     };
-                    left = left.child(section_title(title)).child(
-                        v_flex()
-                            .gap(px(8.))
-                            .p(px(16.))
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(style::card_border(cx))
-                            .bg(style::code_background(cx))
-                            .child(self.recipe_markdown(
-                                format!("recipe-example-{id}"),
-                                example,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .text_size(px(style::size::DETAIL))
-                                    .text_color(faint)
-                                    .child("An example, not yours"),
-                            ),
-                    );
+                    left = left
+                        .child(section_title(title))
+                        .child(self.render_recipe_examples(&recipe, d, cx));
                 }
             }
             None => {
@@ -1037,8 +1033,31 @@ impl Threadbear {
         left = left.child(self.render_recipe_buttons(&recipe, cx));
         let right =
             (!recipe.instant).then(|| self.render_recipe_runs(&recipe, detail.as_ref(), cx));
+        // Back to the gallery, from Browse or the sidebar alike.
+        let back = h_flex().w_full().pb(px(12.)).child(
+            tipped!(
+                h_flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .px(px(6.))
+                    .py(px(3.))
+                    .ml(px(-6.))
+                    .rounded(px(6.))
+                    .text_size(px(style::size::LABEL))
+                    .text_color(secondary)
+                    .cursor_pointer()
+                    .hover(|s| s.bg(style::hover_fill(cx))),
+                "recipe-back",
+                "Back to every recipe",
+                gpui_kit::Role::Button
+            )
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.show_recipes(None, cx)))
+            .child(icon("chevron.left", 11., secondary))
+            .child("All recipes"),
+        );
         v_flex()
             .w_full()
+            .child(back)
             .child(banner)
             .child(
                 h_flex()
@@ -1062,6 +1081,202 @@ impl Threadbear {
         .selectable(true)
         .style(crate::rows::reading_style(cx))
         .into_any_element()
+    }
+
+    /// Its made-up runs, one at a time, each as its thread would look: the
+    /// thread's title, what the user said, the agent's reply and its card,
+    /// in a box of its own that scrolls. Dots under it flip between them.
+    fn render_recipe_examples(
+        &mut self,
+        recipe: &Recipe,
+        detail: &RecipeDetail,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let id = recipe.id.clone();
+        let count = detail.examples.len();
+        let at = self
+            .recipes
+            .example_at
+            .get(&id)
+            .copied()
+            .unwrap_or(0)
+            .min(count.saturating_sub(1));
+        let example = detail.examples[at].clone();
+        let faint = style::faint_text(cx);
+        let secondary = style::secondary_text(cx);
+        let label = style::label_text(cx);
+        let border = style::card_border(cx);
+        let hairline = style::hairline(cx);
+        // The thread's bar: its title, and what started it.
+        let mut bar = v_flex()
+            .px(px(18.))
+            .py(px(10.))
+            .gap(px(2.))
+            .border_b_1()
+            .border_color(hairline)
+            .child(
+                div()
+                    .truncate()
+                    .text_size(px(style::size::CARD_TITLE))
+                    .font_semibold()
+                    .text_color(label)
+                    .child(example.title_or(recipe).to_owned()),
+            );
+        if !recipe.instant {
+            bar = bar.child(
+                div()
+                    .text_size(px(style::size::DETAIL))
+                    .text_color(faint)
+                    .child("Started by its schedule"),
+            );
+        }
+        let mut body = v_flex().px(px(18.)).pt(px(14.)).pb(px(18.)).gap(px(14.));
+        if let Some(you) = example.you.clone() {
+            body = body.child(
+                h_flex().w_full().justify_end().child(
+                    div()
+                        .max_w(relative(crate::rows::metrics::BUBBLE_SHARE))
+                        .px(px(crate::rows::metrics::BUBBLE_PAD_H))
+                        .py(px(crate::rows::metrics::BUBBLE_PAD_V))
+                        .rounded(px(crate::rows::metrics::BUBBLE_RADIUS))
+                        .bg(style::bubble_background(cx))
+                        .text_size(px(style::size::BODY))
+                        .line_height(px(style::size::BODY_LINE))
+                        .text_color(label)
+                        .child(you),
+                ),
+            );
+        }
+        if !example.reply.is_empty() {
+            body = body.child(
+                crate::open_gate::reading_markdown_view(
+                    SharedString::from(format!("recipe-example-{id}-{at}")),
+                    example.reply.clone(),
+                    crate::open_gate::Origin::ThisMac,
+                    &std::env::var("HOME").unwrap_or_default(),
+                )
+                .selectable(true)
+                .style(crate::rows::reading_style(cx)),
+            );
+        }
+        if let Some(card) = example.card {
+            body = body.child(example_card(card, cx));
+        }
+        let thread = v_flex()
+            .w_full()
+            .rounded(px(12.))
+            .border_1()
+            .border_color(border)
+            .bg(style::code_background(cx))
+            .overflow_hidden()
+            .child(bar)
+            .child(
+                div()
+                    .id(ElementId::Name(
+                        format!("recipe-example-scroll-{id}").into(),
+                    ))
+                    .h(px(EXAMPLE_HEIGHT))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.recipes.example_scroll)
+                    .child(body),
+            );
+        // Under it: the note, and the dots with a chevron each side.
+        let mut nav = h_flex().items_center().gap(px(6.));
+        if count > 1 {
+            let chevron = |key: &'static str,
+                           symbol: &'static str,
+                           tip: &'static str,
+                           by: isize,
+                           enabled: bool,
+                           cx: &mut Context<Self>|
+             -> AnyElement {
+                let id = id.clone();
+                let color = if enabled { secondary } else { hairline };
+                tipped!(
+                    div()
+                        .flex_none()
+                        .p(px(3.))
+                        .rounded(px(4.))
+                        .when(enabled, |s| s.cursor_pointer()),
+                    ElementId::Name(format!("recipe-example-{key}").into()),
+                    tip,
+                    gpui_kit::Role::Button
+                )
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.flip_example(&id, by, cx)),
+                )
+                .child(icon(symbol, 11., color))
+                .into_any_element()
+            };
+            nav = nav.child(chevron(
+                "prev",
+                "chevron.left",
+                "The example before",
+                -1,
+                at > 0,
+                cx,
+            ));
+            for n in 0..count {
+                let id = id.clone();
+                let filled = n == at;
+                nav =
+                    nav.child(
+                        tipped!(
+                            div().flex_none().p(px(3.)).cursor_pointer(),
+                            ElementId::Name(format!("recipe-example-dot-{n}").into()),
+                            rules::example_tip(n, count),
+                            gpui_kit::Role::Button
+                        )
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.show_example(&id, n, cx)
+                        }))
+                        .child(
+                            div()
+                                .size(px(7.))
+                                .rounded_full()
+                                .when(filled, |d| d.bg(label))
+                                .when(!filled, |d| d.border_1().border_color(secondary)),
+                        ),
+                    );
+            }
+            nav = nav.child(chevron(
+                "next",
+                "chevron.right",
+                "The next example",
+                1,
+                at + 1 < count,
+                cx,
+            ));
+        }
+        v_flex()
+            .gap(px(8.))
+            .child(thread)
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_size(px(style::size::DETAIL))
+                            .text_color(faint)
+                            .child("An example, not yours"),
+                    )
+                    .child(nav),
+            )
+            .into_any_element()
+    }
+
+    fn show_example(&mut self, id: &str, n: usize, cx: &mut Context<Self>) {
+        self.recipes.example_at.insert(id.to_owned(), n);
+        self.recipes.example_scroll.set_offset(Point::default());
+        cx.notify();
+    }
+
+    fn flip_example(&mut self, id: &str, by: isize, cx: &mut Context<Self>) {
+        let count = self.recipes.details.get(id).map_or(0, |d| d.examples.len());
+        let at = self.recipes.example_at.get(id).copied().unwrap_or(0);
+        self.show_example(id, rules::step_example(at, by, count), cx);
     }
 
     /// Its habit, word for word, with whether agents are being told it and
@@ -1439,7 +1654,9 @@ impl Threadbear {
                 "id": d.recipe.id,
                 "numbers": d.numbers().iter().map(|(n, l)| json!({ "value": n, "label": l })).collect::<Vec<_>>(),
                 "runs": d.runs.len(),
-                "example": d.example.is_some(),
+                "example": !d.examples.is_empty(),
+                "examples": d.examples.len(),
+                "exampleAt": self.recipes.example_at.get(&d.recipe.id).copied().unwrap_or(0),
             })),
         })
     }
@@ -1552,4 +1769,64 @@ fn icon_tile(recipe: &Recipe, size: f32, cx: &App) -> Div {
         .justify_center()
         .text_size(px(size * 0.52))
         .child(recipe.icon.clone())
+}
+
+/// An example's end card, as the thread's card draws an ask: its words, then
+/// its answers in a box of rows. Only to look at here.
+fn example_card(card: rules::ExampleCard, cx: &App) -> Div {
+    let label = style::label_text(cx);
+    let secondary = style::secondary_text(cx);
+    let hairline = style::hairline(cx);
+    let mut rows = v_flex()
+        .mt(px(6.))
+        .rounded(px(3.))
+        .overflow_hidden()
+        .bg(style::answer_rows_fill(cx))
+        .border_1()
+        .border_color(style::primary_opacity(cx, 0.05));
+    for (n, option) in card.options.iter().enumerate() {
+        rows = rows.child(
+            h_flex()
+                .w_full()
+                .items_center()
+                .gap(px(8.))
+                .px(px(10.))
+                .py(px(7.))
+                .when(n > 0, |s| {
+                    s.border_t_1()
+                        .border_color(style::primary_opacity(cx, 0.055))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(13.))
+                        .rounded_full()
+                        .border_1()
+                        .border_color(secondary),
+                )
+                .child(
+                    div()
+                        .text_size(px(style::size::BODY))
+                        .text_color(label)
+                        .child(option.clone()),
+                ),
+        );
+    }
+    let mut boxed = v_flex()
+        .mt(px(4.))
+        .pt(px(12.))
+        .border_t_1()
+        .border_color(hairline)
+        .child(
+            div()
+                .text_size(px(style::size::BODY))
+                .line_height(px(style::size::BODY_LINE))
+                .font_semibold()
+                .text_color(label)
+                .child(card.headline),
+        );
+    if !card.options.is_empty() {
+        boxed = boxed.child(rows);
+    }
+    boxed
 }

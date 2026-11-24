@@ -49,3 +49,13 @@ Feature: Recipes
     Then the Recipes sidebar lists "Show a few options" as "on"
     And the habit of "Show a few options" says "is being told this"
     And nothing in the Recipes view is waiting on the runner
+
+  @recipes.examples @recipes @swift-pending
+  Scenario: A recipe's page flips between its examples and goes back to the gallery
+    When I open the Recipes view
+    And I open the recipe "Daily brief"
+    Then the recipe page for "daily-brief" shows example 1 of 3
+    When I go to example 2
+    Then the recipe page for "daily-brief" shows example 2 of 3
+    When I go back to all recipes
+    Then the gallery is showing

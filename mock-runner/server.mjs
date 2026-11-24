@@ -634,6 +634,11 @@ function addRecipesDemo() {
     description: "A short note each morning: today's calendar, the emails that need you, threads waiting on you and a few headlines.",
     about: 'A very short note each morning so you start the day knowing what needs you. It reads your calendar and the last day of email, lists only what needs you today, then any thread that is waiting on you, then a few headlines. A section with nothing in it is left out, and it stays under ten lines.',
     example: '**Today**\n- 10:00 dentist, 14:30 call with Sam\n\n**Needs you**\n- Ana asked for the invoice by Friday\n- The flight change wants confirming today\n\n**Waiting on you**\n- "Pick a colour for the Share button" since Wed',
+    examples: [
+      { title: 'Daily brief', reply: '**Today**\n- 10:00 dentist, 14:30 call with Sam\n\n**Needs you**\n- Ana asked for the invoice by Friday\n- The flight change wants confirming today\n\n**Waiting on you**\n- "Pick a colour for the Share button" since Wed\n\n**Headlines**\n- Rates held for another month\n- The new bridge opens to bikes on Saturday', card: { headline: '2 emails need you today', options: ['Done', 'Remind me at 2'] } },
+      { title: 'Daily brief', reply: '**Today**\n- Nothing in the calendar\n\nNo emails need you and no thread is waiting on you. A quiet one.' },
+      { title: 'Daily brief', reply: '**Today**\n- 9:00 school assembly\n- 13:00 lunch with Jo\n\n**Needs you**\n- The plumber can come Thursday or Friday: pick one', card: { headline: 'The plumber wants a day', options: ['Thursday', 'Friday', 'Neither'] } },
+    ],
     state: 'on', schedules: [{ id: 'sch_daily-brief', title: 'Daily brief', paused: false, nextRunAt: new Date(at(-1, 6, 30)).toISOString(), whenText: 'Every day at 6:30' }] });
   make({ id: 'email-watcher', name: 'Email watcher', icon: '✉️', color: '#4a7bd8', experiment: 'mailWatch', when: 'Every 5 minutes',
     description: "New emails wake the threads waiting on them, reach the threads they're about, or wait on a twice-daily list.",
@@ -663,7 +668,10 @@ function addRecipesDemo() {
   make({ id: 'show-a-few-options', name: 'Show a few options', icon: '🔀', color: '#7a5cc4', when: 'In every thread', state: 'add', instant: true,
     description: "When you're exploring something new, agents show you three directions that really differ and say which they'd pick.",
     about: "Ask an agent for a design, a name or an approach and it hands you one answer, polished. With this on, it shows about three rough options that go in different directions, says which it would pick and why, and polishes only the one you choose.",
-    example: 'You: *The settings page feels cluttered.*\n\n**A. Group, don\'t hide.** Four headed groups.\n**B. Search first.** A search box on top.\n**C. Split by who it\'s for.** Two pages.\n\nI\'d pick A.',
+    examples: [
+      { title: 'Tidy the settings page', you: 'The settings page feels cluttered. Can you tidy it up?', reply: '**A. Group, don\'t hide.** Four headed groups, the rare settings folded shut.\n\n**B. Search first.** A search box on top, and the five settings you change most.\n\n**C. Split by who it\'s for.** "Just me" and "the whole team" as two pages.\n\nI\'d pick A: it fixes the clutter without anyone relearning where things are. Mockups of all three are in the review window.', card: { headline: 'Which direction for the settings page?', options: ['A. Group', 'B. Search first', 'C. Split'] } },
+      { title: 'Name the new app', you: 'I need a name for the habit tracker.', reply: '**Streaky**: playful, says what it does.\n\n**Little Wins**: warmer, about the feeling rather than the streak.\n\n**Tally**: plain and short, room to grow past habits.\n\nI\'d pick Little Wins.', card: { headline: 'Which name?', options: ['Streaky', 'Little Wins', 'Tally'] } },
+    ],
     habit: { text: habit, bytes: Buffer.byteLength(habit), given: false } });
   // A month of runs for the three that are on.
   const brief = recipes.get('daily-brief');
@@ -683,7 +691,7 @@ function recipeSummary(r) {
   const since = Date.now() - 30 * 86_400_000;
   const runs = r.runs.filter((x) => Date.parse(x.at) >= since);
   const last = runs.reduce((a, b) => (!a || Date.parse(b.at) > Date.parse(a.at) ? b : a), undefined);
-  const { about, example, runs: _runs, ...rest } = r;
+  const { about, example, examples, runs: _runs, ...rest } = r;
   return { ...rest, stats: { runs: runs.length, neededYou: runs.filter((x) => x.needsYou).length, seen: runs.filter((x) => x.seen).length, ...(last ? { lastRunAt: last.at, lastHeadline: last.headline } : {}) } };
 }
 function recipeOrder(a, b) {
@@ -704,7 +712,8 @@ async function recipeRequest(client, method, p) {
       return { recipes: [...recipes.values()].map(recipeSummary).sort(recipeOrder) };
     case 'recipes.get': {
       const r = needRecipe(p.id);
-      return { recipe: { ...recipeSummary(r), about: r.about ?? r.description, ...(r.example ? { example: r.example } : {}), file: path.join(RECIPES_DIR, r.id, 'RECIPE.md'), runs: [...r.runs].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 60) } };
+      const examples = r.examples ?? (r.example ? [{ reply: r.example }] : []);
+      return { recipe: { ...recipeSummary(r), about: r.about ?? r.description, examples, ...(examples[0] ? { example: examples[0].reply } : {}), file: path.join(RECIPES_DIR, r.id, 'RECIPE.md'), runs: [...r.runs].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 60) } };
     }
     case 'recipes.setOn': {
       const r = needRecipe(p.id);
