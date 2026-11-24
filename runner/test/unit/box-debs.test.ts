@@ -15,7 +15,7 @@ import { tmpDir } from '../helpers/fakes.ts';
 
 const BOX = path.join(import.meta.dirname, '..', '..', 'box');
 const REPO = path.join(import.meta.dirname, '..', '..', '..');
-const read = (p: string) => fs.readFileSync(p, 'utf8');
+const read = (p: string) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
 test('the committed lock names every package exactly, from one snapshot, for the base image the Dockerfile pins', () => {
   const text = read(path.join(BOX, 'debs.lock'));
