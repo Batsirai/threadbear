@@ -1016,10 +1016,19 @@ if [ "$APP_ONLY" = 0 ] && [ "$RUNNER_ONLY" = 0 ]; then
       # (--part, scripts/check-remote.sh), which builds none of the app's
       # macOS code: its #[cfg(target_os = "macos")] Rust and the Objective-C
       # and Swift shims desktop/gpui/build.rs compiles. So the Mac half
-      # checks the app as installed on macOS too (Codex's review). Without
-      # --part, a run on a Mac has that in the two above already.
-      if [ "$PART" = mac ] && [ "$(uname -s)" = Darwin ]; then
-        cargo_step "desktop macos check" check --locked -p threadbear-gpui --features frame-stats
+      # checks both of those on macOS too (Codex's reviews), off the Linux
+      # half's critical path: the Mac half is short. Without --part, a run
+      # on a Mac has them in the two above already; --only naming them runs
+      # them, as tb land does to find who broke one.
+      if [ "$(uname -s)" = Darwin ]; then
+        for name in "desktop macos check" "desktop macos check as installed"; do
+          [ "$PART" = mac ] || { [ -n "$ONLY" ] && only_entry "$name" >/dev/null; } || continue
+          if [ "$name" = "desktop macos check" ]; then
+            cargo_step "$name" check --locked -p threadbear-gpui --features automation --all-targets
+          else
+            cargo_step "$name" check --locked -p threadbear-gpui --features frame-stats
+          fi
+        done
       fi
     fi
     [ "$QUICK" = 1 ] || cargo_step "desktop build" check --locked --workspace --all-targets

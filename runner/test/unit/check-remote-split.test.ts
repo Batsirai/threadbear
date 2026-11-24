@@ -211,10 +211,16 @@ test('check.sh --part runs just the Linux steps or just the Mac ones, which toge
     }
     // Every step, skipped ones too, in exactly one part. And on a Mac, its
     // part checks the desktop app's macOS build, which the Linux host can't.
-    const macOnly = process.platform === 'darwin' ? ['desktop macos check'] : [];
+    const macOnly = process.platform === 'darwin' ? ['desktop macos check', 'desktop macos check as installed'] : [];
     assert.deepEqual(mac.steps.filter((x) => macOnly.includes(x)), macOnly, mac.out);
     assert.deepEqual([...lin.steps, ...mac.steps].filter((x) => !macOnly.includes(x)).sort(), [...whole.steps].sort());
     assert.notEqual(check(['--part', 'both']).status, 0);
+    // tb land runs one that failed by itself, with no --part, on the Mac.
+    if (process.platform === 'darwin') {
+      const alone = check(['--only', 'desktop macos check']);
+      assert.equal(alone.status, 0, alone.out);
+      assert.deepEqual([...(onlyRan(alone.out) ?? [])], ['desktop macos check']);
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
