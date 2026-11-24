@@ -120,6 +120,8 @@ test('clashes settled before go go in with the merge', () => {
   const repo = path.join(root, 'r');
   fs.mkdirSync(repo);
   git(repo, 'init', '-q', '-b', 'main');
+  // GitHub's Windows has core.autocrlf on, which checks b.txt out as new\r\n.
+  git(repo, 'config', 'core.autocrlf', 'false');
   fs.writeFileSync(path.join(repo, 'a.txt'), 'base\n');
   git(repo, 'add', '.');
   git(repo, 'commit', '-qm', 'base');
