@@ -479,14 +479,20 @@ pub(crate) fn find_bar(
         .into_any_element()
 }
 
-/// Every match on the page faintly, the picked one as a selection is, and
-/// that one scrolled to: the code editor's look for its own matches.
+/// Find's marks, the picked match's and the rest's: yellow, as Safari's and
+/// Xcode's are, so they stand out from a selection. The selection's own
+/// blue-grey was too dim to find on a dark page (Mike, 24 Nov). Only a
+/// background can be set, so the words keep their colour: strong enough to
+/// see from across the page, light enough to read through.
+pub(crate) fn match_colours() -> (Hsla, Hsla) {
+    let yellow = gpui_kit::hsla(46. / 360., 1., 0.5, 1.);
+    (yellow.opacity(0.62), yellow.opacity(0.24))
+}
+
+/// Every match on the page softly, the picked one strongly, and that one
+/// scrolled to.
 fn mark_page(doc: &Entity<TextViewState>, finder: &Finder, cx: &mut App) {
-    let selection = cx.theme().selection;
-    let faint = Hsla {
-        s: 0.1,
-        ..selection
-    };
+    let (selection, faint) = match_colours();
     let current = finder.current_range();
     let marks: Vec<RangeHighlight> = finder
         .matches

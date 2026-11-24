@@ -8,8 +8,8 @@
 // it's folded into, a tool's output, a thought. What was opened for one
 // match folds again when the bar moves on to another, and what's open for
 // the match picked stays open when the bar closes, so Done leaves you
-// reading it. Matches in a reply are marked in its words (the picked one as
-// a selection is); the row with the picked match has an accent rail beside
+// reading it. Matches in a reply are marked in its words in yellow (the
+// picked one strongly); the row with the picked match has an accent rail beside
 // it, as a work link's step has for a moment. Older pages not loaded yet
 // aren't searched: going back past the first match loads the page before.
 use super::ThreadPane;
@@ -372,8 +372,8 @@ impl ThreadPane {
         }
     }
 
-    /// A reply's matches marked faintly and the picked one as a selection
-    /// is, the code editor's look for its own. Called as the reply's page is
+    /// A reply's matches marked softly and the picked one strongly, in
+    /// find's yellow (`file_find::match_colours`). Called as the reply's page is
     /// drawn (`markdown_state`) and when its text changes, so it does nothing
     /// when it's already marked for the same.
     pub(crate) fn mark_reply(
@@ -421,11 +421,7 @@ impl ThreadPane {
             doc.update(cx, |s, cx| s.clear_range_highlights(cx));
             return;
         }
-        let selection = cx.theme().selection;
-        let faint = Hsla {
-            s: 0.1,
-            ..selection
-        };
+        let (selection, faint) = crate::file_find::match_colours();
         // Its own count can differ from the core's (a reply's words as
         // parsed here and as drawn): the last one stands in for one past it.
         let picked_at = picked.map(|n| n.min(found.len() - 1));
