@@ -119,7 +119,8 @@ where it installs (Antigravity: an `agy_acp_server.par` on the PATH).
   they say UTC), which decide its room as Claude's and Codex's do, with
   `blocked` when either is under 1%. Any other group ("Claude and GPT
   models") adds a `weekly_model` window, `Weekly <group>`, and an `other`
-  one, `5-hour <group>`, which never decide it. `plan` is session/new's
+  one, `5-hour <group>`, which never decide it: nor when a block ends, nor
+  whether a login a turn ran dry is back. `plan` is session/new's
   `_meta.antigravity.tier.name` ("Google AI Ultra"), sent only with a reading. An answer that doesn't
   read, or no Gemini group (or two), is no reading: nothing is recorded and
   nothing is shown as an error. The login's token is never read.
@@ -736,7 +737,8 @@ thread to another login when the one it's on runs out of room.
   only when it's out (ACP agents, "Gemini's plan usage"). The answer goes into the usage store
   like a turn's, so room lifts the block and threads waiting for room
   carry on by themselves. A recheck that finds room in every window it
-  names also ends the block a turn that ran dry put on the login, and a
+  names (but Gemini's other groups, which never decide: "Gemini's plan
+  usage") also ends the block a turn that ran dry put on the login, and a
   pool thread waiting on that same login carries on there before the reset
   its wait named (a top-up, or a reset used outside Threadbear). A turn's
   own reading never does: one from another session can say the login has

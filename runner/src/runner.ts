@@ -78,7 +78,7 @@ import { threadEnv } from './restart.ts';
 import { worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import type { SignInState } from './sign-in-state.ts';
-import { MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
+import { decidingWindows, MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { FUNDED_DETAIL } from './adapters/acp/grok-billing.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
@@ -1125,6 +1125,12 @@ export class Runner {
   // itself (sendAccounts arms the room timer).
   private resetting = new Set<string>();
   private limitRecheck?: LimitRecheck;
+
+  // A draining runner leaves the logins' limits to the primary (beginDrain).
+  stopLimitRecheck(): void {
+    this.limitRecheck?.stop();
+  }
+
   // accounts.findWork: the Usage panel's Find work for it (spare-week.ts).
   // The thread comes back with it, so the app can open it before
   // threads.created arrives.
@@ -1177,7 +1183,10 @@ export class Runner {
   // room than it read as when it ran dry: a login refused while its own
   // reading said it had room isn't back because it says so again.
   recordReading(usage: UsageSink, accountId: string, reading: UsageReading): void {
-    const least = reading.windows.length ? Math.min(...reading.windows.map((w) => w.remainingPercent)) : undefined;
+    // Only windows that can decide: Gemini's Claude and GPT group out says
+    // nothing about the Gemini models its threads run on.
+    const deciding = decidingWindows(reading);
+    const least = deciding.length ? Math.min(...deciding.map((w) => w.remainingPercent)) : undefined;
     const was = this.dryRoom.get(accountId);
     const dryUntil = this.ranDry.get(accountId);
     // Grok running on a prepaid or on-demand balance past its plan reads as
@@ -2932,10 +2941,11 @@ export class Runner {
         const was = this.dryRoom.get(id);
         const dry = was !== undefined && (this.ranDry.get(id) ?? 0) > this.clock.now();
         if (dry) {
-          const least = o.blocked ? 0 : o.windows.length ? Math.min(...o.windows.map((w) => w.remainingPercent)) : was;
+          const deciding = decidingWindows(o);
+          const least = o.blocked ? 0 : deciding.length ? Math.min(...deciding.map((w) => w.remainingPercent)) : was;
           this.dryRoom.set(id, Math.min(was, least));
           // And it holds until the window at its limit resets, if it says.
-          const ends = o.windows.filter((w) => w.remainingPercent < MIN_ROOM_PERCENT && w.resetsAt).map((w) => Date.parse(w.resetsAt!)).filter(Number.isFinite);
+          const ends = deciding.filter((w) => w.remainingPercent < MIN_ROOM_PERCENT && w.resetsAt).map((w) => Date.parse(w.resetsAt!)).filter(Number.isFinite);
           if (o.blocked && ends.length) this.ranDry.set(id, Math.max(this.ranDry.get(id) ?? 0, ...ends));
         }
         try {
@@ -2948,6 +2958,7 @@ export class Runner {
             ...(o.email ? { email: o.email } : {}),
             ...(o.plan ? { plan: o.plan } : {}),
             ...(o.resets ? { resets: o.resets } : {}),
+            ...(o.aside ? { aside: o.aside } : {}),
           });
         } catch (e) {
           this.log.warn('could not record a usage reading', { accountId: id, error: String(e) });
@@ -3170,8 +3181,9 @@ export class Runner {
     // told the parent he had stopped them (7 Nov 2026, thread 7a98a6fd).
     this.expireApprovals(st, 'The turn ended.', { mainOnly: true });
     // A login whose turns bring no usage reading (Gemini) is read soon after:
-    // the one the turn ran on, which a move mid-turn has taken off rec.
-    this.limitRecheck?.afterTurn(rt.sessionAccountId ?? rec.accountId);
+    // the one the turn ran on, which a move mid-turn has taken off rec. Not
+    // after a command the runner answered itself (/status), which ran nothing.
+    if (!turn.local) this.limitRecheck?.afterTurn(rt.sessionAccountId ?? rec.accountId);
     let turnCost: number | undefined;
     if (r.totalCostUsd !== undefined) {
       // total_cost_usd is a running total for the native session (resume

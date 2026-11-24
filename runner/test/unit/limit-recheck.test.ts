@@ -319,6 +319,28 @@ test("Gemini at its limit is read again whatever its room, so the next reading a
   }
 });
 
+test("Gemini's block ends at its own window's reset, not at the Claude and GPT group's later one, even with no reading after", async () => {
+  // Codex's merge review, 24 Nov 2026: the store took the block's end from
+  // every window at its limit, so a read failing after the 5-hour reset
+  // left Gemini blocked until the Claude and GPT week reset days later.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'limit-recheck-'));
+  try {
+    const clock = new FakeClock(Date.parse('2026-11-23T05:00:00Z'));
+    const store = new UsageStore({ limitsFile: path.join(dir, 'limits.json'), dataDir: dir, clock, log: nullLogger });
+    const known = { id: 'antigravity-main', provider: 'antigravity' as const, title: 'Gemini', configDir: path.join(dir, 'agy') };
+    const out = parseAgyUsage(AGY_SAMPLE.replace('91% remaining', '0% remaining') + `- **Claude and GPT models**
+  - **Weekly Limit Remaining:** 0% remaining (resets Nov 30, 2026, 05:08 UTC)
+`)!;
+    assert.deepEqual(out.aside, ['Weekly Claude and GPT']);
+    store.record(known.id, out);
+    assert.equal(store.usageFor(known)?.blocked, true);
+    clock.advance(Date.parse('2026-11-23T09:36:00Z') - clock.now());
+    assert.equal(store.usageFor(known)?.blocked, undefined, 'its 5-hour window reset at 9:35');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a regular pass that comes round while an after-turn read is out runs straight after it, not a whole interval later", async () => {
   const clock = new FakeClock(T0);
   const reads: string[] = [];

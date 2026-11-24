@@ -64,9 +64,12 @@ export const handoversPart = {
     // New threads start on the new runner, so a CLI started ahead of one here
     // would never be used.
     this.dropSpare('handing over');
-    // Accounts are the primary's to watch now.
+    // Accounts are the primary's to watch now, their limits too: a recheck
+    // here would start a CLI beside the primary's, and its reading would
+    // reach the primary's store past the primary's own ranDry rules.
     this.rescanTimer?.cancel();
     this.accountsTimer?.cancel();
+    this.stopLimitRecheck();
     await Promise.all([...this.threads.values()].filter((st) => !d.keep.has(st.rec.id)).map((st) => this.letGo(st)));
     this.log.info('let go of the idle threads', { keeps: [...d.keep] });
     this.checkHandovers();

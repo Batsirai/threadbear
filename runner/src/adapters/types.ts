@@ -113,7 +113,9 @@ export type AdapterOutput =
   | { kind: 'context'; contextTokens: number; contextWindow?: number }
   // A rate-limit reading for the session's account (D's UsageStore keeps
   // it). email and plan come with it when the CLI reports them.
-  | { kind: 'limits'; windows: UsageWindow[]; blocked?: boolean; email?: string; plan?: string; resets?: UsageResets }
+  // aside: titles of windows shown but never deciding the login's room or
+  // its block (Gemini's Claude and GPT group: agy-usage.ts).
+  | { kind: 'limits'; windows: UsageWindow[]; blocked?: boolean; email?: string; plan?: string; resets?: UsageResets; aside?: string[] }
   // The version of the CLI process actually running this session (not the
   // one that created it).
   | { kind: 'cliVersion'; version: string }

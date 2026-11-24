@@ -193,6 +193,7 @@ export class LimitRecheck {
             ...(l.blocked !== undefined ? { blocked: l.blocked } : {}),
             ...(l.plan ? { plan: l.plan } : {}),
             ...(l.resets ? { resets: l.resets } : {}),
+            ...(l.aside ? { aside: l.aside } : {}),
           });
           if (polled) this.deps.log.debug("read a login's plan usage", { accountId: account.id, windows: l.windows.length });
           else this.deps.log.info(before === undefined ? "read a login's limits for the first time" : 'read a login that was out of room again', { accountId: account.id, blocked: l.blocked ?? null });

@@ -25,7 +25,8 @@ import type { AdapterOutput } from '../types.ts';
 
 // blocked is left out when it can't be told: only one of the two Gemini
 // windows read, and it has room (the other might be the one at its limit).
-export type AgyUsage = { windows: UsageWindow[]; blocked?: boolean };
+// aside: the other groups' windows' titles, which never decide it.
+export type AgyUsage = { windows: UsageWindow[]; blocked?: boolean; aside?: string[] };
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
@@ -109,8 +110,10 @@ export function parseAgyUsage(text: string): AgyUsage | undefined {
     }
   }
   const main = windows.filter((w) => w.kind === 'five_hour' || w.kind === 'weekly');
-  if (main.some((w) => w.remainingPercent < 1)) return { windows, blocked: true };
-  return main.length === 2 ? { windows, blocked: false } : { windows };
+  const others = windows.filter((w) => !main.includes(w)).map((w) => w.title);
+  const aside = others.length ? { aside: others } : {};
+  if (main.some((w) => w.remainingPercent < 1)) return { windows, blocked: true, ...aside };
+  return main.length === 2 ? { windows, blocked: false, ...aside } : { windows, ...aside };
 }
 
 // The plan's name from session/new's result: _meta.antigravity.tier.name
@@ -128,5 +131,5 @@ export function agyLimits(text: string, session: unknown): Extract<AdapterOutput
   const read = parseAgyUsage(text);
   if (!read) return undefined;
   const plan = agyPlan(session);
-  return { kind: 'limits', windows: read.windows, ...(read.blocked !== undefined ? { blocked: read.blocked } : {}), ...(plan ? { plan } : {}) };
+  return { kind: 'limits', windows: read.windows, ...(read.blocked !== undefined ? { blocked: read.blocked } : {}), ...(plan ? { plan } : {}), ...(read.aside ? { aside: read.aside } : {}) };
 }

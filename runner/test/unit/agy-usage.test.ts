@@ -30,6 +30,8 @@ test("the Gemini group's windows are the login's 5-hour and weekly, the others e
       { kind: 'other', title: '5-hour Claude and GPT', remainingPercent: 100, resetsAt: '2026-11-23T10:08:00.000Z' },
     ],
     blocked: false,
+    // Shown, but never deciding its room or its block (Runner.recordReading, UsageStore.record).
+    aside: ['Weekly Claude and GPT', '5-hour Claude and GPT'],
   });
 });
 

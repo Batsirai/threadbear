@@ -351,6 +351,21 @@ test('a reading that says the login has room again ends the block a 402 put on i
   assert.ok(thread);
 });
 
+test("a window that's only shown (Gemini's Claude and GPT group) at its limit doesn't keep a dry login out", async () => {
+  // Codex's and Gemini's merge reviews, 24 Nov 2026.
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([{ id: 'convex', title: 'Convex', accountIds: ['grok-main', 'claude-main'] }]);
+  h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  assert.ok(h.runner.ranDry.has('grok-main'));
+  const aside = { kind: 'weekly_model' as const, title: 'Weekly Claude and GPT', remainingPercent: 0 };
+  h.runner.recordReading({ record: () => {} }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }, aside], blocked: false, aside: [aside.title] });
+  assert.equal(h.runner.ranDry.has('grok-main'), false);
+});
+
 test('a thread waiting on its own Grok login carries on there once limit-recheck reads it back with room', async () => {
   const played = await outOfBalanceOutputs();
   const h = grokHarness([
