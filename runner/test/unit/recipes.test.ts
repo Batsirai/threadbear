@@ -444,3 +444,17 @@ test('recipes: the habits that come with Threadbear hold nothing of anyone\'s', 
     assert.ok(r.example, r.id);
   }
 });
+
+test('recipes: several examples, each drawn as its thread would be', () => {
+  const r = parseRecipe(recipeText({ name: 'n', icon: 'i', description: 'd' }, {
+    About: 'Why.',
+    Example: 'Title: Daily standup\n\n**Yesterday**\n- Shipped it\n\nCard: Standup draft ready\nOptions: Posted | Skip today',
+    'Example 2': 'You: The page feels cluttered.\n\nThree ideas.',
+    'Example 3': 'Just a reply.',
+  }), 'f');
+  assert.equal(r.examples.length, 3);
+  assert.deepEqual(r.examples[0], { title: 'Daily standup', reply: '**Yesterday**\n- Shipped it', card: { headline: 'Standup draft ready', options: ['Posted', 'Skip today'] } });
+  assert.deepEqual(r.examples[1], { you: 'The page feels cluttered.', reply: 'Three ideas.' });
+  assert.deepEqual(r.examples[2], { reply: 'Just a reply.' });
+  assert.equal(r.example, '**Yesterday**\n- Shipped it', 'the first, for an app from before examples');
+});

@@ -42,8 +42,17 @@ What it's for, and why it's worth having, in a short paragraph or two.
 
 ## Example
 
-A made-up run, in Markdown, so people can see what they'd get. Never a real
-one: real runs hold someone's email, calendar and messages.
+Title: Daily brief
+
+A made-up run, as its thread would show it, so people can see what they'd
+get. Never a real one: real runs hold someone's email, calendar and messages.
+
+Card: 2 emails need you today
+Options: Done | Remind me at 2
+
+## Example 2
+
+Another made-up run: give two or three, so people see a busy day and a quiet one.
 
 ## Setting it up
 
@@ -59,6 +68,15 @@ TASK.md in the recipe's working folder, adapted to what the user said.
 
 A few lines every thread's agent is told while the recipe is on.
 ```
+
+Each `## Example` section (`## Example 2`, `## Example 3` and so on) is one
+run, and the app shows them as a little thread you can scroll, with dots to
+flip between them. A line at its top `Title:` is the thread's title, and
+`You:` what the user said first (for a habit, where the example is an
+exchange). The rest is the agent's reply, in Markdown. A line at its end
+`Card:` is the end card's headline, with `Options:` its answers split by
+`|`. Base them on real runs if you have some, with every name, address,
+number and detail changed: they ship to everyone.
 
 The fields:
 

@@ -65,6 +65,8 @@ export type RecipeFile = {
   // count as its runs, as a schedule's threads do. The email watcher's is Email.
   runsFrom?: string;
   about: string;
+  // Its made-up runs, drawn as a thread would be: the first is `example`.
+  examples: RecipeExample[];
   example?: string;
   setup?: string;
   eachRun?: string;
@@ -75,6 +77,15 @@ export type RecipeFile = {
   header?: string;
   source: 'builtin' | 'yours';
 };
+
+/**
+ * A made-up run as its thread would show it: an `## Example` section. Lines
+ * at its top starting `Title:` (the thread's title) and `You:` (what the
+ * user said first, for a habit), and at its end `Card:` (the end card's
+ * headline) and `Options:` (its answers, split on `|`); the rest is the
+ * agent's reply, in Markdown.
+ */
+export type RecipeExample = { title?: string; you?: string; reply: string; card?: { headline: string; options: string[] } };
 
 export type RecipeState = 'add' | 'settingUp' | 'on' | 'off';
 
@@ -102,7 +113,7 @@ export type RecipeSummary = {
 };
 
 export type RecipeRun = { threadId: string; title: string; at: string; headline?: string; needsYou: boolean; seen: boolean; archived: boolean };
-export type RecipeDetail = RecipeSummary & { about: string; example?: string; file: string; runs: RecipeRun[] };
+export type RecipeDetail = RecipeSummary & { about: string; example?: string; examples: RecipeExample[]; file: string; runs: RecipeRun[] };
 
 // What recipes.json keeps for a recipe that's been added.
 type Kept = {
@@ -153,9 +164,17 @@ export function parseRecipe(text: string, file: string): Omit<RecipeFile, 'id' |
     if (at > 0) fields[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
   }
   const sections: Record<string, string> = {};
+  const examples: RecipeExample[] = [];
   for (const chunk of match[2].split(/^## /m).slice(1)) {
     const [heading, ...body] = chunk.split('\n');
-    sections[heading.trim().toLowerCase()] = body.join('\n').trim();
+    const key = heading.trim().toLowerCase();
+    const text = body.join('\n').trim();
+    // `## Example`, `## Example 2`, `## Examples`...: each is one run.
+    if (/^examples?\b/.test(key)) {
+      if (text) examples.push(parseExample(text));
+      continue;
+    }
+    sections[key] = text;
   }
   const need = (k: string) => {
     if (!fields[k]) throw new Error(`${file}: has no ${k}`);
@@ -175,11 +194,42 @@ export function parseRecipe(text: string, file: string): Omit<RecipeFile, 'id' |
     experiment: opt(fields.experiment),
     runsFrom: opt(fields.runsfrom),
     about: sections.about ?? '',
-    example: opt(sections.example),
+    examples,
+    example: examples[0]?.reply,
     setup: opt(sections['setting it up']),
     eachRun: opt(sections['each run']),
     habit,
   };
+}
+
+function parseExample(text: string): RecipeExample {
+  const lines = text.split('\n');
+  const out: RecipeExample = { reply: '' };
+  const field = (line: string | undefined, name: string) => {
+    const m = line?.match(new RegExp(`^${name}:\\s*(.*)$`, 'i'));
+    return m ? m[1].trim() : undefined;
+  };
+  for (;;) {
+    const title = field(lines[0], 'Title');
+    const you = field(lines[0], 'You');
+    if (title !== undefined) out.title = title;
+    else if (you !== undefined) out.you = you;
+    else if (lines.length && !lines[0].trim()) {
+      if (out.title === undefined && out.you === undefined) break;
+    } else break;
+    lines.shift();
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const options = field(lines[lines.length - 1], 'Options');
+  if (options !== undefined) lines.pop();
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  const headline = field(lines[lines.length - 1], 'Card');
+  if (headline !== undefined) {
+    lines.pop();
+    out.card = { headline, options: options ? options.split('|').map((o) => o.trim()).filter(Boolean) : [] };
+  }
+  out.reply = lines.join('\n').trim();
+  return out;
 }
 
 function readDir(dir: string | undefined, source: RecipeFile['source'], log?: (m: string, extra?: { error: string }) => void): RecipeFile[] {
@@ -262,7 +312,7 @@ export class Recipes {
     const f = this.file(id);
     const threads = this.recentThreads();
     const s = this.summary(f, threads);
-    return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), file: f.file, runs: this.runs(f, s, threads) };
+    return { ...s, about: f.about, ...(f.example ? { example: f.example } : {}), examples: f.examples, file: f.file, runs: this.runs(f, s, threads) };
   }
 
   /**
