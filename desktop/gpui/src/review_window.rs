@@ -1895,11 +1895,12 @@ pub(crate) async fn automation(
                     }
                 }
                 // The board flown to an option, by its id, as a click on its
-                // name does.
+                // name does, or to its picture `canvasShot` (from 0).
                 if let Some(id) = cmd["canvasGo"].as_str() {
                     let at = v.session.review().options.iter().position(|o| o.id == id);
+                    let shot = cmd["canvasShot"].as_u64().unwrap_or(0) as usize;
                     if let Some(at) = at {
-                        v.canvas_go_option(at, cx);
+                        v.canvas_go_shot(at, shot, cx);
                     }
                 }
                 if let Some(mark) = cmd["canvasMark"].as_object() {

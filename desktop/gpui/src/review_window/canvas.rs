@@ -105,6 +105,9 @@ pub(crate) struct CanvasState {
     /// one at a time, with its sound and controls (Mike, 24 Nov 2026: a
     /// double-click took him off the board to hear a music bed).
     pub(crate) playing: Option<(usize, usize)>,
+    /// A sound's bar starts paused (the pane's): set by Play, so the first
+    /// frame with it up presses its play.
+    start_sound: bool,
 }
 
 impl CanvasState {
@@ -125,6 +128,7 @@ impl CanvasState {
             placed: None,
             want: None,
             playing: None,
+            start_sound: false,
         }
     }
 
@@ -925,9 +929,7 @@ impl ReviewWindow {
                     scene.shot(index, shot_laid, shot, shots.len(), picked);
                 parts.extend(more_parts);
                 pens.extend(more_pens);
-                if (shot.video().is_some() || shot.page().is_some())
-                    && scene.visible(&shot_laid.picture)
-                {
+                if shot.media.is_some() && scene.visible(&shot_laid.picture) {
                     parts.push(self.play_button(scene, index, shot_laid, option, shot, cx));
                 }
             }
@@ -1349,10 +1351,14 @@ impl ReviewWindow {
             "agentMarks": notes,
             "tool": c.tool.name(),
             // What plays where it sits on the board: "clip" in the system's
-            // player, "page" in place, "waiting" for either, or nothing.
+            // player, "sound" on its play bar ("sound paused" before it
+            // starts), "page" in place, "waiting" for
+            // any of them, or nothing.
             "playing": self.canvas_playing_shot().map(|shot| {
                 if shot.video().is_some_and(|v| crate::media_view::state_of(&canvas_key(v)).is_some()) {
                     "clip"
+                } else if let Some(sound) = shot.audio().and_then(|a| crate::media_view::state_of(&canvas_key(a))) {
+                    if sound.playing { "sound" } else { "sound paused" }
                 } else if shot.page().is_some_and(|p| self.stage.page.as_ref().is_some_and(|(shown, _)| shown == p)) {
                     "page"
                 } else {
@@ -1550,7 +1556,7 @@ impl ReviewWindow {
                 .options
                 .get(option)
                 .map(|o| o.shot(index))
-                .is_some_and(|s| s.video().is_some() || s.page().is_some());
+                .is_some_and(|s| s.media.is_some());
             c.roaming = true;
             c.fly_to(rect, board::STOP_ZOOM);
             if moving {
@@ -1720,6 +1726,11 @@ impl ReviewWindow {
         let page = shot.page().is_some();
         let name = threadbear_core::review::shot_tip(option, shot_laid.shot);
         let (icon, words, tip) = match (playing, page) {
+            (false, false) if shot.audio().is_some() => (
+                gpui_kit::assets::IconName::Music,
+                "Play",
+                format!("Play {name} here"),
+            ),
             (false, false) => (
                 gpui_kit::assets::IconName::Play,
                 "Play",
@@ -1786,15 +1797,16 @@ impl ReviewWindow {
     /// Plays the clip or shows the page of `at` where it sits on the board.
     pub(super) fn canvas_play(&mut self, at: (usize, usize), cx: &mut Context<Self>) {
         self.canvas_stop_playing(cx);
-        // Where this window can't play a clip (Windows, Linux), it opens in
-        // the app this computer plays videos in, as the stage's button does.
+        // Where this window can't play a clip or a sound (Windows, Linux),
+        // it opens in the app this computer plays it in, as the stage's
+        // button does.
         let away = self
             .session
             .review()
             .options
             .get(at.0)
             .map(|o| o.shot(at.1))
-            .and_then(|s| s.video().map(str::to_owned))
+            .and_then(|s| s.video().or(s.audio()).map(str::to_owned))
             .filter(|_| !crate::media_view::SHOWN_HERE);
         if let Some(video) = away {
             crate::open_gate::open_file(&video, threadbear_core::open_policy::Origin::ThisMac, cx);
@@ -1802,6 +1814,7 @@ impl ReviewWindow {
         }
         if let Some(c) = self.canvas.as_mut() {
             c.playing = Some(at);
+            c.start_sound = true;
             if c.tool != Tool::Move {
                 c.tool = Tool::Move;
                 c.drawing = None;
@@ -1914,6 +1927,35 @@ impl ReviewWindow {
                     .child("Opening the page\u{2026}")
                     .into_any_element(),
             );
+        }
+        // A sound: its waveform stays the picture, with the pane's play bar
+        // along its bottom, started at once as Play was what was pressed.
+        if let Some(sound) = shot.audio().filter(|_| crate::media_view::SHOWN_HERE) {
+            let key = canvas_key(sound);
+            let path = sound.to_owned();
+            let made = crate::media_view::slot(&key, window, |opening| {
+                crate::open_gate::show_media(
+                    &path,
+                    threadbear_core::open_policy::Origin::ThisMac,
+                    crate::media_view::Kind::PaneAudio,
+                    opening,
+                )
+            });
+            return match made {
+                Ok(view) => {
+                    if std::mem::take(&mut self.canvas.as_mut()?.start_sound) {
+                        crate::media_view::play(&key);
+                    }
+                    let bar = div().absolute().left_0().right_0().bottom(px(12.));
+                    let bar = if whole { bar.h(px(44.)) } else { bar.size_0() };
+                    Some(spot.child(bar.child(view)).into_any_element())
+                }
+                Err(why) => {
+                    self.session.error = Some(why);
+                    self.canvas.as_mut()?.playing = None;
+                    None
+                }
+            };
         }
         let video = shot
             .video()

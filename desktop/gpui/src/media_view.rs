@@ -87,7 +87,6 @@ extern "C" {
     fn tb_media_close(view: *mut c_void);
     fn tb_media_state(view: *mut c_void, out: *mut NativeState);
     fn tb_media_failure(view: *mut c_void, buffer: *mut std::ffi::c_char, capacity: i32) -> bool;
-    #[cfg(feature = "automation")]
     fn tb_media_play(view: *mut c_void) -> bool;
     #[cfg(feature = "automation")]
     fn tb_media_click_link(view: *mut c_void) -> bool;
@@ -595,9 +594,8 @@ pub(crate) fn state_of(key: &str) -> Option<MediaState> {
     })
 }
 
-/// The play button of `key`'s film, for the scripted app: false when there's
-/// no film up by that key.
-#[cfg(feature = "automation")]
+/// The play button of `key`'s film or sound (the scripted app's, and the
+/// review board's Play on a sound): false when there's none up by that key.
 pub(crate) fn play(key: &str) -> bool {
     SLOTS.with(|s| {
         s.borrow()

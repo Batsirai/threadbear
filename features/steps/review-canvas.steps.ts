@@ -64,9 +64,17 @@ When('the board flies to option {string}', async function (this: ThreadbearWorld
   await board(this, { canvasGo: id });
 });
 
-// A button on the board, once it's there: the board may still be flying to
-// it, and what's out of sight isn't drawn.
+// A button on the board, once it's there and the board's stopped moving:
+// it may still be flying to it, and what's out of sight isn't drawn.
 When('I press {string} on the board', async function (this: ThreadbearWorld, tip: string) {
+  // Still, first: a click aimed at a button mid-flight lands beside it.
+  let last = '';
+  await untilBoard(this, 'the board still', (s) => {
+    const now = JSON.stringify((s.canvas as { camera?: number[] } | null | undefined)?.camera ?? null);
+    const still = now === last;
+    last = now;
+    return still;
+  });
   const deadline = Date.now() + 10_000;
   for (;;) {
     try {
@@ -79,10 +87,18 @@ When('I press {string} on the board', async function (this: ThreadbearWorld, tip
   }
 });
 
+When('the board flies to option {string}, shot {int}', async function (this: ThreadbearWorld, id: string, shot: number) {
+  await board(this, { canvasGo: id, canvasShot: shot - 1 });
+});
+
 Then('the board plays a clip in place', async function (this: ThreadbearWorld) {
   await untilBoard(this, 'a clip playing on the board', (s) => s.canvas?.playing === 'clip');
 });
 
 Then('nothing plays on the board', async function (this: ThreadbearWorld) {
   await untilBoard(this, 'nothing playing on the board', (s) => !s.canvas?.playing);
+});
+
+Then('the board plays a sound in place', async function (this: ThreadbearWorld) {
+  await untilBoard(this, 'a sound playing on the board', (s) => s.canvas?.playing === 'sound');
 });
