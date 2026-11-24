@@ -89,7 +89,17 @@ for (const p of patterns) {
 
 // The longest first. A file with no time yet (a new one) goes before them:
 // it could be the longest, and a short one first costs next to nothing.
-const key = (f) => path.relative(process.cwd(), path.resolve(f)).split(path.sep).join('/');
+// By real path: node reports a file under the folder it was given, which on
+// macOS can be /var/... while the cwd reads /private/var/..., and the key
+// came out as ../../../var/... (seen on the M5, 24 Nov).
+const real = (p) => {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+};
+const key = (f) => path.relative(real(process.cwd()), real(path.resolve(f))).split(path.sep).join('/');
 const took = new Map();
 if (times) {
   try {
