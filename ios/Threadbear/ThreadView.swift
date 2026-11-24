@@ -1258,12 +1258,8 @@ struct MarkdownText: View {
                 line(text)
             }
             .padding(.leading, CGFloat(depth) * 18)
-        case let .code(text):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(text).font(.system(.footnote, design: .monospaced)).padding(10)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        case let .code(text, language):
+            CodeBlockView(code: text, language: language)
         case let .rich(kind, source):
             RichBlockView(kind: kind, source: source)
         case let .draft(draft):

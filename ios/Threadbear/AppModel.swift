@@ -432,13 +432,14 @@ final class AppModel {
             // -ThreadbearPictures: and a thread with pictures, "pics".
             // -ThreadbearLoginNote: and one whose login ran out and moved, "moved".
             // -ThreadbearDiagrams: and one with a mermaid diagram and an html block.
+            // -ThreadbearCode: and one with sql, ts and untagged code blocks, "code".
             // -ThreadbearLong: and a very long thread, "long".
             // -ThreadbearSecret: and a thread waiting on a secret card, "secret".
             // -ThreadbearRunners: the Mac asleep and two more runners, for the runner picker.
             // -ThreadbearOffline: the Mac's been asleep for hours, so messages wait, and a3 has two waiting.
             let offline = args.contains("-ThreadbearOffline")
             // -ThreadbearManyThreads: and a long inbox, a few more running and starred, to scroll.
-            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"), loginMoved: args.contains("-ThreadbearLoginNote"))
+            let fake = FakeBackend(runnerOnline: !offline, listDelay: args.contains("-ThreadbearSlowLoad") ? .seconds(6) : .zero, pictures: args.contains("-ThreadbearPictures"), long: args.contains("-ThreadbearLong"), secret: args.contains("-ThreadbearSecret"), diagrams: args.contains("-ThreadbearDiagrams"), code: args.contains("-ThreadbearCode"), runners: args.contains("-ThreadbearRunners"), queued: offline, many: args.contains("-ThreadbearManyThreads"), loginMoved: args.contains("-ThreadbearLoginNote"))
             // -ThreadbearSlowStart: a new thread takes a minute to start, so its Starting row stays.
             if args.contains("-ThreadbearSlowStart") { fake.startDelay = .seconds(60) }
             // -ThreadbearShortInbox: one thread in the inbox, one running, one of each put away.
