@@ -558,6 +558,10 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     // Left out of its group meanwhile (findBroken): it stops waiting and
     // says why now, not after the checks of everyone still in the line.
     const refused = (): QueueEntry['refused'] => (entry ? readEntry(common, entry.id)?.refused : undefined);
+    const landedMeanwhile = (): QueueEntry | undefined => {
+      const now = entry && readEntry(common, entry.id);
+      return now?.result ? now : undefined;
+    };
     let release: (() => Promise<void>) | undefined;
     // Stopped while it waits (an agent's time limit, Ctrl-C): it's out of
     // the line, as nobody would hear how its landing went, so it says so in
@@ -584,7 +588,11 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
     const signals: NodeJS.Signals[] = ['SIGTERM', 'SIGINT', 'SIGHUP'];
     if (opts.sayWhenStopped) for (const s of signals) process.once(s, stopped);
     try {
-      release = await lockLanding(path.join(common, 'threadbear-land.lock'), out, () => waitingLine(common, timesFile, entry) + longWait(asked), () => !!refused());
+      // Landed with its group meanwhile: it stops waiting too. The lock had
+      // nothing left for it to do (its own worktree is moved below), and on
+      // 24 Nov such waits sat about an hour while other groups took the lock
+      // in turn.
+      release = await lockLanding(path.join(common, 'threadbear-land.lock'), out, () => waitingLine(common, timesFile, entry) + longWait(asked), () => !!refused() || !!landedMeanwhile());
     } catch (e) {
       err(`Couldn't lock the repo for landing: ${(e as Error).message}`);
       return 1;
@@ -606,6 +614,8 @@ export async function land(t: LandTarget, opts: LandOptions = {}): Promise<numbe
       return 129;
     }
     if (!release) {
+      const landed = landedMeanwhile();
+      if (landed) return await landedByAnother(t, landed, out);
       err(refused()?.text ?? `${t.branch} was left out of its group's check, so nothing landed. Run tb land again.`);
       return 1;
     }

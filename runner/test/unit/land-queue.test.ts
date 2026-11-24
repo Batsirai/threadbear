@@ -171,6 +171,35 @@ async function lockHeld(root: string, common: string) {
   };
 }
 
+// Landed with its group while it waits for the lock (another landing holds
+// it, for a check of its own): it stops waiting and says so, rather than
+// queue for the lock with nothing left to do (24 Nov: about an hour).
+test('a landing its group has landed stops waiting for the lock', async () => {
+  const { root, main } = makeRepo(PATCH(`{ check: "true" }`));
+  const [b] = branches(main, ['b']);
+  const common = path.join(main, '.git');
+  const goneMs = landLimits.goneMs;
+  landLimits.goneMs = 50;
+  const drop = await lockHeld(root, common);
+  try {
+    const cap = capture();
+    const landing = land(b, cap.opts);
+    await until(() => cap.out.some((l) => l.startsWith('Waiting for another landing')), 'b waiting');
+    const [e] = waiting(common);
+    // As the holder of a group check with b in it does once main has moved.
+    const tip = sh(b.path, 'git rev-parse HEAD');
+    sh(main, `git merge -q --ff-only ${b.branch}`);
+    writeEntry(common, { ...e, result: { landed: tip, commits: `${tip.slice(0, 9)} Add b`, together: ['thread/h0000000'] } });
+    assert.equal(await landing, 0, cap.err.join('\n'));
+    assert.match(cap.out.join('\n'), /Landed on main in .*, in one check with thread\/h0000000:/);
+    assert.deepEqual(waiting(common), [], 'out of the line');
+    assert.ok(!fs.existsSync(path.join(root, 'lock-drop')), 'with the lock still held by the other');
+  } finally {
+    landLimits.goneMs = goneMs;
+    await drop();
+  }
+});
+
 // Stopped before its check starts, a landing still leaves the line: it may
 // have been stopped on purpose, and nobody would hear how it went. The tb
 // that was run passes the signal on to the landing's own process, or, killed
