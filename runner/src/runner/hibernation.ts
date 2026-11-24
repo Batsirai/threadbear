@@ -8,7 +8,7 @@ import type { PermissionMode, ReviewFinding, ThreadSummary } from '../protocol.t
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { LATE_CHECKS_MAX, LATE_CHECK_LOST, SAID_MAX, WAKE_SYSTEM, awayFor, hibernateNote, lateCheckPrompt, lateChecksOf, lateNews, lateSleepMs, lateWait, lateWhy, localWhen, readWakeAnswer, topicCheckNews, wakePrompt, type LateWait } from '../wake-when.ts';
 import type { ThreadState } from '../runner.ts';
-import { NO_WAKE_TIME } from '../runner.ts';
+import { NO_WAKE_TIME } from './timings.ts';
 import { parseWhen } from '../when.ts';
 import { parkRecord, placeOf, wakesOnStart, type PlaceEvent } from '../place.ts';
 import type { WaitFor } from '../needs.ts';

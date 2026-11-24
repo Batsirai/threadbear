@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { SendOptions, ThreadState } from '../runner.ts';
-import { fromMike } from '../runner.ts';
+import { fromMike } from './messages.ts';
 
 export const reviewsPart = {
   createReview(this: Runner, threadId: string, raw: ReviewInput): { review: DesignReview } {

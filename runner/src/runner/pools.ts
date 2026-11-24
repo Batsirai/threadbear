@@ -12,7 +12,8 @@ import { DEFAULT_POOL_FOLDERS, peekRunnerJson, readRunnerJson, writeRunnerJson }
 import { UNKNOWN_WAIT_MS, WAIT_SLACK_MS, backAt, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
 import { historyItems, selectHistory } from '../handoff-history.ts';
 import type { ThreadState } from '../runner.ts';
-import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_SIGNED_OUT, isClaudeModel, modelRow, modelTitle } from '../runner.ts';
+import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_SIGNED_OUT } from './carry-on.ts';
+import { isClaudeModel, modelRow, modelTitle } from './models.ts';
 import { providerName } from '../providers.ts';
 
 export const poolsPart = {

@@ -28,7 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ThreadState, Turn } from '../runner.ts';
 import type { ThreadRecord } from '../store.ts';
-import { FOLDER_CACHE_MS, HOOK_TELL_CHARS, HOOK_TELL_LIMIT, LIVE_POLL_MS, LIVE_SHARE_MS, PATCHES_TTL_MS } from '../runner.ts';
+import { FOLDER_CACHE_MS, HOOK_TELL_CHARS, HOOK_TELL_LIMIT, LIVE_POLL_MS, LIVE_SHARE_MS, PATCHES_TTL_MS } from './timings.ts';
 import { safeStart } from '../safe-cut.ts';
 
 // The files in a Claude login's folder that hold its user settings.

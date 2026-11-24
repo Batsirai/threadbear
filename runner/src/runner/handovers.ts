@@ -10,7 +10,8 @@ import type { PersistedEvent, ThreadSummary } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
 import type { Drain, ThreadState } from '../runner.ts';
-import { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS, newRuntime } from '../runner.ts';
+import { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS } from './timings.ts';
+import { newRuntime } from './runtime.ts';
 import { runningSession } from '../cli-session.ts';
 
 // Runner.openCards: events read from a log at once, kept small as each

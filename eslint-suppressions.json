@@ -303,6 +303,11 @@
       "count": 3
     }
   },
+  "runner/src/module-scan.ts": {
+    "@typescript-eslint/no-explicit-any": {
+      "count": 1
+    }
+  },
   "runner/src/patch-commands.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 1
@@ -310,9 +315,6 @@
   },
   "runner/src/patch-trust.ts": {
     "@eslint-community/eslint-comments/require-description": {
-      "count": 1
-    },
-    "@typescript-eslint/no-explicit-any": {
       "count": 1
     }
   },

@@ -49,6 +49,8 @@ import { starterIn, type StartRequest } from './cross-runner.ts';
 import { SECRET_TIMEOUT_DEFAULT_MIN, SECRET_TIMEOUT_MAX_MIN } from './secrets.ts';
 import { cutSafely, firstLineSafely } from './safe-cut.ts';
 import { pickRunner } from './moves.ts';
+import { above, LEAST, raises, type Authority } from './access.ts';
+export { above, LEAST, raises, type Authority };
 import { FINDINGS_REFUSALS, FINDINGS_REFUSED, MAX_FINDINGS, findingsProblem, refusalsThisTurn } from './runner/lab-review.ts';
 
 // What the tools drive: the Runner itself, or during a handover
@@ -131,25 +133,11 @@ export const SERVER_NAME = 'threadbear';
 // brief's line diff), for the card reviewer (runner/card-review.ts) alone.
 export type AgentApprovalRequest = { name: string; title: string; input: Record<string, unknown>; review?: string; signal?: AbortSignal };
 
-// Permission modes by how much an agent may do in them without asking.
-// Plan first ranks with ask: its agent changes nothing, and only Mike's
-// approval takes it out of plan mode.
-const ACCESS: Record<PermissionMode, number> = { ask: 0, plan: 0, auto: 1, full: 2 };
 export const MODE_NAMES: Record<PermissionMode, string> = { full: 'Full access', auto: 'Auto', ask: 'Ask before edits', plan: 'Plan first' };
-export const raises = (to: PermissionMode, from: PermissionMode): boolean => ACCESS[to] > ACCESS[from];
 const higherOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? a : b);
 const lowerOf = (a: PermissionMode, b: PermissionMode): PermissionMode => (raises(a, b) ? b : a);
 // A mode as a ceiling: Plan first ranks with Ask (runner/ceiling.ts).
 const asCeiling = (m: PermissionMode): PermissionMode => (m === 'plan' ? 'ask' : m);
-// What a thread's agent can do: its mode.
-export type Authority = { mode: PermissionMode };
-// The least there is, below even Ask and Plan, by this very object: a
-// thread that isn't here (on another runner of this Mac's), or one an older
-// release ran shut in the sandbox (ThreadRecord.confined), whose words are
-// never passed up on a guess (hibernation.ts).
-export const LEAST: Authority = Object.freeze({ mode: 'ask' as const });
-// More than the caller has: a higher mode, or anything at all over LEAST.
-export const above = (t: Authority, caller: Authority): boolean => (caller === LEAST && t !== LEAST) || raises(t.mode, caller.mode);
 // A new_thread schedule's mode for the access checks: its own, or what it
 // inherits (Schedule.defaultMode). One whose inherited mode isn't known here
 // (another runner's default) counts as the least for raising it and the most

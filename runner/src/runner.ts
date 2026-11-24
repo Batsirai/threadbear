@@ -26,7 +26,6 @@ import type {
   DeltaType,
   DesignReview,
   ReplyButton,
-  ReviewDraft,
   EffortLevel,
   EventBody,
   ImageRef,
@@ -34,7 +33,6 @@ import type {
   Ask,
   AskAnswer,
   MessageOrigin,
-  ModelChoice,
   ShareAccess,
   PermissionMode,
   PersistedEvent,
@@ -76,7 +74,7 @@ import type { Logger } from './log.ts';
 import { LimitRecheck } from './limit-recheck.ts';
 import { threadEnv } from './restart.ts';
 import { worktreeInstructions } from './worktrees.ts';
-import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
+import { type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import type { SignInState } from './sign-in-state.ts';
 import { decidingWindows, MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { FUNDED_DETAIL } from './adapters/acp/grok-billing.ts';
@@ -111,7 +109,17 @@ import {
   type Screenshot,
   webPage,
 } from './patches.ts';
-import { cutSafely, firstLineSafely, isSafeSlice } from './safe-cut.ts';
+import { cutSafely } from './safe-cut.ts';
+import { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS, FOLDER_CACHE_MS, HOOK_TELL_CHARS, HOOK_TELL_LIMIT, LIVE_POLL_MS, LIVE_SHARE_MS, NO_WAKE_TIME, PATCHES_TTL_MS, SAVE_RETRY_MS, UNTIL_RESTART } from './runner/timings.ts';
+export { DRAIN_AGENT_MS, DRAIN_BACKGROUND_MS, DRAIN_CHECK_MS, DRAIN_MAX_OLD_MS, DRAIN_SETTLE_MS, FOLDER_CACHE_MS, HOOK_TELL_CHARS, HOOK_TELL_LIMIT, LIVE_POLL_MS, LIVE_SHARE_MS, NO_WAKE_TIME, PATCHES_TTL_MS, SAVE_RETRY_MS, UNTIL_RESTART };
+import { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARRY_ON_SIGNED_OUT, CARRY_ON_TOKEN, NET_CARRY_ON_MAX, NET_PROBE_FIRST_MS, NET_PROBE_MAX_MS, NET_WAIT_MAX_MS, STOPPED_CARRY_ON_MAX_AGE_MS, STOPPED_WORK_WAKES, STOPPED_WORK_WAKE_MAX_AGE_MS, WROTE_INSTEAD, isCarryOn, stoppedWorkMessage } from './runner/carry-on.ts';
+export { CARRY_ON_BACK, CARRY_ON_MOVED, CARRY_ON_NETWORK, CARRY_ON_RESTART, CARRY_ON_SIGNED_OUT, CARRY_ON_TOKEN, NET_CARRY_ON_MAX, NET_PROBE_FIRST_MS, NET_PROBE_MAX_MS, NET_WAIT_MAX_MS, STOPPED_CARRY_ON_MAX_AGE_MS, STOPPED_WORK_WAKES, STOPPED_WORK_WAKE_MAX_AGE_MS, WROTE_INSTEAD, isCarryOn, stoppedWorkMessage };
+import { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage } from './runner/messages.ts';
+export { TITLE_PROMPT, askedLine, checkImages, cleanTitle, fromMike, isAutomaticInput, matchAnswers, oneLine, scheduledMessageId, titleFrom, userMessage };
+import { effortTitle, isClaudeModel, modelRow, modelTitle } from './runner/models.ts';
+export { effortTitle, isClaudeModel, modelRow, modelTitle };
+import { newRuntime } from './runner/runtime.ts';
+export { newRuntime };
 import { FolderCache } from './folder-cache.ts';
 import { worktreesPart, type WorktreesPart } from './runner/worktrees.ts';
 import { networkPart, type NetworkPart } from './runner/network.ts';
@@ -407,7 +415,7 @@ export type Turn = {
 
 export type TurnHold = 'save' | 'setup' | 'broken' | 'token';
 
-type Runtime = {
+export type Runtime = {
   // On its way to another runner (runner/moves.ts): no turn starts.
   moving?: ThreadMoving;
   // Box mode (runner/moves.ts holdTurns): no turn starts while any of these
@@ -594,28 +602,6 @@ export type Drain = {
   timer?: TimerHandle;
 };
 
-// How often a draining runner looks again at threads it keeps for
-// background work, since that work's limit passes without an event.
-export const DRAIN_CHECK_MS = 5000;
-// How long background shells and monitors hold a kept thread after its last
-// turn. Most are waits that end by themselves, and the runner updates after
-// every landing: at 30 minutes, nearly every long wait was cut off (1 Nov:
-// a scan's wait, 4.5 hours of silence). A dev server does sit out the limit,
-// but that costs one old runner process, and only one per thread that has
-// work going, since a kept thread doesn't get kept again.
-export const DRAIN_BACKGROUND_MS = 4 * 60 * 60_000;
-// A thread in use never reaches that limit, and would stay on the old release
-// for as long as its dev server ran. Past this long there, it goes across
-// after a much shorter quiet spell.
-export const DRAIN_MAX_OLD_MS = 12 * 60 * 60_000;
-export const DRAIN_SETTLE_MS = 30 * 60_000;
-// How long subagents hold a kept thread after its last turn. Long, since
-// they end by themselves; only a stuck one should ever reach it.
-export const DRAIN_AGENT_MS = 4 * 60 * 60_000;
-// How soon a thread.json that failed to save is tried again. Until it's
-// saved, a crash or a handover would lose what changed (THREADBEAR-9).
-export const SAVE_RETRY_MS = 5000;
-
 export type RunnerDeps = {
   // Box mode (src/box-mode.ts): the one thread this runner exists for
   // (Runner.boxThread), known before start loads anything from disk.
@@ -747,38 +733,11 @@ function looksCover(looks: ClaudeLook[] | undefined, rec: ThreadRecord, forStart
   return lookKinds(rec, forStart).every((grants) => lookFor(looks, rec.cwd, { grants }) !== undefined);
 }
 
-// How long a thread's patches are kept before the folder is read again.
-export const PATCHES_TTL_MS = 15_000;
-// How long a folder listing (and a patch file's time, a .env) read for one
-// thread's patches serves every other thread in the same folders
-// (folder-cache.ts). A turn ending forgets them, as it may have added one.
-export const FOLDER_CACHE_MS = 10_000;
-// How often a thread whose patches have live state (when, badge) has it
-// read again by itself, while it's in the inbox: comments Mike leaves in
-// Tandem turn into a "Your turn" chip within this long.
-export const LIVE_POLL_MS = 20_000;
-// How long a live state command's output serves every thread in the same
-// folder (runLiveCommand): well inside one poll, so each poll runs it again.
-export const LIVE_SHARE_MS = 10_000;
-// How often the account list is read again, so a new login is noticed
 // (and its models asked for) without a client asking.
 const ACCOUNT_RESCAN_MS = 10_000;
 // accounts.updated: the first change goes out at once, then at most one
 // this often, always ending on the latest list.
 const ACCOUNTS_THROTTLE_MS = 5_000;
-// How many turns in a row one hook may start with its result.
-export const HOOK_TELL_LIMIT = 2;
-// How much of a hook's output goes to the agent (the transcript has it all).
-export const HOOK_TELL_CHARS = 8000;
-// snoozedUntil for a thread hibernating until the runner next starts: far
-// enough off that everything reading snoozedUntil (the lists, the resume
-// after a restart, a client older than snoozedUntilRestart) sees it as
-// snoozed, and start() wakes it long before.
-export const UNTIL_RESTART = '9999-12-31T00:00:00.000Z';
-// snoozedUntil for a thread waiting on a topic alone (wake-when.ts), or
-// while its time is worked out: the same far-off time, without the flag.
-export const NO_WAKE_TIME = UNTIL_RESTART;
-
 // Parts of the Runner that live in runner/ (see each file's top).
 export interface Runner extends LooseEndsPart, QuietInboxPart, InboxGuessPart, NestedPart, CeilingPart, MailPart, ColdCompactPart, LabReviewPart, NewThreadsPart, HibernationPart, TitlesPart, HighlightsPart, PatchesPart, EditingPart, ClisPart, ReviewsPart, ButtonsPart, ApprovalsPart, ProjectsHostPart, StoppedWorkPart, HandoversPart, PoolsPart, NetworkPart, WorktreesPart, CommandsPart, ContextUsagePart, MovesPart, WarmStartPart {}
 export class Runner {
@@ -5402,26 +5361,6 @@ for (const part of [looseEndsPart, quietInboxPart, inboxGuessPart, nestedPart, c
 }
 
 // answers: the asks the message answers (AskAnswer), for the app to show.
-// A wait started again can be stopped again by the next landing, so this
-// many wakes in a row at most, reset by anyone else writing to the thread.
-export const STOPPED_WORK_WAKES = 3;
-// A runner that was away this long (a Mac left off for days) shouldn't wake
-// every thread that had something going when it went.
-export const STOPPED_WORK_WAKE_MAX_AGE_MS = 24 * 60 * 60_000;
-
-export function stoppedWorkMessage(what: string[], last: boolean): string {
-  const one = what.length === 1;
-  const lines = what.map((w) => `- ${cutSafely(w, 203, '...')}`);
-  return [
-    `Threadbear stopped ${one ? 'this background job' : 'these background jobs'} of yours when the runner restarted onto a new release, so nothing more will come from ${one ? 'it' : 'them'}:`,
-    '',
-    ...lines,
-    '',
-    `If you said you'd report back or carry on after ${one ? 'it' : 'them'}, check how far ${one ? 'it' : 'they'} got and do that now; work running elsewhere may have finished by itself. Start ${one ? 'it' : 'them'} again only if that's still needed. An update only holds background work for about 4 hours past your last turn, so for a longer wait use schedule_message to come back and check. If it no longer matters, say so in a line.`,
-    ...(last ? ['', "Threadbear won't wake this thread for this again, so if the user needs to step in, ask them in end_turn."] : []),
-  ].join('\n');
-}
-
 // `wakeReason`: for a message the runner sends by itself, what happened, in a few
 // words ("The app restarted"), shown on the divider before the turn it
 // starts ("14 h later · The app restarted", Mike 19 Nov).
@@ -5434,10 +5373,6 @@ type ScheduledDelivery = { seq: number; started: boolean; text: string; images: 
 const DELETED_REMINDER = 'Dropped a queued reminder because its schedule was deleted.';
 const SUPERSEDED_REMINDER = 'Skipped an older queued reminder because a newer reminder from the same schedule is waiting.';
 
-export function isAutomaticInput(q: Pick<QueuedSend, 'origin' | 'retryAfterInterrupt'>): boolean {
-  return q.origin === 'schedule' || q.origin === 'runner' || q.retryAfterInterrupt === true;
-}
-
 function isReminder(q: QueuedSend): boolean {
   return q.origin === 'schedule';
 }
@@ -5449,52 +5384,6 @@ function hasCheckOutput(text: string): boolean {
   return text.includes(HELD_EXTRA) || text.lastIndexOf('\n\nIts check found this:') > failed || (failed >= 0 && text.indexOf('\n\n```\n', failed) >= 0);
 }
 
-// A UUID-shaped id in the existing message/turn field, so it survives every
-// runner handover and crash without adding metadata for clients to mirror.
-export function scheduledMessageId(threadId: string, scheduleId: string, run: string): string {
-  const hex = crypto.createHash('sha256').update(JSON.stringify([threadId, scheduleId, run])).digest('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
-// Typed by Mike, at the Mac or on his phone: not the runner's, a
-// schedule's or an agent's (another thread's, or this one's own `then`
-// from move_thread, which once stopped the turn that sent it on a move to
-// another login).
-export function fromMike(text: string, opts: SendOptions): boolean {
-  if (opts.origin && opts.origin !== 'phone') return false;
-  return !sentByAgent(text);
-}
-
-// The runner's own message carrying on a turn that was cut off (CARRY_ON_*
-// below): the same work going on, not a new message to the thread.
-export function isCarryOn(msg: { text: string; origin?: MessageOrigin }): boolean {
-  return msg.origin === 'runner' && [CARRY_ON_SIGNED_OUT, CARRY_ON_MOVED, CARRY_ON_RESTART, CARRY_ON_NETWORK, CARRY_ON_TOKEN, CARRY_ON_BACK].includes(msg.text);
-}
-
-// What the agent is told when Mike writes a message while its question or
-// approval card is still open (sendTo).
-export const WROTE_INSTEAD = "The user didn't answer this; they wrote you a message instead, which comes next. Read it before asking again.";
-
-// What a pool thread is told when it carries on by itself after its login
-// ran dry (docs/protocol/settings.md, "Pools").
-export const CARRY_ON_SIGNED_OUT = 'Your last login was signed out, so this thread has moved to another one. Carry on from where you left off.';
-export const CARRY_ON_MOVED = 'Your last login hit its usage limit partway through that turn, so this thread has moved to another one. Carry on from where you left off.';
-export const CARRY_ON_RESTART = 'The runner stopped partway through that turn (Threadbear or the Mac restarted) and is back now. Carry on from where you left off.';
-// Past this, a cut-off turn is left for Mike: the Mac was off for a while,
-// and he may have moved on.
-export const STOPPED_CARRY_ON_MAX_AGE_MS = 12 * 3_600_000;
-export const CARRY_ON_NETWORK = "The connection to the API dropped partway through that turn and is back now. Carry on from where you left off.";
-// How a thread waits for the network: probes 5s, 10s, 20s... apart, at
-// most a minute; a carry-on that can't get through either counts as a
-// try; after five, or six hours from the first failure, it's left to Mike.
-export const NET_PROBE_FIRST_MS = 5_000;
-export const NET_PROBE_MAX_MS = 60_000;
-export const NET_CARRY_ON_MAX = 5;
-export const NET_WAIT_MAX_MS = 6 * 3_600_000;
-// A box's thread, after its refused cloud token was replaced (holdForToken).
-export const CARRY_ON_TOKEN = "This machine's Claude token was refused partway through that turn, and a new one has been set. Carry on from where you left off.";
-export const CARRY_ON_BACK = 'Your login hit its usage limit partway through that turn and has room again now. Carry on from where you left off.';
-
 // How many sub-agents a thread keeps in its summary.
 const SUBAGENTS_KEPT = 20;
 
@@ -5503,135 +5392,8 @@ function publicSubagent(a: SubagentRecord): Subagent {
   return rest;
 }
 
-export function userMessage(msg: QueuedSend): EventBody {
-  return {
-    type: 'user.message',
-    text: msg.text,
-    images: msg.images,
-    ...(msg.origin ? { origin: msg.origin } : {}),
-    ...(msg.wakeReason ? { wakeReason: msg.wakeReason } : {}),
-    ...(msg.scheduleId ? { scheduleId: msg.scheduleId } : {}),
-    ...(msg.reviewId ? { reviewId: msg.reviewId, reviewResponse: msg.reviewResponse } : {}),
-    ...(msg.answers?.length ? { answers: msg.answers } : {}),
-    ...(msg.editOf ? { editOf: msg.editOf } : {}),
-  };
-}
-
-export function checkImages(images: ImageRef[]): void {
-  for (const img of images) {
-    if (!img || typeof img.path !== 'string' || !fs.existsSync(img.path)) {
-      throw new RpcError(ErrorCode.badParams, `Image not found: ${img?.path}`);
-    }
-  }
-}
-
-export function newRuntime(activeAt: number): Runtime {
-  return {
-    generation: 0,
-    resumed: false,
-    retriedFresh: false,
-    tasks: [],
-    finished: [],
-    activeAt,
-    approvals: new Map(),
-    releaseWhenIdle: false,
-    inProgress: new Map(),
-    pendingDeltas: new Map(),
-  };
-}
-
 function sortByActivity(list: ThreadSummary[]): ThreadSummary[] {
   return list.sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : a.lastActivityAt > b.lastActivityAt ? -1 : 0));
-}
-
-export function titleFrom(text: string): string {
-  if (!(text ?? '').trim()) return 'Image';
-  return firstLineSafely(text, LIMITS.titleChars);
-}
-
-// What the runner asks a small model for a thread's title. The examples
-// do more than the rules: without them Haiku drifts into Title Case and
-// sometimes describes the naming job itself.
-export const TITLE_PROMPT = [
-  'You name threads in Threadbear, an app for running AI agents, mostly for coding.',
-  'Reply with the title only: 2 to 6 words saying what the thread is about.',
-  'Sentence case: a capital for the first word and for names only. No quotes, no full stop, no dashes, no emoji.',
-  'Never mention titles, threads or the person asking.',
-  '',
-  'Message: can you look at why the upload test keeps failing on CI',
-  'Title: Fix the flaky upload test on CI',
-  '',
-  'Message: Hey, does the runner keep running even if we restart the UI?',
-  'Title: Does the runner outlive the app',
-  '',
-  'Message: hello there',
-  'Title: Hello',
-].join('\n');
-
-// A model's title, tidied: first line, no wrapping quotes or full stop,
-// nothing after a dash. One that runs long (rambling, or cut off by the
-// token limit) is no title at all, so the first line stays.
-export function cleanTitle(text: string): string {
-  let t = (text ?? '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
-  t = t.replace(/^(title:\s*)/i, '').split(/\s[—–-]\s/)[0];
-  t = t.replace(/^\*+|\*+$/g, '').trim();
-  // Quotes only when they wrap the whole title; ones inside it stay.
-  if (/^(["'`]).*\1$/.test(t)) t = t.slice(1, -1);
-  t = t.replace(/\.$/, '').trim();
-  if (t.length > LIMITS.titleChars || t.split(/\s+/).length > 10) return '';
-  // Each tidy-up (its first line, before a dash, without quotes or a full
-  // stop) is a cut of the model's text: one through a secret is no title
-  // (safe-cut.ts), and the thread keeps the one titleFrom made.
-  const at = (text ?? '').indexOf(t);
-  if (t && (at < 0 || !isSafeSlice(text, at, at + t.length))) return '';
-  return t;
-}
-
-// The sidebar's "You: ..." line: what Mike last said to a thread, in one
-// line. Not the runner's, a schedule's or another agent's messages, which
-// he didn't write. A design review's reply is his words (reply, then
-// notes), or which ones he picked, without the "Review: <title> (<id>)" heading.
-export function askedLine(m: { text: string; origin?: MessageOrigin; reviewId?: string; reviewResponse?: ReviewDraft }, reviews?: DesignReview[], max = LIMITS.previewChars): string | undefined {
-  if (!fromMike(m.text, m)) return undefined;
-  let text = m.text;
-  if (m.reviewId && m.reviewResponse) {
-    const r = m.reviewResponse;
-    const words = [r.reply, ...Object.values(r.notes)].filter(Boolean);
-    const options = reviews?.find(v => v.id === m.reviewId)?.options ?? [];
-    const picked = (r.pickedIds ?? (r.pickedId ? [r.pickedId] : [])).map(id => options.find(o => o.id === id)?.title).filter(Boolean);
-    const marks = Array.isArray(r.marks) ? r.marks.length : 0;
-    text = words.length ? words.join(' ') : picked.length ? `Picked ${picked.join(' + ')}` : r.none ? 'None of them' : marks ? `Marked ${marks === 1 ? 'a part' : `${marks} parts`}` : '';
-  }
-  return oneLine(text, max) || undefined;
-}
-
-export function oneLine(text: string, max: number): string {
-  const s = text.replace(/\s+/g, ' ').trim();
-  // Never through a secret: these lines go to Convex (safe-cut.ts).
-  return cutSafely(s, max, '…');
-}
-
-// Claude's own ids: its aliases, and anything starting claude- (with or
-// without a [1m] suffix).
-export function isClaudeModel(id: string): boolean {
-  const bare = stripModelSuffix(id).toLowerCase();
-  return ['opus', 'sonnet', 'haiku', 'default', 'opusplan'].includes(bare) || bare.startsWith('claude-');
-}
-
-// The account's row for a model id, matched by picker id or full id.
-export function modelRow(account: Account, model: string | undefined): ModelChoice | undefined {
-  if (!model) return undefined;
-  return account.models?.find((m) => m.id === model || m.model === model);
-}
-
-export function modelTitle(account: Account, model: string): string {
-  return modelRow(account, model)?.title ?? model;
-}
-
-const EFFORT_TITLES: Record<EffortLevel, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' };
-
-export function effortTitle(e: EffortLevel): string {
-  return EFFORT_TITLES[e] ?? e;
 }
 
 // "A", "A and B", "A, B and C".
@@ -5647,18 +5409,6 @@ function accountsKey(accounts: Account[]): string {
 
 function round6(n: number): number {
   return Math.round(n * 1e6) / 1e6;
-}
-
-// Maps answers keyed by question text, header or index to question text,
-// which is what the CLI's AskUserQuestion expects.
-export function matchAnswers(questions: Question[], answers: Record<string, string>): Record<string, string> | null {
-  const out: Record<string, string> = {};
-  questions.forEach((q, i) => {
-    const v = answers[q.question] ?? (q.header ? answers[q.header] : undefined) ?? answers[String(i)];
-    if (typeof v === 'string') out[q.question] = v;
-  });
-  if (questions.length && Object.keys(out).length === 0) return null;
-  return out;
 }
 
 // Opens a url action's page in the default browser. No shell: the url goes

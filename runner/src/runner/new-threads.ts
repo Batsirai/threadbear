@@ -16,7 +16,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type { ThreadState } from '../runner.ts';
-import { checkImages, effortTitle, isClaudeModel, modelRow, modelTitle, newRuntime, oneLine, titleFrom, userMessage } from '../runner.ts';
+import { checkImages, oneLine, titleFrom, userMessage } from './messages.ts';
+import { effortTitle, isClaudeModel, modelRow, modelTitle } from './models.ts';
+import { newRuntime } from './runtime.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import { cutSafely } from '../safe-cut.ts';
 

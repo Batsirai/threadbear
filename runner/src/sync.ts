@@ -42,6 +42,8 @@ import type { Notification } from './runner.ts';
 import type { ScheduleBackend, StoredSchedule } from './schedules.ts';
 import { followSchedules } from './schedule-follow.ts';
 import { ThreadIndex, type RemoteThreads } from './thread-index.ts';
+import { forbiddenText } from './backend-errors.ts';
+export { forbiddenText };
 import { digest, dropSyncCache, loadSyncCache, saveSyncCache, SYNC_CACHE_MAX_AGE_MS } from './sync-cache.ts';
 import { paths, readRunnerJson, writeRunnerJson } from './config.ts';
 import { unplacedPictures } from './pictures.ts';
@@ -871,28 +873,6 @@ export function retryLater(e: unknown): boolean {
   const kind = (e as { data?: { kind?: unknown } } | null)?.data?.kind;
   if (kind === 'retryLater' || kind === 'rateLimited') return true;
   return /"kind"\s*:\s*"(retryLater|rateLimited)"/.test(String((e as Error | null)?.message ?? ''));
-}
-
-// What the backend said when this runner's key isn't allowed something
-// (a runner key reaching past its own runner, docs/protocol/keys.md "Runner
-// keys"), or undefined for any other error. The feature that asked turns
-// itself off and says this once, rather than trying again.
-export function forbiddenText(e: unknown): string | undefined {
-  const data = (e as { data?: unknown } | null)?.data;
-  if (data && typeof data === 'object' && (data as { kind?: unknown }).kind === 'forbidden') {
-    const m = (data as { message?: unknown }).message;
-    return typeof m === 'string' ? m : "This runner's key can't do that.";
-  }
-  // A subscription's error may only have the data as JSON in its message.
-  const text = String((e as Error | null)?.message ?? e ?? '');
-  const json = text.match(/\{[^{}]*"kind"\s*:\s*"forbidden"[^{}]*\}/)?.[0];
-  if (!json) return undefined;
-  try {
-    const m = (JSON.parse(json) as { message?: unknown }).message;
-    return typeof m === 'string' ? m : "This runner's key can't do that.";
-  } catch {
-    return "This runner's key can't do that.";
-  }
 }
 
 // File storage's upload URL takes a plain POST of the bytes and answers

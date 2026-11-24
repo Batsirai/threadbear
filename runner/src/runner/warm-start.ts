@@ -16,7 +16,7 @@
 // it's stopped when that connection closes (the app quitting leaves nothing
 // behind), when the runner stops, and after SPARE_MS unused.
 import type { Runner, ThreadState } from '../runner.ts';
-import { newRuntime } from '../runner.ts';
+import { newRuntime } from './runtime.ts';
 import type { RunnerPart } from './part.ts';
 import type { AdapterOutput, AgentSession, QuestionAnswer, QuestionRequest, SessionSink, StartSessionOptions, ToolApprovalAnswer, ToolApprovalRequest } from '../adapters/types.ts';
 import type { EffortLevel, PermissionMode, Provider } from '../protocol.ts';

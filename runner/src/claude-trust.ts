@@ -20,7 +20,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { followOptions } from './patch-trust.ts';
+import { followOptions } from './module-scan.ts';
 import type { PermissionMode } from './protocol.ts';
 import { untrustedGitSync } from './safe-git.ts';
 import { dirKey, looksRunnable, reachOf, reachOfCommand, Reads, trustedProgramDirs } from './script-trust.ts';

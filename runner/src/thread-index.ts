@@ -14,7 +14,8 @@ import type { Logger } from './log.ts';
 import type { ThreadSummary } from './protocol.ts';
 import type { Notification } from './runner.ts';
 import { digest } from './sync-cache.ts';
-import { forbiddenText, type Post, type Subscribe } from './sync.ts';
+import { forbiddenText } from './backend-errors.ts';
+import type { Post, Subscribe } from './sync.ts';
 import { isThreadIdShape } from './thread-id.ts';
 
 export type IndexRow = {
