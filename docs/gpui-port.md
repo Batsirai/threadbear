@@ -396,8 +396,8 @@ change.
 
 - The Mac rows that don't pass yet in [PARITY.md](gpui-port/PARITY.md):
   `dock.titlebar`, `dock.frame`, `sidebar.hibernate.pick`,
-  `terminal.panel`, `terminal.putcommand`, `projects.decisions` (pending)
-  and `composer.contextring` (partly). Each passes, or Mike drops it.
+  `terminal.panel`, `terminal.putcommand` and `composer.contextring`
+  (partly). Each passes, or Mike drops it.
 - People on forks are moved across. Today the Swift app offers it
   (`app/Sources/Threadbear/NewApp.swift`: a window once and a sidebar card,
   whose button starts a thread in the checkout that runs

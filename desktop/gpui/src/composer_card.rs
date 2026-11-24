@@ -1213,9 +1213,10 @@ impl Composer {
 }
 
 /// What drawing a card's asks (`render_ask`) needs from what it's on: the
-/// composer's card (here), or a thread's decision on its project's page
-/// (project_decisions.rs), so the two look and answer alike, Recommended
-/// star, rows and Something else box included.
+/// composer's card (here) is the only one now. It was shared with the
+/// Projects page's decision cards until the projectDecisions experiment was
+/// taken out (24 Nov 2026), and stays a trait so another host can draw asks
+/// the same way.
 pub(crate) trait AskHost: Sized + 'static {
     /// The answer picked on this ask, `OWN_ANSWER` for Something else.
     fn ask_pick(&self, ask: usize) -> Option<i64>;
@@ -1643,7 +1644,7 @@ pub(crate) trait AskHost: Sized + 'static {
         let choices = composer::choices(ask);
         let this = cx.entity().downgrade();
         // As the Swift rows are laid out, a paragraph each (measured against
-        // its composer card and decisions page, which draw them the same): a
+        // its composer card): a
         // box with a small corner 4 under the ask's words, 14 over the first
         // row's words (12 here, as its box starts 2 into that) and 6 over the
         // others', 2 and 6 under each (a point less where the hairline over a

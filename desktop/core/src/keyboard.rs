@@ -59,7 +59,7 @@ pub fn group(command: ShortcutCommand) -> Group {
         FindInThread => Group::Edit,
         Back | Forward | NextInboxThread | OpenAnything | OpenAnythingAlso | ShowInbox
         | ShowScheduled | ShowProjects | ShowLibrarian | ShowHibernating | ShowArchived
-        | PreviousTab | NextTab | Settings => Group::Go,
+        | Settings => Group::Go,
         ZoomIn | ZoomOut | ActualSize | ToggleThreads | TogglePanels | ToggleTerminal
         | ResetPanelLayout | CollapseThreads | ToggleSidebarPanels => Group::View,
     }

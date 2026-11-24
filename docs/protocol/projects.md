@@ -10,14 +10,6 @@ thread can be in several projects, and it keeps `goals`, `state` and
 the librarian and the agents do. Kept in `projects.json` in the data dir;
 which projects a thread is in is kept with the thread.
 
-**Decisions** (the `projectDecisions` experiment, Mac app only so far).
-The app gathers a project's open cards of asks at the top of its page from
-what it already has: a thread is a decision while its summary is waiting
-on Mike (`needs` "you", not busy) with an `asksSeq` and an unticked ask.
-There's no request of its own: an answer there is the `threads.send` the
-thread's own card makes with an empty composer (the picked answers'
-`text` and `answers`), so the agent can't tell where it was answered.
-
 **Parts.** A project can be a part of another (`parentId`), for one
 body of work with separate strands (Threadbear, its GPUI port and its
 Android app), so each part keeps its own goals, state and notes rather

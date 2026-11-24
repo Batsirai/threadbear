@@ -515,8 +515,6 @@ impl Threadbear {
             this.menus_stale = true;
             this.inbox_count_cache.set(None);
             this.projects.pane_cache.take();
-            // A project's page opened anew works out the tab it opens on.
-            this.note_project_visit();
         });
         // Tabs opened beside the main panel for what it showed go when it
         // moves on (thread_panels.rs, `mainContextChanged`).
@@ -533,7 +531,6 @@ impl Threadbear {
             settings.saved.usage_chart_range.as_deref(),
             settings.saved.usage_show_model_weeks,
         );
-        let settings_open_rows = settings.saved.projects_open_rows.clone();
         let folded: HashSet<&'static str> = match &settings.saved.collapsed_sections {
             // The section keys are the Swift enum's raw values.
             Some(saved) => ["starred", "inbox", "running", "hibernating", "archived"]
@@ -655,7 +652,7 @@ impl Threadbear {
             upstream_on: false,
             projects_supported: false,
             all_projects: Vec::new(),
-            projects: crate::projects::ProjectsState::new(settings_open_rows.as_deref()),
+            projects: crate::projects::ProjectsState::default(),
             new_thread: crate::new_thread::NewThreadState::new(),
             remote: Default::default(),
             runners_panel: Default::default(),
@@ -2093,7 +2090,6 @@ impl Threadbear {
             // cards while it's showing (projects.rs, projects_page.rs).
             "project": self.project_page_dump(),
             "projectCards": self.project_cards_dump(),
-            "projectDecisions": self.project_decisions_dump(),
             "banner": self.banner_dump(),
             "limit": self.limit_dump(cx),
             "error": self.error_message.clone(),

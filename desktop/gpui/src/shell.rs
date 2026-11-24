@@ -380,8 +380,6 @@ actions!(
         ShowLibrarian,
         ShowHibernating,
         ShowArchived,
-        ShowPreviousTab,
-        ShowNextTab,
         OpenSettings,
         ZoomIn,
         ZoomOut,
@@ -513,12 +511,6 @@ commands!(
         ShowArchived,
         Some(ShortcutCommand::ShowArchived)
     ),
-    (
-        PreviousTab,
-        ShowPreviousTab,
-        Some(ShortcutCommand::PreviousTab)
-    ),
-    (NextTab, ShowNextTab, Some(ShortcutCommand::NextTab)),
     (Settings, OpenSettings, Some(ShortcutCommand::Settings)),
     (ZoomIn, ZoomIn, Some(ShortcutCommand::ZoomIn)),
     (ZoomOut, ZoomOut, Some(ShortcutCommand::ZoomOut)),
@@ -1047,9 +1039,6 @@ impl Threadbear {
             Command::Back => self.go_back(window, cx),
             Command::Forward => self.go_forward(window, cx),
             Command::NextInboxThread => self.next_inbox_thread(window, cx),
-            // A project's page tabs; they do nothing anywhere else.
-            Command::PreviousTab => self.step_project_tab(-1, cx),
-            Command::NextTab => self.step_project_tab(1, cx),
             Command::OpenAnything | Command::OpenAnythingAlso => {
                 self.toggle_open_anything(window, cx)
             }
@@ -1854,14 +1843,6 @@ impl Threadbear {
                     item("Forward", Command::Forward).enabled(self.can_go_forward()),
                     Separator,
                     item("Next Inbox Thread", Command::NextInboxThread),
-                    // A project's page tabs (the projectDecisions experiment),
-                    // there always and greyed out away from one, as the Swift
-                    // app's Go menu has them.
-                    Separator,
-                    item("Show Previous Tab", Command::PreviousTab)
-                        .enabled(self.can_step_project_tab(-1, cx)),
-                    item("Show Next Tab", Command::NextTab)
-                        .enabled(self.can_step_project_tab(1, cx)),
                     Separator,
                     item("Open Anything…", Command::OpenAnything),
                 ],

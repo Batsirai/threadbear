@@ -91,11 +91,6 @@ pub struct Saved {
     /// week ("Weekly Fable"). None is on.
     #[serde(rename = "usage.showModelWeeks")]
     pub usage_show_model_weeks: Option<bool>,
-    /// `projectsList.openRows`: the sidebar's folded project rows that are
-    /// open (the projectDecisions experiment), by project id, "-" for Not in
-    /// a project.
-    #[serde(rename = "projectsList.openRows")]
-    pub projects_open_rows: Option<Vec<String>>,
     /// `threadsCollapsed`: ⌘/ folded the Threads panel away (thread_panels.rs).
     /// None is no.
     pub threads_collapsed: Option<bool>,

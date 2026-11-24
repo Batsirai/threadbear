@@ -80,7 +80,7 @@ impl Threadbear {
             self.threads.values().map(|t| &**t),
             now_ms(),
         );
-        let cards = rules::cards(&sections, 3, self.project_decisions_on());
+        let cards = rules::cards(&sections, 3);
         rules::matching(cards, &self.projects_query(cx).unwrap_or_default())
             .into_iter()
             .map(|c| (c.project.title.clone(), c.project.id.clone()))
@@ -102,7 +102,6 @@ impl Threadbear {
             let handle = search.read(cx).focus_handle(cx);
             window.focus(&handle, cx);
         }
-        let decisions = self.project_decisions_on();
         let query = self.projects_query(cx);
         let (all, total, summary) = {
             let sections = Sections::build(
@@ -110,11 +109,11 @@ impl Threadbear {
                 self.threads.values().map(|t| &**t),
                 now_ms(),
             );
-            let all = rules::cards(&sections, 3, decisions);
+            let all = rules::cards(&sections, 3);
             let total = all.len();
             let summary = match &query {
                 Some(_) => None,
-                None => Some(rules::summary(total, &rules::overall(&sections, decisions))),
+                None => Some(rules::summary(total, &rules::overall(&sections))),
             };
             let shown: Vec<CardView> = rules::matching(all, query.as_deref().unwrap_or(""))
                 .into_iter()
@@ -482,7 +481,7 @@ impl Threadbear {
             self.threads.values().map(|t| &**t),
             now_ms(),
         );
-        let cards = rules::cards(&sections, 3, self.project_decisions_on());
+        let cards = rules::cards(&sections, 3);
         Some(
             cards
                 .iter()
@@ -587,7 +586,7 @@ fn project_status_line(status: &CardStatus, last_activity_ms: i64, cx: &App) -> 
             line = line.child(div().text_color(faint).child("·"));
         }
         let color = match part {
-            CardPart::NeedsYou(_) | CardPart::Decisions(_) => style::needs_you(cx),
+            CardPart::NeedsYou(_) => style::needs_you(cx),
             CardPart::Working(_) => style::control_accent(cx),
             CardPart::Failed(_) => style::failed(cx),
             CardPart::Unread(_) => style::secondary_text(cx),

@@ -477,12 +477,10 @@ let connectors = {
 };
 addDemoProjects();
 if (process.env.TB_MOCK_LIVE_PAGES) addLivePageDemo(process.env.TB_MOCK_LIVE_PAGES);
-// The experiments the mock's hello says are on: Decisions on the Projects
-// page with TB_MOCK_DECISIONS, nested threads with TB_MOCK_NESTED, and the
-// done card's Archive menu with TB_MOCK_INBOX_GUESS.
+// The experiments the mock's hello says are on: nested threads with
+// TB_MOCK_NESTED, and the done card's Archive menu with TB_MOCK_INBOX_GUESS.
 function mockExperiments() {
   return [
-    ...(process.env.TB_MOCK_DECISIONS ? ['projectDecisions'] : []),
     // TB_MOCK_NESTED_OFF keeps its demo threads with the experiment off.
     ...(process.env.TB_MOCK_NESTED && !process.env.TB_MOCK_NESTED_OFF ? ['nestedThreads'] : []),
     ...(process.env.TB_MOCK_INBOX_GUESS ? ['inboxGuess'] : []),
@@ -784,10 +782,6 @@ const mockPr = {
   files: [{ path: 'runner/src/swift-changes.ts', additions: 3, deletions: 1, hunks: [{ oldStart: 41, oldLines: 3, newStart: 41, newLines: 5, lines: ['   const touched = files.filter(isSwift)', "-  if (touched.length) return 'port'", "+  if (!touched.length) return 'none'", "+  if (files.some((f) => f.startsWith('desktop/'))) return 'ported'", "+  return 'port'"] }] }],
 };
 
-// Decisions on the Projects page (the projectDecisions experiment): three of
-// Threadbear's threads waiting on a card of asks, with what they're for. Only
-// when asked, as it changes those threads' rows and the Projects page.
-if (process.env.TB_MOCK_DECISIONS) addDemoDecisions();
 // Nested threads (the nestedThreads experiment): a coordinator thread and the
 // threads it started, as in mockup sub-A. Only when asked, as it adds rows
 // other specs count.
@@ -4084,12 +4078,6 @@ function addPerfProjects(count) {
 }
 
 /**
- * TB_MOCK_DECISIONS: cards of asks on three of the Threadbear project's idle
- * threads, as one-reply cards (options with what each does, the agent's pick),
- * each with a headline, for the projectDecisions experiment's
- * Decisions section (features/projects.feature, its screenshots).
- */
-/**
  * TB_MOCK_NESTED: "GPUI Port Coordinator" and the threads it started
  * (docs/protocol/threads.md, "Nested threads"): one waiting on Mike with a question,
  * four working, one idle, two archived, one moved out from under it
@@ -4149,40 +4137,6 @@ function addDemoNested() {
   make('nest_detached', 'Fix the BrowserBear focus bug', 25, 'idle', {
     answer: 'Fixed in BrowserBear: the handoff window now takes focus.', needs: 'nothing', startedBy: by('a tooling fix'), detached: true, unread: true,
   });
-}
-
-function addDemoDecisions() {
-  const cards = {
-    demo_settings_tabs: {
-      minutesAgo: 35, line: 'Renames the Settings tabs in the Mac app so each says what it holds.',
-      asks: [{ action: 'Call the Advanced tab "Machine" or "Runner"?', why: 'It holds the runner\'s folder, the check hosts and the logs.',
-        options: ['Runner', 'Machine'], optionNotes: ['Matches the runner menu', ''], suggested: 0 }],
-    },
-    demo_sqlite_vs_files: {
-      minutesAgo: 60, line: 'Weighs SQLite against plain files for the runner\'s thread store.',
-      asks: [{ action: 'Keep plain files for now?', why: 'Files were faster for every size we have. SQLite only wins past about 10,000 threads.',
-        options: ['Keep files', 'Move to SQLite'], optionNotes: ['Revisit at 5,000 threads', 'About two days of work'], suggested: 0 }],
-    },
-    demo_release_notes: {
-      minutesAgo: 180, line: 'Drafts the release notes for 0.4 from this week\'s commits.',
-      asks: [
-        { action: 'Lead with projects or with the librarian?', options: ['Projects', 'The librarian'], suggested: 0 },
-        { action: 'Mention the Windows build?', why: 'It runs, but nobody outside has tried it yet.', options: ['Not yet', 'As a preview'], suggested: 0 },
-      ],
-    },
-  };
-  for (const [id, card] of Object.entries(cards)) {
-    const t = threads.get(id);
-    if (!t) continue;
-    const done = t.events.findLast((e) => e.type === 'turn.completed');
-    if (done) Object.assign(done, { needs: 'you', asks: card.asks });
-    Object.assign(t.summary, {
-      status: 'idle', needs: 'you', needsYou: true, asks: card.asks, asksSeq: done?.seq ?? t.summary.lastSeq, preview: card.line,
-      lastActivityAt: new Date(Date.now() - card.minutesAgo * 60_000).toISOString(),
-    });
-    // Waiting on Mike, not on a login with room.
-    delete t.summary.waitingForRoom;
-  }
 }
 
 function join(summary, project, by, pinned, at = iso(), why) {

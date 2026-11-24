@@ -191,10 +191,6 @@ pub enum ShortcutCommand {
     ShowLibrarian,
     ShowHibernating,
     ShowArchived,
-    /// ⇧⌘[ and ⇧⌘]: a project's page tabs (Decisions, Project), as Safari's
-    /// tabs go. Greyed out anywhere else.
-    PreviousTab,
-    NextTab,
     ZoomIn,
     ZoomOut,
     ActualSize,
@@ -218,7 +214,7 @@ pub enum ShortcutCommand {
 }
 
 impl ShortcutCommand {
-    pub const ALL: [ShortcutCommand; 30] = [
+    pub const ALL: [ShortcutCommand; 28] = [
         Self::NewThread,
         Self::Archive,
         Self::Hibernate,
@@ -235,8 +231,6 @@ impl ShortcutCommand {
         Self::ShowLibrarian,
         Self::ShowHibernating,
         Self::ShowArchived,
-        Self::PreviousTab,
-        Self::NextTab,
         Self::ZoomIn,
         Self::ZoomOut,
         Self::ActualSize,
@@ -269,8 +263,6 @@ impl ShortcutCommand {
             Self::ShowLibrarian => "showLibrarian",
             Self::ShowHibernating => "showHibernating",
             Self::ShowArchived => "showArchived",
-            Self::PreviousTab => "previousTab",
-            Self::NextTab => "nextTab",
             Self::ZoomIn => "zoomIn",
             Self::ZoomOut => "zoomOut",
             Self::ActualSize => "actualSize",
@@ -308,8 +300,6 @@ impl ShortcutCommand {
             Self::ShowLibrarian => "Show Librarian",
             Self::ShowHibernating => "Show Hibernating",
             Self::ShowArchived => "Show Archived",
-            Self::PreviousTab => "Show Previous Tab",
-            Self::NextTab => "Show Next Tab",
             Self::ZoomIn => "Zoom In",
             Self::ZoomOut => "Zoom Out",
             Self::ActualSize => "Actual Size",
@@ -334,8 +324,6 @@ impl ShortcutCommand {
             Self::CopyTranscript => Some(ShortcutKey::with("c", false, false, true)),
             Self::Back => Some(ShortcutKey::new("[")),
             Self::Forward => Some(ShortcutKey::new("]")),
-            Self::PreviousTab => Some(ShortcutKey::with("[", false, false, true)),
-            Self::NextTab => Some(ShortcutKey::with("]", false, false, true)),
             Self::NextInboxThread => Some(ShortcutKey::with("down", true, false, false)),
             Self::OpenAnything => Some(ShortcutKey::new("k")),
             Self::OpenAnythingAlso => Some(ShortcutKey::new("p")),
@@ -542,28 +530,8 @@ mod tests {
             unique.len(),
             "two commands can't start on one key"
         );
-        assert_eq!(ShortcutCommand::ALL.len(), 30);
+        assert_eq!(ShortcutCommand::ALL.len(), 28);
         // The Swift app's names and keys, as both apps read shortcuts.json.
-        assert_eq!(
-            ShortcutCommand::from_name("previousTab"),
-            Some(ShortcutCommand::PreviousTab)
-        );
-        assert_eq!(
-            ShortcutCommand::PreviousTab.default_key(),
-            Some(key("cmd+shift+["))
-        );
-        assert_eq!(
-            ShortcutCommand::NextTab.default_key(),
-            Some(key("cmd+shift+]"))
-        );
-        assert_eq!(
-            ShortcutCommand::NextTab.default_key().unwrap().display(),
-            "⇧⌘]"
-        );
-        assert_eq!(
-            ShortcutCommand::NextTab.default_key().unwrap().chord(true),
-            "shift-cmd-]"
-        );
         assert_eq!(
             ShortcutCommand::OpenAnything.default_key(),
             Some(key("cmd+k"))
@@ -630,5 +598,12 @@ mod tests {
     fn unknown_commands_stay_in_the_file() {
         let read = ShortcutBindings::parse("{\"somethingNewer\": \"cmd+z\"}").unwrap();
         assert!(read.json().unwrap().contains("somethingNewer"));
+        // The project page's tab keys, taken out with the projectDecisions
+        // experiment (24 Nov 2026): a file naming them still reads, and keeps
+        // them for the Swift app, which still has them.
+        assert_eq!(ShortcutCommand::from_name("previousTab"), None);
+        let read = ShortcutBindings::parse("{\"previousTab\": \"cmd+shift+9\"}").unwrap();
+        assert!(read.problems.is_empty());
+        assert!(read.json().unwrap().contains("previousTab"));
     }
 }

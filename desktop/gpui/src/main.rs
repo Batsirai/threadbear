@@ -105,7 +105,6 @@ mod patches;
 mod pinned_panels;
 mod pr_view;
 mod prefs;
-mod project_decisions;
 mod project_page;
 mod projects;
 mod projects_list;
