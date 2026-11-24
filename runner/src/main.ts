@@ -105,7 +105,7 @@ import { filesMethods } from './files.ts';
 import { devicesMethods } from './devices.ts';
 import { flushSentry, reportException, reportLoggedError, reportLoggedWarning, startSentry, useSentryMask } from './sentry.ts';
 import { ERROR_EXIT_CODE, ERROR_LEAVE_DEADLINE_MS, ERROR_STOP_DEADLINE_MS, decideErrorExit, errorMode, guardHolds, guardNotice, readErrorExits, takeErrorEnv, testThrow, writeErrorExits } from './error-exits.ts';
-import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
+import { ALWAYS_ASK_TOOLS, NEVER_ASK_TOOLS, LIVE_PAGES_LINE, RICH_BLOCKS_LINE, SERVER_NAME, buildThreadbearTools, threadbearMcpServer, type RemoteControl } from './threadbear-mcp.ts';
 import { CrossRunner } from './cross-runner.ts';
 import { FAILED_SHOWN_MS, MovePreviews, Moves, moveInfoFrom, previewInfo, stillRunner, type ThreadMoving } from './moves.ts';
 import type { RemoteThreads } from './thread-index.ts';
@@ -439,7 +439,7 @@ async function main(): Promise<void> {
     registry,
     log,
     mcpServersFor: (threadId) => ({
-      [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, remoteControl, () => experimentOn(cfg.home, 'loadEndTurn'), () => experimentOn(cfg.home, 'reviewCanvas')),
+      [SERVER_NAME]: threadbearMcpServer(router(), threadId, scheduleControl(), projectControl(), appRestarts, () => cfg.bulletReplies, pocketControl, () => cfg.oneReply, () => cfg.connectorsUrl, gatewayHealth, remoteControl, () => experimentOn(cfg.home, 'loadEndTurn'), () => experimentOn(cfg.home, 'reviewCanvas'), () => experimentOn(cfg.home, 'livePages')),
       ...Object.fromEntries(Object.entries(archiveServers()).map(([name, server]) => [name, { type: 'stdio' as const, ...server }])),
     }),
     oneReply: () => cfg.oneReply,
@@ -447,6 +447,9 @@ async function main(): Promise<void> {
     neverAsk: NEVER_ASK_TOOLS,
   });
   // The threadbear tools for an agent that isn't given them in-process.
+  // What Codex and ACP agents get beside the tools: the rich blocks, and
+  // live pages with that experiment on.
+  const richGuidance = () => (experimentOn(cfg.home, 'livePages') ? `${RICH_BLOCKS_LINE} ${LIVE_PAGES_LINE}` : RICH_BLOCKS_LINE);
   const codexStyleTools = (threadId: string) => buildThreadbearTools(router(), threadId, Date.now, scheduleControl(), projectControl(), appRestarts, { provider: 'codex', bulletReplies: () => cfg.bulletReplies, oneReply: () => cfg.oneReply, pocket: pocketControl, gateway: () => cfg.connectorsUrl, gatewayHealth, remote: remoteControl, reviewCanvas: () => experimentOn(cfg.home, 'reviewCanvas') });
   // One app-server per live Codex thread, each starting what E says is
   // current, with the same threadbear tools as dynamic tools.
@@ -461,7 +464,7 @@ async function main(): Promise<void> {
     // config.toml, linked, and the trust its hooks have there.
     codexMainDir: cfg.codexMainDir,
     onNotice: (text) => runner.notice('warning', text),
-    extraGuidance: () => RICH_BLOCKS_LINE,
+    extraGuidance: () => richGuidance(),
   });
   // One process per live thread on an agent that speaks ACP, off unless the
   // experiment is on (they find no account, and refuse to start without it).
@@ -474,7 +477,7 @@ async function main(): Promise<void> {
         registry,
         log,
         toolsFor: codexStyleTools,
-        extraGuidance: () => RICH_BLOCKS_LINE,
+        extraGuidance: () => richGuidance(),
         dataDir: cfg.home,
       }),
     ]),

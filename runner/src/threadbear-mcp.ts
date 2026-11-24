@@ -2463,6 +2463,13 @@ export const SHOWING_THE_USER =
 export const RICH_BLOCKS_LINE =
   'Threadbear draws a ```mermaid block in your reply as a diagram, and a ```html block as a small static page (no scripts or network: inline CSS, SVG and data: images only), each with a switch to its source. Use one when a picture explains better than words.';
 
+// Only with the livePages experiment on (experiments/livePages.md). Built
+// 19 Nov, but in its first five days the one page an agent showed was one
+// the build thread asked for: nothing told agents they could (check-in,
+// 24 Nov).
+export const LIVE_PAGES_LINE =
+  'For something that moves or turns round (a 3D model, an animation, a simulation), put a self-contained .html file in your reply like a picture, ![title](/abs/path/page.html): it shows as a live page the user runs in the thread, on the Mac and iPhone. Everything goes inline (scripts, models, data), as it gets no network or other files, and at most 10 MB.';
+
 // Only for a thread that has the pocket tool: the Pocket lives in the Convex
 // backend, so with phone sync off there's no tool to tell it about.
 export const POCKET_LINE =
@@ -2520,7 +2527,7 @@ export function patchesLine(guide = guidePath(), exists: (p: string) => boolean 
 // What a Claude session's threadbear server tells it, standing in every
 // turn's context. Measured by the context budget test with the tools
 // (test/unit/context-budget.test.ts), so growth is a choice.
-export function serverInstructions(selfId: string, o: { one: boolean; bulletReplies: boolean; pocket: boolean; projects: boolean }): string {
+export function serverInstructions(selfId: string, o: { one: boolean; bulletReplies: boolean; pocket: boolean; projects: boolean; livePages?: boolean }): string {
   const guide = guideLine();
   const patches = patchesLine();
   return (
@@ -2532,6 +2539,7 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
     'Use move_thread when the work belongs in another folder (for example a repo), so this thread runs there from the next turn. ' +
     `${SHOWING_THE_USER} ` +
     `${RICH_BLOCKS_LINE} ` +
+    (o.livePages ? `${LIVE_PAGES_LINE} ` : '') +
     (o.pocket ? `${POCKET_LINE} ` : '') +
     (o.projects ? `${FILING_PROJECTS} ` : '') +
     (o.one
@@ -2542,12 +2550,12 @@ export function serverInstructions(selfId: string, o: { one: boolean; bulletRepl
   );
 }
 
-export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, loadEndTurn?: () => boolean, reviewCanvas?: () => boolean): McpSdkServerConfigWithInstance {
+export function threadbearMcpServer(control: ThreadControl, selfId: string, schedules?: ScheduleControl, projects?: ProjectControl, appRestarts?: AppRestartControl, bulletReplies: () => boolean = () => true, pocket?: () => PocketControl | undefined, oneReply: () => boolean = () => false, gateway?: () => string | undefined, gatewayHealth?: () => Promise<ConnectorService[] | undefined>, remote?: () => RemoteControl | undefined, loadEndTurn?: () => boolean, reviewCanvas?: () => boolean, livePages?: () => boolean): McpSdkServerConfigWithInstance {
   const one = oneReply();
   const server = createSdkMcpServer({
     name: SERVER_NAME,
     version: RUNNER_VERSION,
-    instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects) }),
+    instructions: serverInstructions(selfId, { one, bulletReplies: bulletReplies(), pocket: Boolean(pocket?.()), projects: Boolean(projects), livePages: livePages?.() ?? false }),
     tools: buildThreadbearTools(control, selfId, Date.now, schedules, projects, appRestarts, { bulletReplies, pocket, oneReply: () => one, gateway, gatewayHealth, remote, loadEndTurn, reviewCanvas }),
   });
   server.tools = [...ALWAYS_ASK_TOOLS].map((name) => ({ name: name.split('__').at(-1)!, permission_policy: 'always_ask' as const }));
