@@ -133,6 +133,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         _ = DictationWords.shared  // takes -ThreadbearAddWords
         #if DEBUG
         WhisperEngine.testFromLaunchArguments()
+        SelfShot.fromLaunchArguments()
         #endif
         return true
     }
