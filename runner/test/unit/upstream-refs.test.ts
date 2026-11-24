@@ -169,7 +169,11 @@ test('tb updates and the bring-in thread name the verified commit to merge', asy
   const { formatUpstream } = await import('../../src/tb-dev.ts');
   const commitId = 'a'.repeat(40);
   const text = formatUpstream({ state: 'available', release: { tag: 'release/2026-10-30', commit: commitId, changes: 1, subjects: ['One'] } }, Date.now());
-  assert.match(text, new RegExp(`git merge[^\\n]*${commitId}`));
+  assert.match(text, new RegExp(`signed with the pinned key: ${commitId}`));
+  // Merged with the helper that reads it as itself, not a plain git merge
+  // that a refs/replace/ entry would turn into another commit (Daybreak 180).
+  assert.match(text, /scripts\/merge-prepared\.sh/);
+  assert.doesNotMatch(text, /\(git merge /);
 });
 
 test('tb updates: what to bring in, or that there is nothing', async () => {

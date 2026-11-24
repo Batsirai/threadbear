@@ -34,10 +34,12 @@ docs/setup-and-updates.md section 2.3 explains the thinking behind it.
   checked. If `tb updates` no
   longer lists the release, or names a different commit for it, stop and
   say so rather than merging anything.
-- Mike's changes: `git log --no-merges main..<commit>`. His commit
+- Mike's changes: `git --no-replace-objects log --no-merges main..<commit>`
+  (`--no-replace-objects` on every git command that reads the release, so
+  it's read as its id names it; section 4 says why). His commit
   messages say why, not just what.
 - Their changes since they last brought a release in:
-  `git log --no-merges <commit>..main`. This is what you must keep.
+  `git --no-replace-objects log --no-merges <commit>..main`. This is what you must keep.
 
 ## 2. Look at the merge without checking anything out
 
@@ -61,8 +63,8 @@ changes with the commands below and leave the clashes to section 4). Read
 Mike's changes against main with no external diff or textconv program:
 
 ```sh
-git diff --no-ext-diff --no-textconv main...<commit>
-git log --no-merges --no-ext-diff --no-textconv main..<commit>
+git --no-replace-objects diff --no-ext-diff --no-textconv main...<commit>
+git --no-replace-objects log --no-merges --no-ext-diff --no-textconv main..<commit>
 ```
 
 and for each clash, both sides' commits, so you can say how you'd settle
