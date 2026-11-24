@@ -1411,9 +1411,12 @@ type CodeHighlighter = std::sync::Arc<gpui_kit::component::text::SharedCodeBlock
 /// new one. With a new closure every render, a Shift-click's selection (or
 /// any made while the pane redrew) was neither drawn nor copied (12 Nov; the
 /// bar over words with nothing highlighted in Mike's recording).
+///
+/// Coloured off the main thread (code_colours.rs): done during layout, a
+/// long block's colours made a 60 ms frame each time it scrolled into view.
 pub(crate) fn code_blocks(cx: &gpui_kit::App) -> CodeHighlighter {
     use gpui_kit::component::ActiveTheme as _;
-    gpui_kit::component::text::shared_code_block_highlighter(&cx.theme().highlight_theme)
+    crate::code_colours::highlighter(&cx.theme().highlight_theme, cx)
 }
 
 impl crate::thread::ThreadPane {

@@ -2479,7 +2479,12 @@ impl CodeBlock {
             .into_iter()
             .filter(|(range, _)| range.start <= range.end && range.end <= code_len)
             .collect::<Vec<_>>();
-        if let Ok(mut cache) = self.highlight_cache.lock() {
+        // Nothing isn't kept: a highlighter that works in the background
+        // answers nothing until its colours are ready, and the block should
+        // ask again on the next frame rather than stay plain.
+        if !styles.is_empty()
+            && let Ok(mut cache) = self.highlight_cache.lock()
+        {
             *cache = Some(CachedCodeBlockHighlights {
                 highlighter: highlighter.clone(),
                 styles: styles.clone(),

@@ -38,6 +38,7 @@ mod automation_compat;
 #[cfg(any(test, feature = "automation"))]
 mod automation_screenshot;
 mod chips;
+mod code_colours;
 mod colour_space;
 mod composer;
 mod composer_account;
