@@ -450,16 +450,32 @@ impl Threadbear {
         let path = path.to_owned();
         cx.spawn(async move |this, cx| {
             let file = path.clone();
+            let turn = cx.update(crate::fit_picture::decode_now_turn);
+            let _turn = turn.await;
             let made = cx
                 .background_executor()
                 .spawn(async move { blurred_backdrop(&file) })
                 .await;
-            if made.is_some() {
-                this.update(cx, |this, cx| {
-                    this.projects.backdrops.insert(path, made);
-                    cx.notify();
-                })
-                .ok();
+            match made {
+                Ok(made) => {
+                    this.update(cx, |this, cx| {
+                        this.projects.backdrops.insert(path, Some(made));
+                        cx.notify();
+                    })
+                    .ok();
+                }
+                // No room then: made again the next time it's shown after.
+                Err(crate::fit_picture::Missed::Busy) => {
+                    cx.background_executor()
+                        .timer(crate::fit_picture::BUSY_AGAIN)
+                        .await;
+                    this.update(cx, |this, cx| {
+                        this.projects.backdrops.remove(&path);
+                        cx.notify();
+                    })
+                    .ok();
+                }
+                Err(crate::fit_picture::Missed::Failed) => {}
             }
         })
         .detach();
@@ -514,12 +530,14 @@ impl Threadbear {
 const ICON_MAX_SIDE: u32 = 4096;
 const ICON_MAX_BYTES: usize = 10 * 1024 * 1024;
 
-/// A project icon's pixels, within the budget; None for one over it, or one
+/// A project icon's bytes, within the budget; None for one over it, or one
 /// that won't read. Only a PNG, which is all the runner keeps: the image
 /// crate builds an ICO's inner PNG decoder (and reads its metadata, a
 /// compressed colour profile included) before the limits apply, so an old
-/// runner's raw `.ico` copy is no backdrop (Codex's review, 24 Nov).
-fn decode_icon(path: &str) -> Option<image::RgbaImage> {
+/// runner's raw `.ico` copy is no backdrop (Codex's review, 24 Nov). Its
+/// size is read from its header; its pixels are decoded only within the
+/// picture budget (`fit_picture::decode_now`, Daybreak 170).
+fn icon_bytes(path: &str) -> Option<Vec<u8>> {
     let bytes =
         threadbear_core::open_policy::local_read(std::path::Path::new(path), ICON_MAX_BYTES + 1)
             .ok()?;
@@ -529,39 +547,51 @@ fn decode_icon(path: &str) -> Option<image::RgbaImage> {
     if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         return None;
     }
-    let mut reader =
-        image::ImageReader::with_format(std::io::Cursor::new(bytes), image::ImageFormat::Png);
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(ICON_MAX_SIDE);
-    limits.max_image_height = Some(ICON_MAX_SIDE);
-    limits.max_alloc = Some(u64::from(ICON_MAX_SIDE) * u64::from(ICON_MAX_SIDE) * 4);
-    reader.limits(limits);
-    Some(reader.decode().ok()?.into_rgba8())
+    let (width, height) = crate::fit_picture::size_of(&bytes)?;
+    (width <= ICON_MAX_SIDE && height <= ICON_MAX_SIDE).then_some(bytes)
+}
+
+/// A project icon's pixels, within both budgets.
+#[cfg(test)]
+fn decode_icon(path: &str) -> Option<image::RgbaImage> {
+    let side = u64::from(ICON_MAX_SIDE);
+    crate::fit_picture::decode_now(
+        || icon_bytes(path),
+        crate::fit_picture::Plan::small(side * side),
+        Some,
+    )
+    .ok()
 }
 
 /// The picture as the Swift tile fills with it (scaled to cover a 2 by 1
 /// tile, so the middle of a square one shows), blurred by about what its
 /// 28 pt is across a 340 pt card. Small: drawing it stretched smooths it more.
-fn blurred_backdrop(path: &str) -> Option<Arc<Image>> {
+fn blurred_backdrop(path: &str) -> Result<Arc<Image>, crate::fit_picture::Missed> {
     use image::imageops::{self, FilterType};
-    let picture = decode_icon(path)?;
-    let (w, h) = picture.dimensions();
-    if w == 0 || h == 0 {
-        return None;
-    }
-    let (cw, ch) = if w >= h * 2 {
-        (h * 2, h)
-    } else {
-        (w, (w / 2).max(1))
-    };
-    let band = imageops::crop_imm(&picture, (w - cw) / 2, (h - ch) / 2, cw, ch).to_image();
-    let small = imageops::resize(&band, 96, 48, FilterType::Triangle);
-    let blurred = imageops::blur(&small, 8.);
-    let mut png = Vec::new();
-    blurred
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .ok()?;
-    Some(Arc::new(Image::from_bytes(gpui_kit::ImageFormat::Png, png)))
+    // Held to the icon budget (`icon_bytes`) and decoded within the
+    // picture budget (fit_picture.rs): a project's icon is a repo's picture.
+    let read = || icon_bytes(path);
+    let plan = crate::fit_picture::Plan::small(4 * 1024 * 1024);
+    let png = crate::fit_picture::decode_now(read, plan, |picture| {
+        let (w, h) = picture.dimensions();
+        if w == 0 || h == 0 {
+            return None;
+        }
+        let (cw, ch) = if w >= h * 2 {
+            (h * 2, h)
+        } else {
+            (w, (w / 2).max(1))
+        };
+        let band = imageops::crop_imm(&picture, (w - cw) / 2, (h - ch) / 2, cw, ch).to_image();
+        let small = imageops::resize(&band, 96, 48, FilterType::Triangle);
+        let blurred = imageops::blur(&small, 8.);
+        let mut png = Vec::new();
+        blurred
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .ok()?;
+        Some(png)
+    })?;
+    Ok(Arc::new(Image::from_bytes(gpui_kit::ImageFormat::Png, png)))
 }
 
 /// `ThreadCount`: how many open threads it has, in the tile's corner.
@@ -733,11 +763,11 @@ mod icon_budget_tests {
         let dir = tempfile::tempdir().unwrap();
         let ok = png_file(dir.path(), "ok.png", 256, 256);
         assert_eq!(decode_icon(&ok).map(|p| p.dimensions()), Some((256, 256)));
-        assert!(blurred_backdrop(&ok).is_some());
+        assert!(blurred_backdrop(&ok).is_ok());
         // One side past the budget: refused, though it's tiny.
         let long = png_file(dir.path(), "long.png", ICON_MAX_SIDE + 1, 1);
         assert!(decode_icon(&long).is_none());
-        assert!(blurred_backdrop(&long).is_none());
+        assert!(blurred_backdrop(&long).is_err());
         let edge = png_file(dir.path(), "edge.png", ICON_MAX_SIDE, 1);
         assert!(decode_icon(&edge).is_some());
         // A header claiming 60,000 px square: refused before any pixels.
