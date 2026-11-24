@@ -10,30 +10,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { closedTmpParent } from '../helpers/closed-tmp.ts';
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'scripts', 'own-folders.sh');
-const uid = process.getuid?.() ?? -1;
 
 function run(cwd: string, ...folders: string[]) {
   return spawnSync('/bin/bash', [SCRIPT, 'testhost', ...folders], { cwd, encoding: 'utf8' });
 }
 
-// Whether every folder above (and including) dir is root's or ours with no
-// group or other write, as the script asks of a link's target's parents.
-function closedChain(dir: string): boolean {
-  for (let p = fs.realpathSync(dir); ; p = path.dirname(p)) {
-    const s = fs.statSync(p);
-    if ((s.uid !== 0 && s.uid !== uid) || (s.mode & 0o022) !== 0) return false;
-    if (p === '/') return true;
-  }
-}
-
 // A temp folder of our own, under folders closed to others, as the script
-// asks of the one it starts in (macOS's TMPDIR is; Linux's /tmp is open to
-// all, so the home folder there).
+// asks of the one it starts in.
 function tmp(t: { after: (fn: () => void) => void }) {
-  const parent = closedChain(os.tmpdir()) ? os.tmpdir() : os.homedir();
-  const dir = fs.mkdtempSync(path.join(parent, '.tb-own-folders-'));
+  const dir = fs.mkdtempSync(path.join(closedTmpParent(), '.tb-own-folders-'));
   t.after(() => {
     fs.chmodSync(dir, 0o700);
     fs.rmSync(dir, { recursive: true, force: true });
