@@ -991,7 +991,7 @@ impl ReviewWindow {
                         } else {
                             Toggled::False
                         })
-                        .child(super::band::checkbox(is_picked, style::accent(cx), cx))
+                        .child(super::parts::checkbox(is_picked, style::accent(cx), cx))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if this.session.pick(&pick_id) {
                                 this.edited(cx);
@@ -1002,7 +1002,7 @@ impl ReviewWindow {
                 )
             })
             .child(option.label())
-            .when(starred, |d| d.child(super::band::recommended_mark(cx)))
+            .when(starred, |d| d.child(super::parts::recommended_mark(cx)))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if let Some(i) = this
                     .session

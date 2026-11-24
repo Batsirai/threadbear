@@ -9,6 +9,7 @@ mod images;
 mod lab_review;
 pub(crate) mod list;
 pub(crate) mod markdown;
+mod parts;
 pub(crate) use markdown::reading_style;
 pub(crate) mod metrics;
 mod phone;
@@ -384,7 +385,7 @@ impl ThreadPane {
                         mark_box()
                             .id(("queued", ix))
                             .tip("Waiting for the current turn to finish")
-                            .child(work::icon("clock", 14., quiet)),
+                            .child(parts::icon("clock", 14., quiet)),
                     )
                 }
                 _ => {}
@@ -491,7 +492,7 @@ impl ThreadPane {
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.edit_message(&row_id, window, cx)
                     }))
-                    .child(work::icon("pencil", 12., quiet)),
+                    .child(parts::icon("pencil", 12., quiet)),
                 );
                 col = col.group(group);
             }
@@ -1285,7 +1286,7 @@ fn answers_body(ix: usize, words: &AnsweredWords, cx: &App) -> Div {
                     div()
                         .id(("review-answer", ix))
                         .tip("Review")
-                        .child(work::icon("rectangle.on.rectangle", size::SMALL, question)),
+                        .child(parts::icon("rectangle.on.rectangle", size::SMALL, question)),
                 )
             })
             // A long question wraps inside the bubble: as a bare row child its

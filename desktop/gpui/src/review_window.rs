@@ -36,6 +36,7 @@ use threadbear_core::review::{
 
 mod band;
 mod canvas;
+mod parts;
 pub(crate) use band::inline_note;
 mod reply_pictures;
 mod stage;

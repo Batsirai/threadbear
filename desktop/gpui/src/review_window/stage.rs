@@ -144,13 +144,6 @@ impl StageState {
 
 /// An image's size in pixels, or the Swift app's stand-in when the runner
 /// didn't say (`sourceSize`).
-fn pixels(image: &ImageRef) -> (f64, f64) {
-    match (image.width, image.height) {
-        (Some(w), Some(h)) if w > 0 && h > 0 => (w as f64, h as f64),
-        _ => (1100., 760.),
-    }
-}
-
 fn pt(v: f64) -> Pixels {
     gpui_kit::px(v as f32)
 }
@@ -308,7 +301,7 @@ impl ReviewWindow {
             return self.render_media(&shot, room, window, cx);
         }
         let scale = f64::from(window.scale_factor()).max(1.);
-        let (w, h) = pixels(&shot.image);
+        let (w, h) = super::parts::pixels(&shot.image);
         let peeking = self.session.peeking && self.session.can_peek();
         let path = shot.image.path.clone();
         let zoom = self.stage.follow(
@@ -815,7 +808,7 @@ impl ReviewWindow {
                         .child(format!("{count} shots")),
                 )
             })
-            .when(recommended, |s| s.child(super::band::recommended_mark(cx)));
+            .when(recommended, |s| s.child(super::parts::recommended_mark(cx)));
         let picture = crate::highlights::tipped(
             div()
                 .id(("review-cell", index))
@@ -976,50 +969,51 @@ impl ReviewWindow {
                 .title
                 .clone()
                 .unwrap_or_else(|| format!("{}", index + 1));
-            strip =
-                strip.child(
-                    crate::highlights::tipped(
-                        v_flex()
-                            .id(("review-strip", index))
-                            .flex_none()
-                            .gap(px(4.))
-                            .cursor_pointer(),
-                        rules::shot_tip(option, index),
-                    )
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+            strip = strip.child(
+                crate::highlights::tipped(
+                    v_flex()
+                        .id(("review-strip", index))
+                        .flex_none()
+                        .gap(px(4.))
+                        .cursor_pointer(),
+                    rules::shot_tip(option, index),
+                )
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.enlarge(focused, index, cx)
-                    }))
-                    .child(
-                        div()
-                            .relative()
-                            .child(
-                                thumb(&shot.image, STRIP_THUMB.0, STRIP_THUMB.1, 4., cx)
-                                    .opacity(if current { 1. } else { 0.55 }),
+                    }),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .child(
+                            super::parts::thumb(&shot.image, STRIP_THUMB.0, STRIP_THUMB.1, 4., cx)
+                                .opacity(if current { 1. } else { 0.55 }),
+                        )
+                        .when(current, |s| {
+                            s.child(
+                                div()
+                                    .absolute()
+                                    .top(px(-3.))
+                                    .left(px(-3.))
+                                    .w(px(STRIP_THUMB.0 + 6.))
+                                    .h(px(STRIP_THUMB.1 + 6.))
+                                    .rounded(px(5.))
+                                    .border_2()
+                                    .border_color(primary),
                             )
-                            .when(current, |s| {
-                                s.child(
-                                    div()
-                                        .absolute()
-                                        .top(px(-3.))
-                                        .left(px(-3.))
-                                        .w(px(STRIP_THUMB.0 + 6.))
-                                        .h(px(STRIP_THUMB.1 + 6.))
-                                        .rounded(px(5.))
-                                        .border_2()
-                                        .border_color(primary),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .w(px(STRIP_THUMB.0))
-                            .truncate()
-                            .text_size(px(style::size::DETAIL - 1.))
-                            .line_height(px(style::natural_line(style::size::DETAIL - 1.)))
-                            .text_color(if current { primary } else { secondary })
-                            .child(title),
-                    ),
-                );
+                        }),
+                )
+                .child(
+                    div()
+                        .w(px(STRIP_THUMB.0))
+                        .truncate()
+                        .text_size(px(style::size::DETAIL - 1.))
+                        .line_height(px(style::natural_line(style::size::DETAIL - 1.)))
+                        .text_color(if current { primary } else { secondary })
+                        .child(title),
+                ),
+            );
         }
         div()
             .min_w_0()
@@ -1148,26 +1142,6 @@ impl ReviewWindow {
             cx.notify();
         }
     }
-}
-
-/// A shot small, cropped from its top left, where a mockup's title and
-/// controls are, rather than squashed (`ReviewThumb`).
-pub(super) fn thumb(image: &ImageRef, width: f32, height: f32, radius: f32, cx: &App) -> Div {
-    let (w, h) = pixels(image);
-    let scale = (f64::from(width) / w).max(f64::from(height) / h);
-    div()
-        .flex_none()
-        .w(px(width))
-        .h(px(height))
-        .rounded(px(radius))
-        .overflow_hidden()
-        .bg(style::primary_opacity(cx, 0.08))
-        .child(
-            img(crate::rows::markdown::file_picture(&image.path))
-                .w(px((w * scale) as f32))
-                .h(px((h * scale) as f32))
-                .object_fit(ObjectFit::Fill),
-        )
 }
 
 /// The stage's player for a clip (media_view.rs), one per window.
