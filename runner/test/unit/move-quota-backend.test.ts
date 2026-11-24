@@ -453,3 +453,41 @@ test("a picture's record of 0 bytes is charged at its size when it moves on", as
   await s.move('T', MINI, s.cloud, s.mini);
   assert.ok(s.rows('storageOwners').find((o) => o.storageId === 'pic')!.bytes >= 64 * 1024);
 });
+
+// Codex, round four: three full runners moving threads round in a ring each
+// waited on the next for good.
+test('three full runners moving threads round in a ring all finish, within their caps', async () => {
+  const s = await keyed();
+  const THIRD = 'c0ffee000003';
+  const THIRD_KEY = 'tbr_third';
+  await s.ctx.db.insert('runnerKeys', { runnerId: THIRD, keyHash: await sha256(THIRD_KEY), name: 'third', createdAt: 1 });
+  await s.ctx.db.insert('runners', { runnerId: THIRD, name: 'third', version: '1', lastSeenAt: Date.now(), startedAt: new Date().toISOString(), draining: false, threadCount: 0 });
+  const third = s.as(THIRD_KEY);
+  const ring = [
+    ['A', CLOUD, s.cloud],
+    ['B', MINI, s.mini],
+    ['C', THIRD, third],
+  ] as const;
+  // Each one's outgoing thread first (its oldest rows), then one it keeps.
+  for (const [t, r, k] of ring) {
+    await k.upsert(t, r);
+    await k.append(t, 1, 15, 2_000);
+  }
+  for (const [t, r, k] of ring) {
+    await k.upsert(`${t}-kept`, r);
+    await k.append(`${t}-kept`, 1, 15, 2_000);
+  }
+  const full = Math.max(...ring.map(([, r]) => usage(s, r).messageBytes));
+  await withCaps({ messageBytes: full, evictPerWrite: 3 }, async () => {
+    const ids = [await s.move('A', MINI, s.cloud, s.mini, false), await s.move('B', THIRD, s.mini, third, false), await s.move('C', CLOUD, third, s.cloud, false)];
+    for (let i = 0; i < 30 && !ids.every((id) => moveOf(s, id).state === 'done'); i++) {
+      await s.runAll();
+      await afterMinutes(11 * (i + 1), () => s.fn(moves.expireMoves, {}));
+    }
+    for (const id of ids) assert.equal(moveOf(s, id).state, 'done');
+    for (const [, r] of ring) {
+      assert.ok(usage(s, r).messageBytes <= CAP.messageBytes);
+      assert.equal(usage(s, r).messageBytes, held(s, 'messages', r));
+    }
+  });
+});

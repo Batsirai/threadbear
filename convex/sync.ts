@@ -1997,23 +1997,19 @@ async function handedOn(ctx: MutationCtx, table: 'messages' | 'eventBodies', row
     const used = table === 'messages' ? (usage?.messageBytes ?? 0) : (usage?.bodyBytes ?? 0);
     if (used + size > (table === 'messages' ? CAP.messageBytes : CAP.bodyBytes)) {
       // That runner's oldest, as its room-making picks it (roomForMessage, roomForBody).
-      // Only against a row of a thread it has now, or of one now
-      // `runnerId`'s (the two waiting on each other): one of a thread on its
-      // way to a third runner isn't what its own room-making would take
-      // (handedOn gives it on), so this waits for that (Gemini's review,
-      // round three).
-      const its = async (o: { threadId: string } | null) => {
-        if (!o) return false;
-        if (!owners.has(o.threadId)) owners.set(o.threadId, (await threadRow(ctx, o.threadId))?.runnerId ?? null);
-        const has = owners.get(o.threadId);
-        return has === now || has === runnerId;
-      };
+      // Against its oldest row of any thread, as a cycle of full runners
+      // moving threads round (two, three or more) must always free one: the
+      // oldest row any of them waits on goes. A row of a thread the
+      // receiver is itself moving away can make the comparison early, so
+      // an old mirrored row may go that waiting would have kept; a runner
+      // holds its own transcript, so the mirror's oldest is what's cheapest
+      // to lose (Gemini's and Codex's reviews, rounds three and four).
       if (table === 'messages') {
         const oldest = await ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', now)).first();
-        return oldest && (await its(oldest)) && row._creationTime <= oldest._creationTime ? 'mine' : 'held';
+        return oldest && row._creationTime <= oldest._creationTime ? 'mine' : 'held';
       }
       const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', now)).first();
-      return oldest && (await its(oldest)) && (row as Doc<'eventBodies'>).at <= oldest.at ? 'mine' : 'held';
+      return oldest && (row as Doc<'eventBodies'>).at <= oldest.at ? 'mine' : 'held';
     }
     await ctx.db.patch(_id, { runnerId: now });
     await (table === 'messages' ? countMessageBytes : countBodyBytes)(ctx, now, size);
