@@ -35,8 +35,12 @@ export const FIRST_READ_RETRY_MS = 60 * 60_000;
 // One with no reading at all is read once, so a login whose turns are few
 // (Grok, which Token Stats doesn't read) shows its room before its first
 // turn here.
-export function dueForRecheck(account: Account, canRead: boolean, now: number, lastTried: number | undefined): boolean {
+// dry: a turn ran it dry and the runner still holds it out (ranDry); then
+// only our own last try counts, as a turn's readings (on another model, or
+// the 402's own) keep coming and say nothing about whether it's back.
+export function dueForRecheck(account: Account, canRead: boolean, now: number, lastTried: number | undefined, dry = false): boolean {
   if (!canRead || account.signedOut || account.planEnded) return false;
+  if (dry) return lastTried === undefined || now - lastTried >= RECHECK_MS;
   // Tried again hourly if that read failed (offline at start, say).
   if (!account.usage) return lastTried === undefined || now - lastTried >= FIRST_READ_RETRY_MS;
   const room = accountRoom(account);
@@ -53,6 +57,8 @@ export type LimitRecheckDeps = {
   accounts: () => Account[];
   adapters: Record<string, AgentAdapter>;
   record: (accountId: string, reading: UsageReading) => void;
+  // Whether the runner holds a login out after a turn ran it dry.
+  dry?: (accountId: string) => boolean;
 };
 
 export class LimitRecheck {
@@ -91,7 +97,7 @@ export class LimitRecheck {
         if (this.stopped) break;
         const adapter = this.deps.adapters[account.provider];
         const now = this.deps.clock.now();
-        if (!dueForRecheck(account, !!adapter?.readLimits, now, this.tried.get(account.id))) continue;
+        if (!dueForRecheck(account, !!adapter?.readLimits, now, this.tried.get(account.id), this.deps.dry?.(account.id) ?? false)) continue;
         this.tried.set(account.id, now);
         const before = account.usage?.readAt;
         try {

@@ -722,7 +722,12 @@ thread to another login when the one it's on runs out of room.
   own reading never does: one from another session can say the login has
   room while the model that ran out still has none. A turn's reading is
   recorded under the login its CLI runs on, even if the thread was moved
-  meanwhile.
+  meanwhile. While a login is held out after a turn ran it dry, the store
+  keeps it blocked whatever a turn's reading says, and it's rechecked every
+  10 minutes from the last recheck, however fresh the turns' readings are.
+  A login counts as back only with more room than it read as when it ran
+  dry (so a 402 while Grok still reads room doesn't send threads back to be
+  refused), or when Grok says a prepaid or on-demand balance is carrying it.
   Signed-out and plan-ended logins aren't read. A login with no reading at
   all is read once, so a Grok login shows its room before its first turn.
 - **Grok's readings** (`runner/src/adapters/acp/grok-billing.ts`). Grok's

@@ -19,6 +19,9 @@ import { isPlainObject } from './normalize.ts';
 import { MIN_ROOM_PERCENT } from '../../usage.ts';
 
 export const GROK_BILLING_METHOD = '_x.ai/billing';
+// The detail of a used-up plan's window while a balance keeps it going: the
+// runner takes it as room after a run-dry (Runner.recordReading).
+export const FUNDED_DETAIL = 'Plan used up, running on prepaid or on-demand balance';
 
 type Limits = Extract<AdapterOutput, { kind: 'limits' }>;
 
@@ -60,7 +63,7 @@ export function grokLimits(result: unknown): Limits | undefined {
   const extra = amount(c.prepaidBalance) > 0 || amount(c.onDemandCap) > amount(c.onDemandUsed);
   if (extra && window.remainingPercent < MIN_ROOM_PERCENT) {
     window.remainingPercent = MIN_ROOM_PERCENT;
-    window.detail = 'Plan used up, running on prepaid or on-demand balance';
+    window.detail = FUNDED_DETAIL;
   }
   const out: Limits = { kind: 'limits', windows: [window], blocked: window.remainingPercent < MIN_ROOM_PERCENT };
   if (typeof result.subscription_tier === 'string' && result.subscription_tier.trim()) out.plan = result.subscription_tier.trim();

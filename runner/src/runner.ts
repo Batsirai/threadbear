@@ -79,6 +79,7 @@ import { worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import type { SignInState } from './sign-in-state.ts';
 import { MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
+import { FUNDED_DETAIL } from './adapters/acp/grok-billing.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
 import { copyImageInto, imageRefFor, importImageInto } from './media.ts';
@@ -982,7 +983,7 @@ export class Runner {
     // made outside Threadbear lifts it (limit-recheck.ts).
     if (this.usage) {
       const usage = this.usage;
-      this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => this.recordReading(usage, id, r) });
+      this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => this.recordReading(usage, id, r), dry: (id) => (this.ranDry.get(id) ?? 0) > this.clock.now() });
       this.limitRecheck.start();
     }
     let { records, broken } = this.store.loadAll();
@@ -1179,7 +1180,10 @@ export class Runner {
     const least = reading.windows.length ? Math.min(...reading.windows.map((w) => w.remainingPercent)) : undefined;
     const was = this.dryRoom.get(accountId);
     const dryUntil = this.ranDry.get(accountId);
-    if (reading.blocked === false && least !== undefined && least >= MIN_ROOM_PERCENT && (was === undefined || least > was)) {
+    // Grok running on a prepaid or on-demand balance past its plan reads as
+    // the 1% floor whatever it read before; that balance is room.
+    const funded = reading.windows.some((w) => w.detail === FUNDED_DETAIL);
+    if (reading.blocked === false && least !== undefined && least >= MIN_ROOM_PERCENT && (was === undefined || least > was || funded)) {
       this.ranDry.delete(accountId);
       this.dryRoom.delete(accountId);
       this.readBack.add(accountId);

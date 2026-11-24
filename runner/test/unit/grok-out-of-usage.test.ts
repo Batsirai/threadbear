@@ -223,6 +223,11 @@ test('a login with no reading at all is read once; one with room is left alone',
   assert.equal(dueForRecheck(account, true, now, now - FIRST_READ_RETRY_MS), true, 'again an hour after a failed read');
   const fine: Account = { ...account, usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], readAt: new Date(now - 86_400_000).toISOString(), source: 'live' } };
   assert.equal(dueForRecheck(fine, true, now, undefined), false);
+  // Held out after a run-dry: read again on our own schedule, however fresh
+  // the turns' readings are.
+  const justRead: Account = { ...fine, usage: { ...fine.usage!, readAt: new Date(now - 60_000).toISOString() } };
+  assert.equal(dueForRecheck(justRead, true, now, undefined, true), true);
+  assert.equal(dueForRecheck(justRead, true, now, now - 60_000, true), false);
 });
 
 for (const bare of [false, true]) {
@@ -453,6 +458,26 @@ test("with no reading after the 402 (Grok gone), a recheck's reading is the room
   h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: spent.windows, blocked: spent.blocked });
   assert.equal(h.runner.dryRoom.get('grok-main'), 0);
   assert.ok(h.runner.get(thread.id).waitingForRoom);
+  const topped = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } })!;
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: topped.windows, blocked: topped.blocked });
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+});
+
+test('a balance topped up before any recheck counts as back, whatever the login read before', async () => {
+  const played = (await outOfBalanceOutputs()).filter((o) => o.kind === 'result');
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main'] },
+  ]);
+  // Read at 60% earlier; the 402 comes and no reading follows it.
+  h.fake.base = h.fake.base.map((a) => (a.id === 'grok-main' ? { ...a, usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], readAt: new Date(h.clock.now()).toISOString(), source: 'live' } } : a));
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  assert.equal(h.runner.dryRoom.get('grok-main'), 60);
   const topped = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } })!;
   h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: topped.windows, blocked: topped.blocked });
   await tick();
