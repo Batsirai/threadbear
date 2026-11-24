@@ -16,6 +16,7 @@
 import type { UsageWindow, UsageWindowKind } from '../../protocol.ts';
 import type { AdapterOutput } from '../types.ts';
 import { isPlainObject } from './normalize.ts';
+import { MIN_ROOM_PERCENT } from '../../usage.ts';
 
 export const GROK_BILLING_METHOD = '_x.ai/billing';
 
@@ -52,11 +53,16 @@ export function grokLimits(result: unknown): Limits | undefined {
   const resetsAt = iso(period.end) ?? iso(c.billingPeriodEnd);
   if (resetsAt) window.resetsAt = resetsAt;
   // A prepaid balance, or room under an on-demand cap, keeps a login going
-  // past its plan's share, so the plan's share running out isn't a block.
-  // It still reads 0% and pools pass it over, as nothing here says how
-  // much that money buys.
+  // past its plan's share, so the share running out isn't a block. Nothing
+  // here says how much that money buys, so the window reads the least room
+  // pools still use (MIN_ROOM_PERCENT) rather than 0%, which they'd pass
+  // over until the reset, and its detail says why.
   const extra = amount(c.prepaidBalance) > 0 || amount(c.onDemandCap) > amount(c.onDemandUsed);
-  const out: Limits = { kind: 'limits', windows: [window], blocked: window.remainingPercent < 1 && !extra };
+  if (extra && window.remainingPercent < MIN_ROOM_PERCENT) {
+    window.remainingPercent = MIN_ROOM_PERCENT;
+    window.detail = 'Plan used up, running on prepaid or on-demand balance';
+  }
+  const out: Limits = { kind: 'limits', windows: [window], blocked: window.remainingPercent < MIN_ROOM_PERCENT };
   if (typeof result.subscription_tier === 'string' && result.subscription_tier.trim()) out.plan = result.subscription_tier.trim();
   return out;
 }

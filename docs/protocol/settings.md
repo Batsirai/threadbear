@@ -714,8 +714,15 @@ thread to another login when the one it's on runs out of room.
   turn (Codex: `account/rateLimits/read` in a short-lived app-server;
   Grok: `_x.ai/billing` in a short-lived `grok agent`, since 24 Nov 2026;
   `runner/src/limit-recheck.ts`). The answer goes into the usage store
-  like a turn's, so room lifts the block (and the one a turn that ran dry
-  put on it) and threads waiting for room carry on by themselves.
+  like a turn's, so room lifts the block and threads waiting for room
+  carry on by themselves. A recheck that finds room in every window it
+  names also ends the block a turn that ran dry put on the login, and a
+  pool thread waiting on that same login carries on there before the reset
+  its wait named (a top-up, or a reset used outside Threadbear). A turn's
+  own reading never does: one from another session can say the login has
+  room while the model that ran out still has none. A turn's reading is
+  recorded under the login its CLI runs on, even if the thread was moved
+  meanwhile.
   Signed-out and plan-ended logins aren't read. A login with no reading at
   all is read once, so a Grok login shows its room before its first turn.
 - **Grok's readings** (`runner/src/adapters/acp/grok-billing.ts`). Grok's

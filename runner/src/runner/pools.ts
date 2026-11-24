@@ -236,6 +236,7 @@ export const poolsPart = {
     const now = this.clock.now();
     const until = blockedUntil(account, now);
     this.ranDry.set(account.id, until);
+    this.readBack.delete(account.id);
     if (account.usage?.blocked) return;
     try {
       this.usage?.record(account.id, { windows: [], blocked: true, blockedUntil: until });
@@ -425,6 +426,20 @@ export const poolsPart = {
     return next.accountId !== w.accountId || now < Date.parse(w.until) - WAIT_SLACK_MS ? next.accountId : undefined;
   },
 
+  // A pool thread waiting for room on the login it ran dry on, which
+  // limit-recheck.ts has since read back with room (readBack: a top-up, or
+  // a reset used outside Threadbear): it carries on there, before the reset
+  // its wait named. earlyLogin never offers that login, as a turn's reading
+  // from another of its sessions can say it has room when it hasn't.
+  ownLoginBack(this: Runner, st: ThreadState): boolean {
+    const { rec, rt } = st;
+    const w = rec.waitingForRoom;
+    if (!w || rt.deleted || rt.turn || rec.queue.length || this.bucket(rec) !== 'inbox' || rec.carryOnAtReset === false) return false;
+    if (!this.poolById(rec.poolId) || !this.readBack.has(rec.accountId)) return false;
+    const current = this.usableAccounts().find((a) => a.id === rec.accountId);
+    return !!current && loginOk(current);
+  },
+
   // One timer for every thread waiting for room, at the earliest `until`
   // (looked at again at least hourly, like snoozes). Also run when the
   // logins, their usage or the pools change, and when a thread comes over
@@ -446,6 +461,7 @@ export const poolsPart = {
         else {
           const early = this.earlyLogin(st);
           if (early) this.endWait(st, early);
+          else if (this.ownLoginBack(st)) this.endWait(st);
         }
       }
       let next = Infinity;

@@ -65,6 +65,33 @@ export class AcpRpcError extends Error {
 // in seconds and the agent retries.
 const OUT_OF_USAGE = /usage balance exhausted|out of credits|run out of credits|spending[- ]limit|usage limit reached|credit limit|insufficient (credits|balance)|payment required|free usage limit/i;
 
+// What an agent's own note says went wrong in a turn, outside the prompt's
+// answer: Grok's retry_state that failed ("API error (status 402 Payment
+// Required): Grok Build usage balance exhausted") and its turn_completed with
+// the error and its data, sent as _x.ai/session_notification. undefined for
+// any other note.
+export function failureNote(method: string, update: unknown): { message: string; httpStatus?: number } | undefined {
+  if (!method.startsWith('_') || !update || typeof update !== 'object' || Array.isArray(update)) return undefined;
+  const u = update as Record<string, unknown>;
+  let message: string | undefined;
+  let httpStatus: number | undefined;
+  if (u.sessionUpdate === 'retry_state' && u.type === 'failed' && typeof u.message === 'string') message = u.message;
+  else if (u.sessionUpdate === 'turn_completed' && (u.stop_reason === 'error' || (!!u.error && typeof u.error === 'object'))) {
+    const err = u.error && typeof u.error === 'object' && !Array.isArray(u.error) ? (u.error as Record<string, unknown>) : {};
+    message = rpcDataMessage(err.data) ?? (typeof u.agent_result === 'string' ? u.agent_result : undefined) ?? (typeof err.message === 'string' ? err.message : undefined);
+    httpStatus = rpcDataStatus(err.data);
+  }
+  message = message?.trim();
+  if (!message) return undefined;
+  return httpStatus === undefined ? { message } : { message, httpStatus };
+}
+
+// Keeps the newest note's words, and any status an earlier one gave.
+export function laterFailure(was: { message: string; httpStatus?: number } | undefined, now: { message: string; httpStatus?: number }): { message: string; httpStatus?: number } {
+  const status = now.httpStatus ?? was?.httpStatus;
+  return status === undefined ? { message: now.message } : { message: now.message, httpStatus: status };
+}
+
 // Whether an agent's failure says the login is out of usage, from its HTTP
 // status (402 Payment Required) or its words.
 export function outOfUsage(o: { message?: string; httpStatus?: number }): boolean {

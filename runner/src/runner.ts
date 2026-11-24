@@ -78,7 +78,7 @@ import { threadEnv } from './restart.ts';
 import { worktreeInstructions } from './worktrees.ts';
 import { stripModelSuffix, type AccountRegistry, type LearnedAccountInfo } from './accounts.ts';
 import type { SignInState } from './sign-in-state.ts';
-import { pickAccount as pickByRoom, type UsageReading } from './usage.ts';
+import { MIN_ROOM_PERCENT, pickAccount as pickByRoom, type UsageReading } from './usage.ts';
 import { RUNNER_VERSION, expandHome, paths, peekRunnerJson, type Config } from './config.ts';
 import { limitWhy, loginOk, nextLogin, pickInPool, poolAccounts } from './pools.ts';
 import { copyImageInto, imageRefFor, importImageInto } from './media.ts';
@@ -437,6 +437,10 @@ type Runtime = {
   // The provider the live CLI runs, which a move to another provider
   // changes on the record before this CLI has gone.
   sessionProvider?: Provider;
+  // The login the live CLI runs on. Changing a thread's login (update, a
+  // move) sets the record's at once while this CLI finishes its turn, so
+  // a reading it gives is that login's, not the record's new one.
+  sessionAccountId?: string;
   deleted?: boolean; // anything the old CLI still reports is dropped
   // Deleted by Mike or an agent (delete()), not let go to another runner
   // (letGo sets deleted too): only then is a worktree still being set up
@@ -901,6 +905,10 @@ export class Runner {
   // runner.json's or the built-in ones.
   sharedPools?: import('./shared-pools.ts').SharedPools;
   ranDry = new Map<string, number>();
+  // Logins limit-recheck.ts read back with room after a turn ran them dry
+  // (recordReading). A pool thread waiting on its own one carries on there
+  // (armRoomTimer); running dry again takes it out (markRanDry).
+  readBack = new Set<string>();
   // Threads waiting for the API to be reachable again (waitingForNetwork):
   // one timer probes for all of them, backing off from NET_PROBE_FIRST_MS.
   netTimer?: TimerHandle;
@@ -1155,13 +1163,22 @@ export class Runner {
     }
   }
 
-  // A reading of a login's room, from a turn or limit-recheck.ts. One that
-  // says it isn't blocked also ends the block a turn that ran dry put on it
-  // (ranDry), so a top-up or reset made outside Threadbear lets the pools
-  // use it again before the time that block guessed.
+  // A reading limit-recheck.ts took of a login that read as out. One that
+  // says it isn't blocked, with room in every window it names (a model's
+  // own week or bucket too, which a turn on that model can run dry while
+  // the login's main windows have room), also ends the block the turn that
+  // ran dry put on it (ranDry), so a top-up or a reset made outside
+  // Threadbear lets the pools use it again before the time that block
+  // guessed. Only these: a turn's reading on another of the login's
+  // sessions says nothing about the model that ran out.
   recordReading(usage: UsageSink, accountId: string, reading: UsageReading): void {
-    if (reading.blocked === false) this.ranDry.delete(accountId);
+    if (reading.blocked === false && reading.windows.length && reading.windows.every((w) => w.remainingPercent >= MIN_ROOM_PERCENT)) {
+      this.ranDry.delete(accountId);
+      this.readBack.add(accountId);
+    }
     usage.record(accountId, reading);
+    // A thread waiting on that login hears now, not at the reset it named.
+    this.armRoomTimer();
   }
 
   safeAccounts(): Account[] {
@@ -2728,6 +2745,7 @@ export class Runner {
     };
     rt.cliVersion = undefined;
     rt.sessionProvider = rec.provider;
+    rt.sessionAccountId = account.id;
     rt.startVersion = this.cliList()?.find((c) => c.provider === rec.provider)?.installedVersion;
     const { opts, claude, claudeSkipped, heldGrants } = this.sessionOptions(st, account, looks, resume);
     rt.claudeSkipped = claudeSkipped;
@@ -2890,7 +2908,7 @@ export class Runner {
         // The account's usage lives in D's UsageStore, which tells clients
         // through accounts.updated when it matters.
         try {
-          if (this.usage) this.recordReading(this.usage, rec.accountId, {
+          this.usage?.record(rt.sessionAccountId ?? rec.accountId, {
             windows: o.windows,
             ...(o.blocked !== undefined ? { blocked: o.blocked } : {}),
             ...(o.email ? { email: o.email } : {}),
@@ -2898,7 +2916,7 @@ export class Runner {
             ...(o.resets ? { resets: o.resets } : {}),
           });
         } catch (e) {
-          this.log.warn('could not record a usage reading', { accountId: rec.accountId, error: String(e) });
+          this.log.warn('could not record a usage reading', { accountId: rt.sessionAccountId ?? rec.accountId, error: String(e) });
         }
         break;
       case 'cliVersion': {

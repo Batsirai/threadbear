@@ -26,7 +26,7 @@ import { nullLogger } from '../../src/log.ts';
 import { ProcessRegistry } from '../../src/proc.ts';
 import { FakeAccounts, FakeAdapter, ACCOUNTS, makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
 import type { UsageReading } from '../../src/usage.ts';
-import type { UsageSink } from '../../src/runner.ts';
+import { CARRY_ON_BACK, type UsageSink } from '../../src/runner.ts';
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
 const grok = ACP_AGENTS.grok;
@@ -188,9 +188,12 @@ test("grokLimits: the share used, the period's end, the tier; money beyond the p
     windows: [{ kind: 'monthly', title: 'Monthly', remainingPercent: 87.5, resetsAt: '2026-12-01T00:00:00.000Z' }],
     blocked: false,
   });
+  // Topped up: not blocked, and at the least room pools still use, so a
+  // top-up lets the login run before its week resets.
   const prepaid = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } });
   assert.equal(prepaid?.blocked, false);
-  assert.equal(prepaid?.windows[0].remainingPercent, 0);
+  assert.equal(prepaid?.windows[0].remainingPercent, 1);
+  assert.match(prepaid?.windows[0].detail ?? '', /prepaid/);
   // A team's plan ("Usage limits are managed by your team") or another shape: no reading.
   assert.equal(grokLimits({ config: {} }), undefined);
   assert.equal(grokLimits(null), undefined);
@@ -207,17 +210,29 @@ test('a login with no reading at all is read once; one with room is left alone',
   assert.equal(dueForRecheck(fine, true, now, undefined), false);
 });
 
-test('a small job on a login out of balance counts as a limit, so the pool tries the next login', async () => {
-  const root = tmp();
-  const ask = acpAsker({ agent: grok, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome }, dataDir: path.join(root, 'data') });
-  const r = await ask({ account, user: 'broke', cwd: path.join(root, 'job'), timeoutMs: 20_000 });
-  assert.equal(r.ok, false);
-  assert.ok(!r.ok && r.limit, 'a limit');
-  assert.ok(!r.ok && r.message.includes('Grok Build usage balance exhausted'));
+for (const bare of [false, true]) {
+  test(`a small job on a login out of balance counts as a limit, so the pool tries the next login${bare ? ' (only the notes say why)' : ''}`, async () => {
+    const root = tmp();
+    const ask = acpAsker({ agent: grok, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome, ...(bare ? { FAKE_GROK_BARE_ERROR: '1' } : {}) }, dataDir: path.join(root, 'data') });
+    const r = await ask({ account, user: 'broke', cwd: path.join(root, 'job'), timeoutMs: 20_000 });
+    assert.equal(r.ok, false);
+    assert.ok(!r.ok && r.limit, 'a limit');
+    assert.ok(!r.ok && r.message.includes('Grok Build usage balance exhausted'));
+  });
+}
+
+test("a Grok that exits while its limits are read still gives the turn's usage limit, ahead of the exit", async () => {
+  const { outputs } = await turnOn('broke', SPENT, { FAKE_GROK_EXIT_ON_BILLING: '1' });
+  const result = outputs.find((o) => o.kind === 'result');
+  assert.ok(result && result.kind === 'result', 'the result still went out');
+  assert.equal(result.result.errorKind, 'usageLimit');
+  assert.equal(outputs.filter((o) => o.kind === 'result').length, 1);
 });
 
 // ---- In the runner: marked out, and a pool thread moves within its pool
 
+const sinks = new Map<unknown, UsageSink['record']>();
+const grokSink = (h: { runner: unknown }) => sinks.get(h.runner)!;
 function grokHarness(pools: Pool[]) {
   const accounts = [...ACCOUNTS, account];
   const claude = new FakeAdapter();
@@ -232,6 +247,7 @@ function grokHarness(pools: Pool[]) {
     },
   };
   const h = makeHarness(tmpDir(), { pools }, { accounts: fake, adapters: { claude, grok: grokAdapter }, usage });
+  sinks.set(h.runner, usage.record);
   return { ...h, claude, grok: grokAdapter, records };
 }
 const notesOf = (h: ReturnType<typeof grokHarness>, id: string): string[] => h.events(id).filter((e) => e.type === 'system.note').map((e) => e.text);
@@ -298,8 +314,45 @@ test('a reading that says the login has room again ends the block a 402 put on i
   for (const o of played) s.out(o);
   await tick();
   assert.ok(h.runner.ranDry.has('grok-main'));
+  // A reading that says not blocked but names a window still out (a
+  // model's own week) doesn't end it.
+  h.runner.recordReading({ record: () => {} }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }, { kind: 'weekly_model', title: 'Weekly Fable', remainingPercent: 0 }], blocked: false });
+  assert.ok(h.runner.ranDry.has('grok-main'));
   // Topped up, and limit-recheck reads it.
-  h.runner.recordReading({ record: (id, r) => void h.records.push([id, r]) }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], blocked: false });
+  h.runner.recordReading({ record: () => {} }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], blocked: false });
   assert.equal(h.runner.ranDry.has('grok-main'), false);
   assert.ok(thread);
+});
+
+test('a thread waiting on its own Grok login carries on there once limit-recheck reads it back with room', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'Write me a note', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom, 'waiting for room');
+  // A top-up: limit-recheck reads it with room, through the runner's own usage sink.
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100, resetsAt: '2026-11-25T06:53:23.471Z' }], blocked: false });
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  assert.equal(h.runner.get(thread.id).accountId, 'grok-main');
+  assert.equal(h.grok.last.opts.account.id, 'grok-main');
+  assert.equal(h.grok.last.sent.at(-1)?.text, CARRY_ON_BACK, 'carried on, on grok-main');
+  assert.equal(h.claude.sessions.length, 0);
+});
+
+test("a reading from a turn still running on the old login is that login's, after the thread was moved", async () => {
+  const h = grokHarness([{ id: 'convex', title: 'Convex', accountIds: ['grok-main', 'claude-main'] }]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  // Mike moves it to claude-main mid-turn; the Grok CLI finishes its turn.
+  h.runner.update({ threadId: thread.id, accountId: 'claude-main' });
+  s.out({ kind: 'limits', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }], blocked: true });
+  assert.deepEqual(h.records.map(([id]) => id), ['grok-main']);
 });

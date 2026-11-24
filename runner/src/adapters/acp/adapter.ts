@@ -25,7 +25,7 @@ import { formContent, formQuestions, type FormSchema } from '../elicitation.ts';
 import type { AdapterOutput, AgentAdapter, AgentSession, QuestionAnswer, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
-import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, outOfUsage, rpcDataMessage, rpcDataStatus, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
+import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, laterFailure, outOfUsage, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
 import { AcpMcpServer } from './mcp-http.ts';
 import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, writesFiles, type AcpToolCall } from './normalize.ts';
 
@@ -226,7 +226,9 @@ export class AcpAdapter implements AgentAdapter {
 type State = 'starting' | 'ready' | 'turn' | 'closing' | 'closed';
 // failure: what the agent said went wrong in the turn outside the prompt's
 // answer (Grok's retry_state and turn_completed notes), with any HTTP status.
-type Turn = { id?: string; startedAt: number; interrupted: boolean; dropped: string[]; failure?: { message: string; httpStatus?: number } };
+// result: worked out and waiting on the login's limits (limitsAfter); if the
+// process exits meanwhile, it still goes out, ahead of the exit.
+type Turn = { id?: string; startedAt: number; interrupted: boolean; dropped: string[]; failure?: { message: string; httpStatus?: number }; result?: TurnResult; dispatched?: boolean };
 // cancelled: what a cancelled turn answers it with (a form's differs).
 type Pending = { abort: AbortController; options: PermissionOption[]; cancelled?: unknown };
 type PermissionOption = { optionId?: string; kind?: string };
@@ -524,22 +526,10 @@ export class AcpSession implements AgentSession {
   // the error and its data. Kept for the turn, for failureFor.
   private noteFailure(method: string, params: unknown): void {
     const turn = this.turn;
-    if (!turn || !method.startsWith('_') || !isPlainObject(params) || !isPlainObject(params.update)) return;
+    if (!turn || !isPlainObject(params)) return;
     if (this.sessionId && params.sessionId !== undefined && params.sessionId !== this.sessionId) return;
-    const u = params.update;
-    let message: string | undefined;
-    let httpStatus: number | undefined;
-    if (u.sessionUpdate === 'retry_state' && u.type === 'failed' && typeof u.message === 'string') message = u.message;
-    else if (u.sessionUpdate === 'turn_completed' && (u.stop_reason === 'error' || isPlainObject(u.error))) {
-      const err = isPlainObject(u.error) ? u.error : {};
-      message = rpcDataMessage(err.data) ?? (typeof u.agent_result === 'string' ? u.agent_result : undefined) ?? (typeof err.message === 'string' ? err.message : undefined);
-      httpStatus = rpcDataStatus(err.data);
-    }
-    message = message?.trim();
-    if (!message) return;
-    // A later note says it better, but an earlier one's status still counts.
-    const status = httpStatus ?? turn.failure?.httpStatus;
-    turn.failure = status === undefined ? { message } : { message, httpStatus: status };
+    const note = failureNote(method, params.update);
+    if (note) turn.failure = laterFailure(turn.failure, note);
   }
 
   // Grok reports each hook it ran (hook_execution) as a prompt goes in and
@@ -1065,8 +1055,10 @@ export class AcpSession implements AgentSession {
     }
     if (this.turn !== turn) return;
     // Before the result: the runner moves a thread off a login that ran out
-    // once it has the result, and a reading after that would be put on the
-    // login it moved to.
+    // once it has the result. The reading names the session's own login
+    // (sessionAccountId), so it can't land on another.
+    turn.result = result;
+    turn.dispatched = dispatched;
     await this.limitsAfter(result);
     if (this.turn !== turn) return;
     this.turn = undefined;
@@ -1075,9 +1067,13 @@ export class AcpSession implements AgentSession {
       const text = this.normalizer.takeLastAssistantText();
       if (text) this.sink.output({ kind: 'planProposed', itemId: `${turn.id ?? 'plan'}-plan`, text });
     }
-    const answered = [...(turn.id ? [turn.id] : []), ...turn.dropped];
-    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: this.held.length, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
+    this.sendResult(turn, result);
     this.next();
+  }
+
+  private sendResult(turn: Turn, result: TurnResult): void {
+    const answered = [...(turn.id ? [turn.id] : []), ...turn.dropped];
+    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!turn.dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: this.held.length, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
   }
 
   // What a failed turn says, and whether it failed because the login is out
@@ -1226,7 +1222,11 @@ export class AcpSession implements AgentSession {
     this.proc.onRequest = null;
     this.mcp?.close();
     this.emit(this.normalizer.closeOpen('Interrupted'));
+    // A turn whose result was worked out and was waiting on the login's
+    // limits: that result (a usage limit, say) is what happened, not the exit.
+    const done = this.turn?.result ? this.turn : undefined;
     this.turn = undefined;
+    if (done?.result) this.sendResult(done, done.result);
     if (this.ownFolder) removeQuietly(this.ownFolder);
     this.resolveExit();
     this.sink.exited(error);

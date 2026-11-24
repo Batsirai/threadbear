@@ -15,7 +15,7 @@ import type { Logger } from '../log.ts';
 import type { ProcessRegistry } from '../proc.ts';
 import { cliEnv } from '../adapters/claude/adapter.ts';
 import type { AcpAgent } from '../adapters/acp/agents.ts';
-import { AcpProcess, AcpRpcError, AUTH_REQUIRED, outOfUsage, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
+import { AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, laterFailure, outOfUsage, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
 import { isPlainObject } from '../adapters/acp/normalize.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import type { CliResponse } from './claude-pool.ts';
@@ -75,6 +75,9 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     const args = deps.agent.args({ dataDir: deps.dataDir, noTools: true, binary });
     const proc = new AcpProcess({ binary, args, env: { ...env, ...deps.agent.env({ noTools: true, binary }) }, cwd: req.cwd, registry: deps.registry, log: deps.log, label: `ask:${req.account.id}`, timings: deps.timings });
     let text = '';
+    // Why it failed, from the agent's own notes (Grok's retry_state and
+    // turn_completed), for an answer that says only "Internal error".
+    let failure: { message: string; httpStatus?: number } | undefined;
     // As AcpSession's checkGuard: Grok must report Threadbear's hook running
     // before anything comes from the model, or the job is stopped there.
     const guard = deps.agent.guardName?.(args);
@@ -89,6 +92,8 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
     proc.onNotification = (method, params) => {
       if (!isPlainObject(params) || !isPlainObject(params.update)) return;
       const u = params.update;
+      const note = failureNote(method, u);
+      if (note) failure = laterFailure(failure, note);
       if (guard && method.endsWith('x.ai/session_notification') && u.sessionUpdate === 'hook_execution' && (u.event_name === 'user_prompt_submit' || u.event_name === 'pre_tool_use')) {
         const ran = Array.isArray(u.runs) && u.runs.some((r) => isPlainObject(r) && typeof r.name === 'string' && r.name.startsWith(`plugin/${guard}/`));
         if (ran) guardSeen = true;
@@ -140,7 +145,11 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
       if (e instanceof AcpRpcError && e.code === AUTH_REQUIRED) return fail(`${name} needs a sign-in: ${providerInfo(deps.agent.provider).loginCommand}.`);
       // Out of usage (Grok's 402): the pool marks the login out and tries
       // the next one, as for a Claude login at its limit (models/index.ts).
-      if (e instanceof AcpRpcError && outOfUsage({ message: e.message, httpStatus: e.httpStatus })) return { ok: false, timedOut: false, limit: true, message: `${req.account.id} is out of ${name} usage (${e.message}).` };
+      if (e instanceof AcpRpcError) {
+        const detail = e.message !== e.rpcMessage ? e.message : (failure?.message ?? e.message);
+        if (outOfUsage({ message: detail, httpStatus: e.httpStatus ?? failure?.httpStatus })) return { ok: false, timedOut: false, limit: true, message: `${req.account.id} is out of ${name} usage (${detail}).` };
+        return fail(detail);
+      }
       return fail((e as Error)?.message ?? String(e));
     } finally {
       clearTimeout(timer);

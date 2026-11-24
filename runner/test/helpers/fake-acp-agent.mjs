@@ -403,6 +403,8 @@ const handlers = {
     ? {
         '_x.ai/billing': () => {
           log({ billing: true });
+          // A Grok that dies before it answers.
+          if (env.FAKE_GROK_EXIT_ON_BILLING) process.exit(1);
           if (env.FAKE_GROK_BILLING) return JSON.parse(env.FAKE_GROK_BILLING);
           return {
             config: { creditUsagePercent: 40, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-11-18T06:53:23.471544+00:00', end: '2026-11-25T06:53:23.471544+00:00' }, onDemandCap: { val: 0 }, onDemandUsed: { val: 0 }, prepaidBalance: { val: 0 }, isUnifiedBillingUser: true },
