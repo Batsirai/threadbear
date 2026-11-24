@@ -16,10 +16,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { AcpAdapter, AcpSession } from '../../src/adapters/acp/adapter.ts';
 import { ACP_AGENTS } from '../../src/adapters/acp/agents.ts';
-import { AcpRpcError, outOfUsage } from '../../src/adapters/acp/connection.ts';
+import { AcpRpcError, failureNote, laterFailure, outOfUsage } from '../../src/adapters/acp/connection.ts';
 import { grokLimits } from '../../src/adapters/acp/grok-billing.ts';
 import { acpAsker } from '../../src/models/acp-oneshot.ts';
-import { dueForRecheck } from '../../src/limit-recheck.ts';
+import { dueForRecheck, FIRST_READ_RETRY_MS } from '../../src/limit-recheck.ts';
 import type { AdapterOutput, SessionSink } from '../../src/adapters/types.ts';
 import type { Account, Pool } from '../../src/protocol.ts';
 import { nullLogger } from '../../src/log.ts';
@@ -120,6 +120,18 @@ test("an RPC error says what its data says, not JSON-RPC's own \"Internal error\
   assert.equal(new AcpRpcError('m', {}).message, 'm failed');
 });
 
+test("Grok's notes: a later bare \"Internal error\" doesn't hide the reason an earlier one gave", () => {
+  const retry = failureNote('_x.ai/session_notification', { sessionUpdate: 'retry_state', type: 'failed', error_type: 'api', message: SAID });
+  assert.deepEqual(retry, { message: SAID });
+  const bare = failureNote('_x.ai/session_notification', { sessionUpdate: 'turn_completed', stop_reason: 'error', error: { code: -32603, message: 'Internal error' } });
+  assert.deepEqual(laterFailure(retry, bare!), { message: SAID });
+  const full = failureNote('_x.ai/session_notification', { sessionUpdate: 'turn_completed', stop_reason: 'error', agent_result: SAID, error: { code: -32603, message: 'Internal error', data: { message: SAID, http_status: 402 } } });
+  assert.deepEqual(laterFailure(retry, full!), { message: SAID, httpStatus: 402 });
+  // ACP's own session/update, and other notes, aren't failures.
+  assert.equal(failureNote('session/update', { sessionUpdate: 'retry_state', type: 'failed', message: SAID }), undefined);
+  assert.equal(failureNote('_x.ai/session_notification', { sessionUpdate: 'retry_state', type: 'retrying', message: SAID }), undefined);
+});
+
 test('out of usage is a 402 or the words Grok uses for it, never a rate limit', () => {
   assert.equal(outOfUsage({ httpStatus: 402 }), true);
   for (const m of [SAID, "You've run out of credits", 'spending-limit reached', 'Usage limit reached for this plan', 'You hit your free usage limit.']) assert.equal(outOfUsage({ message: m }), true, m);
@@ -206,6 +218,7 @@ test('a login with no reading at all is read once; one with room is left alone',
   assert.equal(dueForRecheck(account, true, now, now - 60_000), false, 'once');
   assert.equal(dueForRecheck(account, false, now, undefined), false);
   assert.equal(dueForRecheck({ ...account, signedOut: true }, true, now, undefined), false);
+  assert.equal(dueForRecheck(account, true, now, now - FIRST_READ_RETRY_MS), true, 'again an hour after a failed read');
   const fine: Account = { ...account, usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], readAt: new Date(now - 86_400_000).toISOString(), source: 'live' } };
   assert.equal(dueForRecheck(fine, true, now, undefined), false);
 });
@@ -355,4 +368,40 @@ test("a reading from a turn still running on the old login is that login's, afte
   h.runner.update({ threadId: thread.id, accountId: 'claude-main' });
   s.out({ kind: 'limits', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0 }], blocked: true });
   assert.deepEqual(h.records.map(([id]) => id), ['grok-main']);
+});
+
+test('a 402 while Grok still reads room: reading that same room again is no reason to send the thread back', async () => {
+  const played = await outOfBalanceOutputs();
+  // As if billing had said 60% left when the 402 came.
+  const roomy = played.map((o) => (o.kind === 'limits' ? { ...o, windows: [{ ...o.windows[0], remainingPercent: 60 }], blocked: false } : o));
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of roomy) s.out(o);
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  const sent = s.sent.length;
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], blocked: false });
+  await tick();
+  assert.ok(h.runner.get(thread.id).waitingForRoom, 'still waiting');
+  assert.ok(h.runner.ranDry.has('grok-main'));
+  assert.equal(s.sent.length, sent, 'nothing sent');
+});
+
+test('a 402 from a turn still running on the old login after Mike moved the thread marks that login, and leaves the thread where he put it', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([{ id: 'convex', title: 'Convex', accountIds: ['grok-main', 'claude-main', 'claude-3'] }]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  h.runner.update({ threadId: thread.id, accountId: 'claude-3' });
+  for (const o of played) s.out(o);
+  await tick();
+  assert.ok(h.runner.ranDry.has('grok-main'));
+  assert.equal(h.runner.ranDry.has('claude-3'), false);
+  assert.equal(h.runner.get(thread.id).accountId, 'claude-3');
 });

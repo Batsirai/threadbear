@@ -909,6 +909,8 @@ export class Runner {
   // (recordReading). A pool thread waiting on its own one carries on there
   // (armRoomTimer); running dry again takes it out (markRanDry).
   readBack = new Set<string>();
+  // The room each of those logins read as when it ran dry (markRanDry).
+  dryRoom = new Map<string, number>();
   // Threads waiting for the API to be reachable again (waitingForNetwork):
   // one timer probes for all of them, backing off from NET_PROBE_FIRST_MS.
   netTimer?: TimerHandle;
@@ -1170,10 +1172,15 @@ export class Runner {
   // ran dry put on it (ranDry), so a top-up or a reset made outside
   // Threadbear lets the pools use it again before the time that block
   // guessed. Only these: a turn's reading on another of the login's
-  // sessions says nothing about the model that ran out.
+  // sessions says nothing about the model that ran out. And only with more
+  // room than it read as when it ran dry: a login refused while its own
+  // reading said it had room isn't back because it says so again.
   recordReading(usage: UsageSink, accountId: string, reading: UsageReading): void {
-    if (reading.blocked === false && reading.windows.length && reading.windows.every((w) => w.remainingPercent >= MIN_ROOM_PERCENT)) {
+    const least = reading.windows.length ? Math.min(...reading.windows.map((w) => w.remainingPercent)) : undefined;
+    const was = this.dryRoom.get(accountId);
+    if (reading.blocked === false && least !== undefined && least >= MIN_ROOM_PERCENT && (was === undefined || least > was + 1)) {
       this.ranDry.delete(accountId);
+      this.dryRoom.delete(accountId);
       this.readBack.add(accountId);
     }
     usage.record(accountId, reading);

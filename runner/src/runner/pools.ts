@@ -7,7 +7,7 @@ import type { RunnerPart } from './part.ts';
 import type { Account, Pool, Provider } from '../protocol.ts';
 import { ErrorCode, RpcError } from '../protocol.ts';
 import { cutOut } from '../store.ts';
-import { resetTime } from '../usage.ts';
+import { accountRoom, resetTime } from '../usage.ts';
 import { DEFAULT_POOL_FOLDERS, peekRunnerJson, readRunnerJson, writeRunnerJson } from '../config.ts';
 import { UNKNOWN_WAIT_MS, WAIT_SLACK_MS, backAt, blockedUntil, limitWhy, loginOk, nextLogin, pickInPool, poolAccounts, poolForFolder, poolProviders, readPools, roomWait, validatePools } from '../pools.ts';
 import { historyItems, selectHistory } from '../handoff-history.ts';
@@ -178,6 +178,14 @@ export const poolsPart = {
     // So turning carrying on back on later knows this turn stopped at a limit.
     rec.limitHitTurn = turnId;
     this.markDirty(st);
+    // The login the turn ran on. If Mike moved the thread off it mid-turn,
+    // that login is the one that's out, and the thread stays where he put it.
+    const ranOn = st.rt.sessionAccountId ?? rec.accountId;
+    if (ranOn !== rec.accountId) {
+      const old = this.usableAccounts().find((a) => a.id === ranOn);
+      if (old) this.markRanDry(old);
+      return;
+    }
     const pool = this.poolById(rec.poolId);
     if (!pool) {
       if (this.bucket(rec) !== 'inbox' || rec.queue.length || rec.carryOnAtReset === false) return;
@@ -237,6 +245,11 @@ export const poolsPart = {
     const until = blockedUntil(account, now);
     this.ranDry.set(account.id, until);
     this.readBack.delete(account.id);
+    // The room it read as when it ran dry, so only a reading with more than
+    // that counts as back (recordReading): a provider can refuse (a 402)
+    // while its own reading still shows room, and reading the same room
+    // again shouldn't send the thread back to be refused every 10 minutes.
+    this.dryRoom.set(account.id, account.usage?.blocked ? 0 : (accountRoom(account) ?? 0));
     if (account.usage?.blocked) return;
     try {
       this.usage?.record(account.id, { windows: [], blocked: true, blockedUntil: until });

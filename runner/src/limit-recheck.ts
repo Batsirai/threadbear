@@ -25,6 +25,8 @@ export const RECHECK_MS = 10 * 60_000;
 export const READ_DEADLINE_MS = 60_000;
 // The first look after the runner starts: soon, but not in the startup rush.
 export const FIRST_RECHECK_MS = 60_000;
+// How often a login with no reading at all is tried again when a read failed.
+export const FIRST_READ_RETRY_MS = 60 * 60_000;
 
 // Whether a login is worth reading again now: its provider can read limits
 // without a turn, its last reading says it's out of room, and that reading
@@ -35,7 +37,8 @@ export const FIRST_RECHECK_MS = 60_000;
 // turn here.
 export function dueForRecheck(account: Account, canRead: boolean, now: number, lastTried: number | undefined): boolean {
   if (!canRead || account.signedOut || account.planEnded) return false;
-  if (!account.usage) return lastTried === undefined;
+  // Tried again hourly if that read failed (offline at start, say).
+  if (!account.usage) return lastTried === undefined || now - lastTried >= FIRST_READ_RETRY_MS;
   const room = accountRoom(account);
   const out = !!account.usage.blocked || (room !== undefined && room < MIN_ROOM_PERCENT);
   if (!out) return false;

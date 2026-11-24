@@ -25,7 +25,7 @@ import { formContent, formQuestions, type FormSchema } from '../elicitation.ts';
 import type { AdapterOutput, AgentAdapter, AgentSession, QuestionAnswer, SessionSink, StartSessionOptions, ToolApprovalAnswer, TurnResult, UserInput } from '../types.ts';
 import { SessionNotFoundError } from '../types.ts';
 import type { AcpAgent } from './agents.ts';
-import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, laterFailure, outOfUsage, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
+import { AcpExitedError, AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, genericRpcMessage, laterFailure, outOfUsage, type AcpTimings, type InitializeResult, type RequestId } from './connection.ts';
 import { AcpMcpServer } from './mcp-http.ts';
 import { AcpNormalizer, absolutePath, isPlainEdit, isPlainObject, requestPaths, writesFiles, type AcpToolCall } from './normalize.ts';
 
@@ -1085,7 +1085,8 @@ export class AcpSession implements AgentSession {
     const rpc = e instanceof AcpRpcError ? e : undefined;
     const thrown = e instanceof Error ? e.message : e === undefined ? undefined : String(e);
     const fromRpc = rpc && rpc.message !== rpc.rpcMessage ? rpc.message : undefined;
-    const detail = fromRpc ?? turn.failure?.message ?? thrown ?? 'The agent stopped with an error.';
+    const noted = turn.failure && !genericRpcMessage(turn.failure.message) ? turn.failure.message : undefined;
+    const detail = fromRpc ?? noted ?? thrown ?? turn.failure?.message ?? 'The agent stopped with an error.';
     const httpStatus = rpc?.httpStatus ?? turn.failure?.httpStatus;
     if (!outOfUsage({ message: detail, httpStatus })) return { error: detail };
     const name = providerName(this.deps.agent.provider);

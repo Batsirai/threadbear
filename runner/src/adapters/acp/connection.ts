@@ -17,6 +17,9 @@ export const AUTH_REQUIRED = -32000;
 // error", with data.message "API error (status 402 Payment Required): Grok
 // Build usage balance exhausted", 23 Nov 2026) is read from there instead.
 const GENERIC_RPC_MESSAGES = new Set(['internal error', 'server error', 'invalid params', 'invalid request', 'parse error', 'method not found', 'unknown error', 'error']);
+export function genericRpcMessage(m: string): boolean {
+  return GENERIC_RPC_MESSAGES.has(m.trim().toLowerCase().replace(/[.!]+$/, ''));
+}
 
 // The reason an error's `data` gives, when it gives one in words: a string,
 // or an object's message, error or detail.
@@ -48,7 +51,7 @@ export class AcpRpcError extends Error {
   constructor(method: string, body: { code?: unknown; message?: unknown; data?: unknown }) {
     const said = typeof body?.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
     const detail = rpcDataMessage(body?.data);
-    const generic = !said || GENERIC_RPC_MESSAGES.has(said.toLowerCase().replace(/[.!]+$/, ''));
+    const generic = !said || genericRpcMessage(said);
     super((generic ? detail : undefined) ?? said ?? `${method} failed`);
     this.name = 'AcpRpcError';
     this.code = typeof body?.code === 'number' ? body.code : -32603;
@@ -86,10 +89,12 @@ export function failureNote(method: string, update: unknown): { message: string;
   return httpStatus === undefined ? { message } : { message, httpStatus };
 }
 
-// Keeps the newest note's words, and any status an earlier one gave.
+// Keeps the newest note's words, unless they're only JSON-RPC's "Internal
+// error" after an earlier note said why, and any status an earlier one gave.
 export function laterFailure(was: { message: string; httpStatus?: number } | undefined, now: { message: string; httpStatus?: number }): { message: string; httpStatus?: number } {
   const status = now.httpStatus ?? was?.httpStatus;
-  return status === undefined ? { message: now.message } : { message: now.message, httpStatus: status };
+  const message = was && genericRpcMessage(now.message) ? was.message : now.message;
+  return status === undefined ? { message } : { message, httpStatus: status };
 }
 
 // Whether an agent's failure says the login is out of usage, from its HTTP

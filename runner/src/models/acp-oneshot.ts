@@ -15,7 +15,7 @@ import type { Logger } from '../log.ts';
 import type { ProcessRegistry } from '../proc.ts';
 import { cliEnv } from '../adapters/claude/adapter.ts';
 import type { AcpAgent } from '../adapters/acp/agents.ts';
-import { AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, laterFailure, outOfUsage, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
+import { AcpProcess, AcpRpcError, AUTH_REQUIRED, failureNote, genericRpcMessage, laterFailure, outOfUsage, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
 import { isPlainObject } from '../adapters/acp/normalize.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import type { CliResponse } from './claude-pool.ts';
@@ -136,7 +136,8 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
       const model = options.find((o) => o.category === 'model');
       if (req.model && model?.id) await proc.request('session/set_config_option', { sessionId, configId: model.id, value: req.model });
       const r = await proc.request<{ stopReason?: string }>('session/prompt', { sessionId, prompt: promptBlocks(req) }, null);
-      if (r?.stopReason !== 'end_turn' && r?.stopReason !== undefined) return fail(`${name} stopped early (${r.stopReason}).`);
+      if (r?.stopReason === 'error' && failure && outOfUsage(failure)) return { ok: false, timedOut: false, limit: true, message: `${req.account.id} is out of ${name} usage (${failure.message}).` };
+      if (r?.stopReason !== 'end_turn' && r?.stopReason !== undefined) return fail(`${name} stopped early (${failure?.message ?? r.stopReason}).`);
       return { ok: true, text };
     };
     try {
@@ -146,7 +147,7 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
       // Out of usage (Grok's 402): the pool marks the login out and tries
       // the next one, as for a Claude login at its limit (models/index.ts).
       if (e instanceof AcpRpcError) {
-        const detail = e.message !== e.rpcMessage ? e.message : (failure?.message ?? e.message);
+        const detail = e.message !== e.rpcMessage || !failure || genericRpcMessage(failure.message) ? e.message : failure.message;
         if (outOfUsage({ message: detail, httpStatus: e.httpStatus ?? failure?.httpStatus })) return { ok: false, timedOut: false, limit: true, message: `${req.account.id} is out of ${name} usage (${detail}).` };
         return fail(detail);
       }

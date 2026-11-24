@@ -841,8 +841,10 @@ File references are where to look.
   copies login tokens or the Keychain. A Codex login that reads as out of
   room is asked for its limits every 10 minutes, by starting Codex's own
   `codex app-server` for a moment (`runner/src/limit-recheck.ts`); that
-  costs no tokens. A Grok login is asked the same way (once a minute after
-  the runner starts, then every 10 minutes while it reads as out), by
+  costs no tokens. A login with no reading at all (a Codex login
+  that hasn't run a turn here, or a Grok one) is asked once, a minute after
+  the runner starts (hourly again if that fails). A Grok login is asked the
+  same way (then every 10 minutes while it reads as out), by
   starting `grok agent --no-leader stdio` for a moment and sending Grok's
   `_x.ai/billing`, which asks Grok's billing service how much of the plan
   is used; a Grok thread asks its own process the same after a turn that
