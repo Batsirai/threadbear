@@ -112,7 +112,9 @@ test("179: an https remote asks none of the checkout's credential helpers", NO_S
   const made = spawnSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=127.0.0.1', '-keyout', path.join(dir, 'key.pem'), '-out', path.join(dir, 'cert.pem')], { encoding: 'utf8' });
   if (made.status !== 0) return t.skip('no openssl to make a certificate with');
   // A server that wants a password for everything, as a private repo does.
+  let asked = 0;
   const server = https.createServer({ key: fs.readFileSync(path.join(dir, 'key.pem')), cert: fs.readFileSync(path.join(dir, 'cert.pem')) }, (_req, res) => {
+    asked++;
     res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="x"' });
     res.end();
   });
@@ -122,13 +124,27 @@ test("179: an https remote asks none of the checkout's credential helpers", NO_S
     const repo = path.join(dir, 'r');
     git(dir, 'init', '-q', repo);
     const ran = path.join(dir, 'ran');
-    git(repo, 'config', 'http.sslVerify', 'false');
+    // The owner's own config takes the stand-in's certificate (the
+    // checkout's http.* settings stop network git: below).
+    const owner = path.join(dir, 'owner.gitconfig');
+    fs.writeFileSync(owner, '[http]\n\tsslVerify = false\n');
     git(repo, 'config', 'credential.helper', `!${sentinel(dir, 'credential', ran)}`);
     git(repo, 'config', `credential.https://127.0.0.1:${port}.helper`, `!${sentinel(dir, 'credential-for-url', ran)}`);
     git(repo, 'config', 'core.askPass', sentinel(dir, 'askpass', ran));
     const url = fetchableUrl(`https://127.0.0.1:${port}/mikecann/threadbear.git`)!;
-    await assert.rejects(gitAsync(repo, ['ls-remote', url], { network: 'remote' }));
+    const global = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = owner;
+    try {
+      await assert.rejects(gitAsync(repo, ['ls-remote', url], { network: 'remote', owner: true }));
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = global;
+    }
+    assert.ok(asked > 0, 'it reached the server');
     assert.deepEqual(ranIn(ran), []);
+    // A proxy or certificate setting of the checkout's own isn't used at all.
+    git(repo, 'config', 'http.proxy', 'http://127.0.0.1:9');
+    git(repo, 'config', 'http.sslVerify', 'false');
+    await assert.rejects(gitAsync(repo, ['ls-remote', url], { network: 'remote' }), /changes where or how git reaches a remote/);
   } finally {
     server.close();
   }
@@ -303,13 +319,15 @@ test("179: a checkout whose config redirects a remote isn't used for network git
     [`url.https://evil.example/r.git.pushInsteadOf`, github],
     [`remote.${github}.pushurl`, 'https://evil.example/steal.git'],
     [`remote.${github}.vcs`, 'https'],
+    ['http.proxy', 'http://attacker.example:8080'],
+    ['http.https://github.com/.sslVerify', 'false'],
   ]) {
     const w = world();
     git(w.theirs, 'remote', 'set-url', 'upstream', github);
     git(w.theirs, 'config', key, value);
     const s = await upstreamFor(w.theirs, w.home, new FakeClock(LATER), { localRemotes: false }).check();
     assert.equal(s.state, 'failed', key);
-    assert.match(s.reason ?? '', /redirects a remote/, key);
+    assert.match(s.reason ?? '', /changes where or how git reaches a remote/, key);
   }
 });
 

@@ -98,8 +98,9 @@ and the remote given as a URL rebuilt from `remote.<name>.url` as
 configured, an https or ssh address of a plain host and path (anything
 else, a folder, `file://`, `ext::`, or more than one address, and upstream
 counts as off; a user and password in it are left out). A checkout whose
-own config rewrites an address (`url.*.insteadOf`, `pushInsteadOf`) or
-configures a remote named by a URL (which git looks a URL up as) isn't used
+own config rewrites an address (`url.*.insteadOf`, `pushInsteadOf`),
+configures a remote named by a URL (which git looks a URL up as), or sets
+anything under `http.` (a proxy, certificate checks) isn't used
 for network git at all: the check fails, and Mike's runner holds its
 release, saying which setting. Replacement objects, grafts and the
 commit-graph are off (`GIT_NO_REPLACE_OBJECTS`, `GIT_GRAFT_FILE=/dev/null`,

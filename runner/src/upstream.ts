@@ -432,7 +432,7 @@ const RECEIVE_PACK = '--receive-pack=git-receive-pack';
 // What the runner's environment keeps for release git: who commits (Mike's
 // tag needs a tagger), and for owner, which of his config files git reads.
 const KEEP_ENV = /^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL|DATE)$/;
-const OWNER_ENV = /^GIT_(CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)|SSH|SSH_COMMAND)$/;
+const OWNER_ENV = /^GIT_(CONFIG_(GLOBAL|SYSTEM|NOSYSTEM)|SSH_COMMAND)$/;
 
 export function releaseGitEnv(opts: Pick<GitOptions, 'env' | 'owner'> = {}): NodeJS.ProcessEnv {
   const kept = Object.fromEntries(Object.entries(process.env).filter(([k]) => KEEP_ENV.test(k) || (opts.owner && OWNER_ENV.test(k))));
@@ -465,16 +465,19 @@ export async function releaseGitConfig(cwd: string, env: NodeJS.ProcessEnv, opts
   const entries = parseConfigListBytes(listed);
   // A remote's address is given to git as a URL (fetchableUrl), but the
   // checkout's config can still rewrite it (url.<x>.insteadOf and
-  // pushInsteadOf) or give it settings of its own under a remote named by
-  // that URL (a push URL, a remote helper, a proxy): git looks a URL up as
-  // a remote's name first. Either sends upstream's fetch, or Mike's push
-  // with his credentials, somewhere the configured address doesn't say, so
-  // a checkout that has one isn't used for network git at all (Gemini's
-  // review, 24 Nov 2026). The owner's own (global) rewrites are his. files:
-  // tests, whose remotes are folders reached through an insteadOf.
+  // pushInsteadOf), give it settings of its own under a remote named by
+  // that URL (a push URL, a remote helper, a proxy: git looks a URL up as a
+  // remote's name first; every address fetchableUrl gives has a colon), or
+  // send https through a proxy of its choosing with certificates unchecked
+  // (http.*, which -c can't reliably override, as a setting for a URL beats
+  // one for all). Each sends upstream's fetch, or Mike's push with his
+  // credentials, somewhere the configured address doesn't say, so a
+  // checkout that has one isn't used for network git at all (Gemini's
+  // reviews, 24 Nov 2026). The owner's own (global) settings are his.
+  // files: tests, whose remotes are folders reached through an insteadOf.
   if (opts.network === 'remote' && !opts.files) {
-    const redirect = entries.find((e) => !TRUSTED_SCOPES.has(e.scope) && (/^url\./.test(e.key) || /^remote\.[\s\S]*[:/][\s\S]*\.[^.]+$/.test(e.key)));
-    if (redirect) throw new Error(`this checkout's own git config redirects a remote (${JSON.stringify(redirect.key.slice(0, 80))}), so release git won't reach one from it; remove that setting`);
+    const redirect = entries.find((e) => !TRUSTED_SCOPES.has(e.scope) && (/^(url|http)\./.test(e.key) || /^remote\.[\s\S]*:[\s\S]*\.[^.]+$/.test(e.key)));
+    if (redirect) throw new Error(`this checkout's own git config changes where or how git reaches a remote (${JSON.stringify(redirect.key.slice(0, 80))}), so release git won't reach one from it; remove that setting`);
   }
   const out = [...repoProofConfig(entries, opts.network === 'remote' ? 'remote' : opts.network === 'local' ? 'bundle' : undefined), ...RELEASE_CONFIG];
   // repoProofConfig lets a remote be a folder too (a thread's move needs
@@ -1271,7 +1274,14 @@ export class Upstream {
     }
     this.origin = origin;
     // Tags made on another Mac, or by hand, count too.
-    await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-prune', '--no-prune-tags', '--no-recurse-submodules', this.uploadPack, origin, `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
+    try {
+      await this.git(checkout, ['fetch', '-q', '--no-tags', '--no-prune', '--no-prune-tags', '--no-recurse-submodules', this.uploadPack, origin, `+refs/tags/${TAG_PREFIX}*:refs/tags/${TAG_PREFIX}*`], this.remote({ owner: true, timeoutMs: this.fetchTimeoutMs }));
+    } catch (e) {
+      // Said where it's seen (a checkout whose config release git won't
+      // run with), as well as logged.
+      this.hold({ commit: tip, why: `couldn't fetch the release tags from origin: ${String((e as Error).message ?? e).slice(0, 200)}`, at: new Date(now).toISOString() });
+      throw e;
+    }
     const tag = tagFor(new Date(now));
     // Only tags GitHub has are releases: one made here and never pushed (its
     // push failed, or it didn't verify and couldn't be deleted, perhaps
