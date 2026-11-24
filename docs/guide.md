@@ -609,6 +609,12 @@ New threads start in the `ThreadbearThreads` folder in your home folder
 one thread from the composer's + menu, or change the default in Settings
 (⌘,).
 
+The agent starts while you write that first message, so its first reply
+comes about half a second sooner. If you change the folder, login, model,
+effort or mode before sending, it starts again to match, and if you don't send
+within ten minutes it stops. This is for Claude threads in a folder as it is;
+one that gets a worktree, or a thread started in a project, starts when you send.
+
 A safe first message is one that only reads, such as "What's in this
 folder?" or "Explain what you can do for me here." When you're ready for it
 to make something, try "Make a file called hello.txt that says hi" and watch
