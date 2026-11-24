@@ -4,6 +4,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { PATIENCE_MS } from '../helpers/patience.ts';
 import { NO_SIGNALS_ON_WINDOWS } from '../helpers/platform.ts';
@@ -115,7 +116,7 @@ test('--import is loaded in each file\'s process, and not in the one that runs t
   const seen = path.join(f.dir, 'imported');
   const preload = path.join(f.dir, 'preload.mjs');
   fs.writeFileSync(preload, `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(seen)}, process.argv.slice(1).join(' ') + '\\n');`);
-  const r = f.run(`--import=${preload}`, 'test/a.test.mjs', 'test/b.test.mjs');
+  const r = f.run(`--import=${pathToFileURL(preload).href}`, 'test/a.test.mjs', 'test/b.test.mjs');
   assert.equal(r.status, 0, r.out);
   const lines = fs.readFileSync(seen, 'utf8').trim().split('\n').sort();
   assert.equal(lines.length, 2, lines.join('\n'));
