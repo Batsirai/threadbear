@@ -1302,21 +1302,31 @@ test('held asks: the next turn is asked once before ending with nothing, and a j
   assert.equal(h.runner.get(thread.id).waitState, 'job');
   // The landing goes and a dev server is left: it isn't what the asks wait for.
   s.out({ kind: 'tasks', tasks: [{ id: 'b2', type: 'local_bash', kind: 'shell', description: 'Dev server' }] });
+  assert.equal(h.runner.get(thread.id).waitState, 'job', 'held through the wake grace');
   h.clock.advance(60_000);
   assert.equal(h.runner.get(thread.id).asksAfterJobs, undefined);
   assert.equal(h.runner.get(thread.id).waitState, 'needsYou');
-  // The next turn can't end with nothing without hearing about them, once.
+  // A turn that ends with no end_turn at all leaves the held card standing.
   h.runner.send(thread.id, 'next');
   await tick();
   const s2 = h.adapter.last;
   s2.text('m2', 'Landed.');
+  s2.result('completed');
+  const sum = h.runner.get(thread.id);
+  assert.equal(sum.needs, 'you');
+  assert.equal(sum.asks?.[0].action, 'Pass on the Terminal tabs PR?');
+  // And one can't end with nothing without hearing about them, once.
+  h.runner.send(thread.id, 'and now?');
+  await tick();
+  const s3 = h.adapter.last;
+  s3.text('m3', 'All landed.');
   const done = { needs: 'nothing' };
-  toolCall(s2, 'e2', END_TURN, done);
+  toolCall(s3, 'e2', END_TURN, done);
   const refused = await call('end_turn', done);
   assert.equal(refused.error, true);
   assert.match(refused.text, /^Not ended: last turn you held asks back until your job ended, and the user has not seen them \("Pass on the Terminal tabs PR\?"\)/);
-  s2.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: false, text: refused.text, truncated: false, images: [] } });
-  toolCall(s2, 'e3', END_TURN, done);
+  s3.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: false, text: refused.text, truncated: false, images: [] } });
+  toolCall(s3, 'e3', END_TURN, done);
   assert.equal((await call('end_turn', done)).error, false);
 });
 
@@ -1818,7 +1828,7 @@ test("end_turn lists only today's form, whichever forms it takes", async () => {
   const h = makeHarness();
   const { thread } = start(h);
   const one = await mcpClient(h, thread.id, true).endTurnShown();
-  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'asks', 'byline', 'findings', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
+  assert.deepEqual(Object.keys(one.inputSchema.properties).sort(), ['archive', 'askWhen', 'asks', 'byline', 'findings', 'headline', 'needs', 'next', 'snooze', 'waitFor']);
   assert.ok(!one.inputSchema.required?.length, 'every field is optional');
   const ask = (one.inputSchema.properties.asks as { items: { required: string[]; properties: Record<string, { description?: string; items?: { type?: string } }> } }).items;
   assert.deepEqual(ask.required, ['question']);

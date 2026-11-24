@@ -389,18 +389,21 @@ export function buildThreadbearTools(
   // still doesn't say asks at once, as before.
   let jobsNotedTurn: number | undefined;
   let heldNotedTurn: number | undefined;
-  const checkJobs = (input: unknown, needs: string, events: PersistedEvent[]): void => {
+  const checkJobs = async (input: unknown, needs: string, events: PersistedEvent[]): Promise<void> => {
+    const held = needs === 'you' ? [] : (control.heldAsks?.(selfId) ?? []);
+    const jobs = needs === 'you' && !askWhenFromTool(input) ? (control.shellJobs?.(selfId) ?? []) : [];
+    if (!held.length && !jobs.length) return;
+    // Claude: a call that isn't in the thread's events is a sub-agent's,
+    // which is neither held up nor counted as the thread's once (Codex's
+    // second review). Codex: capped by the turn, as above.
+    if (!codex && !(await replied()).landed) return;
     const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
-    if (needs !== 'you') {
-      if (heldNudged(events) || (turn !== undefined && turn === heldNotedTurn)) return;
-      const held = control.heldAsks?.(selfId) ?? [];
-      if (!held.length) return;
+    if (held.length) {
+      if (heldNudged(events) || (codex && turn !== undefined && turn === heldNotedTurn)) return;
       heldNotedTurn = turn;
       throw new Error(heldNudge(held));
     }
-    if (askWhenFromTool(input) || jobsNudged(events) || (turn !== undefined && turn === jobsNotedTurn)) return;
-    const jobs = control.shellJobs?.(selfId) ?? [];
-    if (!jobs.length) return;
+    if (jobsNudged(events) || (codex && turn !== undefined && turn === jobsNotedTurn)) return;
     jobsNotedTurn = turn;
     throw new Error(jobsNudge(jobs));
   };
@@ -1759,7 +1762,7 @@ export function buildThreadbearTools(
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
-        checkJobs(input, needs, events);
+        await checkJobs(input, needs, events);
         const projectNote = await projectStepNote(input, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
         let restart = '';
@@ -1895,7 +1898,7 @@ export function buildThreadbearTools(
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
-        checkJobs(args, needs, events);
+        await checkJobs(args, needs, events);
         const projectNote = await projectStepNote(args, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
         // Asking Mike to Restart to Update means wanting to know when he

@@ -1780,9 +1780,12 @@ export class Runner {
     return st ? this.wakingShells(st).map((t) => t.description || t.type) : [];
   }
 
+  private wakes(st: ThreadState): boolean {
+    return this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks !== false;
+  }
+
   private wakingShells(st: ThreadState): ThreadState['rt']['tasks'] {
-    if (this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks === false) return [];
-    return st.rt.tasks.filter((t) => t.kind === 'shell');
+    return this.wakes(st) ? st.rt.tasks.filter((t) => t.kind === 'shell') : [];
   }
 
   // The jobs a turn's asks wait for: its shell jobs still running as it
@@ -1790,7 +1793,8 @@ export class Runner {
   // landing has gone) doesn't hold them. None on a CLI that doesn't wake
   // when its jobs end (Codex): nothing would bring the asks back.
   private afterJobs(st: ThreadState, said: { afterJobs?: true }): { afterJobs?: string[] } {
-    const ids = said.afterJobs ? this.wakingShells(st).map((t) => t.id) : [];
+    if (!said.afterJobs) return {};
+    const ids = this.wakingShells(st).map((t) => t.id);
     return ids.length ? { afterJobs: ids } : {};
   }
 
@@ -1798,9 +1802,10 @@ export class Runner {
   // (askWhen "jobsEnd") that Mike hasn't ticked, so the turn a job's end
   // opens doesn't end with needs "nothing" and lose them (HELD_NUDGE).
   heldAsks(threadId: string): string[] {
+    // Whatever turn it's from: a turn that failed since leaves the record
+    // as it was, and the asks are still unseen.
     const n = this.threads.get(threadId)?.rec.needs;
-    const rec = this.threads.get(threadId)?.rec;
-    if (!n?.afterJobs || !rec || n.seq !== rec.lastTurnCompletedSeq) return [];
+    if (!n?.afterJobs) return [];
     const ticked = new Set(n.ticked);
     return (n.asks ?? []).filter((_, i) => !ticked.has(i)).map((a) => a.action);
   }
@@ -1811,8 +1816,10 @@ export class Runner {
     const { rec, rt } = st;
     const ids = rec.needs?.seq === rec.lastTurnCompletedSeq ? rec.needs.afterJobs : undefined;
     if (!ids?.length) return false;
-    const going = [...rt.tasks, ...(rt.wakeTimer ? rt.finished : [])];
-    return going.some((t) => ids.includes(t.id));
+    // All of them: the first to end opens a turn, and if none comes the
+    // asks are Mike's, rather than waiting on a dev server named with it.
+    const going = new Set([...rt.tasks, ...(rt.wakeTimer ? rt.finished : [])].map((t) => t.id));
+    return ids.every((id) => going.has(id));
   }
 
   // For end_turn's handler: whether the thread's CLI still runs background
@@ -3255,6 +3262,9 @@ export class Runner {
     // neither leaves no card, and counts as before.
     if (outcome === 'completed') {
       if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}), ...this.afterJobs(st, said) };
+      // Said nothing at all (no end_turn): asks held for a job and never
+      // seen stay as the card, rather than going with a "Landed".
+      else if (rec.needs?.afterJobs) rec.needs = { ...rec.needs, seq: ev.seq };
       else delete rec.needs;
       // How it came out replaces why it was started, on the row of a thread
       // Mike didn't start. His own threads have no byline, so it's dropped.

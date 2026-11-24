@@ -32,15 +32,17 @@ when its jobs end (not Codex), is refused once a turn (`JOBS_NUDGE`,
 needs.ts) unless it has `askWhen`: "jobsEnd" (the asks wait) or "now" (Mike
 is asked at once; also what a second call without it gets). With "jobsEnd"
 the turn's `needs` record keeps `afterJobs`, the ids of the shell jobs
-running as it ended (so a dev server left going after the landing, or one
-started later, holds nothing), and while one of those is still going
-(or just finished, until it's read) the summary carries `asksAfterJobs:
+running as it ended (so one started later holds nothing), and while all
+of those are still going (or just finished, until it's read; the first to
+end opens a turn, and a dev server named with a landing doesn't hold the
+asks once the landing has gone) the summary carries `asksAfterJobs:
 true` and the thread is treated as with sub-agents above: `needsYou`
 false (unless it's marked unread), wait state `job`, under Running, no
 `needs` on the phone's document. The job's end opens a turn, where the
 agent ends with its asks again: one that ends with needs "nothing" instead
 is refused once (`HELD_NUDGE`) with the asks it held, so "Landed" doesn't
-replace a card Mike never saw. If no turn comes, the asks are his once
+replace a card Mike never saw; a turn that ends with no end_turn at all
+leaves the held card standing. If no turn comes, the asks are his once
 the job has gone. Monitors never hold anything back, and nor does anything
 on Codex, which isn't woken when a job ends: "jobsEnd" there asks at once.
 
