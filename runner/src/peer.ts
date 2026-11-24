@@ -131,22 +131,34 @@ export async function procPids(sock: PeerSocket, root = '/proc', until = Infinit
   if (inodes.size === 0) return [];
   const want = new Set([...inodes].map((i) => `socket:[${i}]`));
   const pids: number[] = [];
-  for (const name of await fs.promises.readdir(root)) {
-    if (!/^\d+$/.test(name)) continue;
+  // The fds are read synchronously, with a turn of the event loop (and a
+  // look at the time) every YIELD_EVERY reads (procTable too): awaiting
+  // every readlink took 3 to 4 s on Pixel (a phone's Linux) with 150 idle
+  // node processes, past LOOKUP_MS once a test run loaded it, so connections
+  // were dropped with 4503. This way it's about 0.2 s. Counting reads, not
+  // processes, keeps one process with a great many fds from holding the
+  // runner up.
+  let reads = 0;
+  const step = async (): Promise<void> => {
+    if (++reads % YIELD_EVERY === 0) await new Promise((r) => setImmediate(r));
     // Stop once its time is up, rather than go on reading after the answer
     // stopped mattering.
     if (Date.now() > until) throw new Error('reading /proc took too long');
+  };
+  for (const name of await fs.promises.readdir(root)) {
+    if (!/^\d+$/.test(name)) continue;
+    await step();
     let fds: string[];
     try {
-      fds = await fs.promises.readdir(`${root}/${name}/fd`);
+      fds = fs.readdirSync(`${root}/${name}/fd`);
     } catch {
       continue; // gone, or not this user's
     }
     for (const fd of fds) {
-      if (Date.now() > until) throw new Error('reading /proc took too long');
+      await step();
       let target: string;
       try {
-        target = await fs.promises.readlink(`${root}/${name}/fd/${fd}`);
+        target = fs.readlinkSync(`${root}/${name}/fd/${fd}`);
       } catch {
         continue;
       }
@@ -156,8 +168,11 @@ export async function procPids(sock: PeerSocket, root = '/proc', until = Infinit
       }
     }
   }
+  if (Date.now() > until) throw new Error('reading /proc took too long');
   return pids;
 }
+
+const YIELD_EVERY = 64;
 
 // Linux: the process table from /proc/<pid>/stat, no ps needed (Gemini's
 // review: a box without /bin/ps would otherwise refuse every connection).
@@ -165,11 +180,13 @@ export async function procPids(sock: PeerSocket, root = '/proc', until = Infinit
 // the fields are counted from the last ')': state, ppid, pgrp.
 export async function procTable(root = '/proc'): Promise<ProcRow[]> {
   const rows: ProcRow[] = [];
+  let n = 0;
   for (const name of await fs.promises.readdir(root)) {
     if (!/^\d+$/.test(name)) continue;
+    if (++n % YIELD_EVERY === 0) await new Promise((r) => setImmediate(r));
     let stat: string;
     try {
-      stat = await fs.promises.readFile(`${root}/${name}/stat`, 'utf8');
+      stat = fs.readFileSync(`${root}/${name}/stat`, 'utf8');
     } catch {
       continue; // gone since the listing
     }
