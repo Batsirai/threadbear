@@ -322,7 +322,12 @@ rest, and `tb <command> --help` explains one.
   browser (6 Nov); a hook blocks `npm test` and `check.sh --local` there. It
   copies the checkout over, runs it, brings back failed steps' logs and
   deletes the copy (`scripts/check-remote.sh`); one run at a time, so it may
-  say it's waiting for another thread's. A host short of disk is passed over
+  say it's waiting for another thread's. A landing's check (tb land sets
+  `THREADBEAR_CHECK_FIRST`) goes ahead of everything else waiting on its
+  host: other checks, GPUI builds,
+  measurements and Tinker Desk's `heavy` jobs say they're letting it go
+  first (`scripts/host-turn.sh` says how). It still waits for what's
+  running; it doesn't get a slot of its own. A host short of disk is passed over
   (8 GiB free for Swift or desktop/'s Rust, 2 otherwise), and if none has
   room the check fails and names them. A check that fails on a host that ran
   under 1 GiB free during it is run again on another host (or the same one,

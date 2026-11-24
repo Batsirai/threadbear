@@ -141,15 +141,19 @@ case "$cmd" in
     printf '%s\\n%s\\n%s\\n' "$b" "$(cat "$d/os" 2>/dev/null || echo Darwin)" "$(cat "$d/state")"
     # What the probe runs after the lock's "fi && ", for real.
     (cd "$d/home" && bash -c "\${cmd##*fi && }") ;;
-  # A blocking run can start with a nonblocking -k probe too. Match its
-  # actual blocking lock first, so that probe doesn't turn it into "now".
-  *"lockf -k"*) wait_line; run_copy "after waiting" ;;
-  *"lockf -t 0 -k"*)
-    n="$(cat "$d/lose" 2>/dev/null || echo 0)"
-    if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/lose"; [ ! -f "$d/df-after" ] || cp "$d/df-after" "$d/df-out"; [ -f "$d/looks-free" ] || echo busy >"$d/state"; exit 75; fi
-    run_copy now ;;
-  *"flock -n -E 75"*) run_copy now ;;
-  *"flock "*) wait_line; run_copy "after waiting" ;;
+  # The check's turn (scripts/host-turn.sh, which host-turn.test.ts runs for
+  # real): taken at once, 75 if another check got there first (the host's
+  # "lose" file), or waited for. Which kind of turn goes in turns.log.
+  *"/scripts/host-turn.sh' "*)
+    turn="$(printf '%s' "$cmd" | grep -oE 'host-turn[.]sh. (first|after) (now|wait)' | head -1 | cut -d' ' -f2-)"
+    echo "$host $turn" >>"$FAKE/turns.log"
+    case "$turn" in
+      "first now" | "after now")
+        n="$(cat "$d/lose" 2>/dev/null || echo 0)"
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) >"$d/lose"; [ ! -f "$d/df-after" ] || cp "$d/df-after" "$d/df-out"; [ -f "$d/looks-free" ] || echo busy >"$d/state"; exit 75; fi
+        run_copy now ;;
+      *) wait_line; run_copy "after waiting" ;;
+    esac ;;
   # A host's "lose-ack" file: a withdrawal's rename happens, but its answer
   # never comes back.
   "mv '"*) bash -c "$cmd"; [ ! -f "$d/lose-ack" ] || sleep 30 ;;
@@ -217,7 +221,7 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
   }
   fs.copyFileSync(SCRIPT, path.join(repo, 'scripts', 'check-remote.sh'));
   // What it runs the check under on the host (hangup-guard.sh).
-  for (const f of ['remote-guard-lib.sh', 'hangup-guard.sh']) fs.copyFileSync(path.join(path.dirname(SCRIPT), f), path.join(repo, 'scripts', f));
+  for (const f of ['remote-guard-lib.sh', 'hangup-guard.sh', 'host-turn.sh']) fs.copyFileSync(path.join(path.dirname(SCRIPT), f), path.join(repo, 'scripts', f));
   // What it reads to tell which changes run the Swift tests of the mock runner.
   fs.copyFileSync(path.join(path.dirname(SCRIPT), 'swift-freeze.sh'), path.join(repo, 'scripts', 'swift-freeze.sh'));
   fs.chmodSync(path.join(repo, 'scripts', 'swift-freeze.sh'), 0o755);
@@ -238,6 +242,7 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
       delete base.XDG_CACHE_HOME;
       delete base.THREADBEAR_CHECK_PREFER;
       delete base.THREADBEAR_CHECK_GROUP;
+      delete base.THREADBEAR_CHECK_FIRST;
       const r = spawnSync('bash', [path.join(repo, 'scripts', 'check-remote.sh'), hostList, '--quick', ...flags], {
         encoding: 'utf8',
         env: { ...base, HOME: home, TMPDIR: tmpdir, PATH: `${bin}:${process.env.PATH}`, FAKE: fake, PEEK: peek, THREADBEAR_CHECK_STAY_SECS: String(staySecs), ...env },
@@ -248,7 +253,7 @@ export function setup(hosts: Record<string, Host>, opts: { home?: string } = {})
         const runs = path.join(fake, h, 'home', '.cache', 'threadbear-check', 'runs');
         return fs.existsSync(runs) ? fs.readdirSync(runs) : [];
       };
-      return { ...r, waits: read('waits.log'), ssh: read('ssh.log'), sshOpts: read('ssh-opts.log'), rsyncPeek: read('rsync-peek'), copies: read('copies.log').trim().split('\n').filter(Boolean), left, peek: read('peek') };
+      return { ...r, waits: read('waits.log'), turns: read('turns.log'), ssh: read('ssh.log'), sshOpts: read('ssh-opts.log'), rsyncPeek: read('rsync-peek'), copies: read('copies.log').trim().split('\n').filter(Boolean), left, peek: read('peek') };
     },
   };
 }

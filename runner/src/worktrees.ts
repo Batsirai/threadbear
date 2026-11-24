@@ -2552,6 +2552,11 @@ function runCheck(command: string, cwd: string, shell = ['/bin/sh', '-c'], extra
     if (!extraEnv.THREADBEAR_CHECK_FRESH) delete env.THREADBEAR_CHECK_FRESH;
     if (!extraEnv.THREADBEAR_CHECK_HOST_ONLY) delete env.THREADBEAR_CHECK_HOST_ONLY;
     env.THREADBEAR_CHECK_BUSY_EXIT = extraEnv.THREADBEAR_CHECK_BUSY_EXIT ?? String(CHECK_HOSTS_UNAVAILABLE);
+    // A landing's check: every landing waits while it does, so on a check
+    // host it goes ahead of agents' builds and checks waiting there, and it
+    // never stays in line on a busy host while another could take it
+    // (scripts/host-turn.sh, check-remote.sh). 23 Nov: 2.6 hours of them.
+    env.THREADBEAR_CHECK_FIRST = '1';
     if (!extraEnv.THREADBEAR_CHECK_MAX_SECS && limitMs !== undefined) delete env.THREADBEAR_CHECK_MAX_SECS;
     // A group of its own when it has a limit, so the ssh and whatever else
     // it started go with it.

@@ -1197,3 +1197,86 @@ test("a measurement from an older perf-lock.pl, waiting without the gate, still 
   assert.equal(await a.done, 0, a.output);
   assert.equal(await b.done, 0, b.output);
 });
+
+// A landing's check, or the app's update build, waiting on the host goes
+// ahead of builds and measurements (scripts/host-turn.sh's first/ marks).
+// 24 Nov: landings waited hours behind agents' builds on Tinker Desk, and the
+// update build was put off 1,162 times in 1,350 tries.
+async function holdMark(t: TestContext, home: string, name: string) {
+  const dir = path.join(home, '.cache/threadbear-check/first');
+  fs.mkdirSync(dir, { recursive: true });
+  const holder = spawn('perl', ['-MFcntl=:flock', '-e', 'open(my $f, ">>", $ARGV[0]) or die $!; flock($f, LOCK_EX) or die $!; $|=1; print "held\\n"; sleep 300', path.join(dir, name)], { stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => holder.kill('SIGKILL'));
+  await new Promise((r) => holder.stdout!.once('data', r));
+  return holder;
+}
+
+test("a build lets a landing's check waiting on the host go first, and an updater defers to it", async (t) => {
+  const { h, build, end } = builds(t, 2);
+  const mark = await holdMark(t, h.home, '0738141-123-0');
+  const a = build('a');
+  await until(() => a.output.includes("Letting a landing's check or the app's update build go first"), 'a did not let the landing go first');
+  assert.doesNotMatch(a.output, /a started/);
+  const shim = path.join(h.home, 'try.pl');
+  fs.writeFileSync(shim, `exec 'perl', ${JSON.stringify(helper)}, '--build', '--try', @ARGV;`);
+  const updater = h.run(['sh', '-c', 'echo updater-ran'], {}, undefined, false, shim);
+  assert.equal(await updater.done, 75, updater.output);
+  // A mark nobody holds any more (its run was killed) holds nothing up.
+  mark.kill('SIGKILL');
+  await until(() => a.output.includes('a started'), 'a did not start once the landing had gone');
+  end('a');
+  assert.equal(await a.done, 0, a.output);
+});
+
+test("the app's update build goes ahead of builds waiting before it, and doesn't defer to them", async (t) => {
+  // One build at a time, so each waits at the gate.
+  const { h, build, end } = builds(t);
+  const shim = path.join(h.home, 'build.pl');
+  const first = { THREADBEAR_PERF_LOCK_FIRST: '1' };
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const b = build('b');
+  await until(() => b.output.includes('Waiting for'), 'b did not wait behind a');
+  const until2 = (name: string) => ['sh', '-c', `echo ${name} started; while [ ! -e "$HOME/end-${name}" ]; do sleep 0.05; done; echo ${name} ended`];
+  const u = h.run(until2('u'), first, undefined, false, shim);
+  const marks = () => { try { return fs.readdirSync(path.join(h.home, '.cache/threadbear-check/first')); } catch { return []; } };
+  await until(() => marks().length === 1, 'the update build left no mark');
+  end('a');
+  await until(() => u.output.includes('u started'), 'the update build did not start once a ended');
+  assert.doesNotMatch(b.output, /b started/, 'b went ahead of the update build');
+  // In, its mark is gone.
+  assert.deepEqual(marks(), []);
+  end('u');
+  await until(() => b.output.includes('b started'), 'b did not start after the update build');
+  end('b');
+  for (const r of [a, u, b]) assert.equal(await r.done, 0, r.output);
+  // As a try, it runs ahead of a run that's only queued, rather than deferring.
+  const waiting = path.join(h.home, '.cache/threadbear-perf.lock.waiting');
+  fs.mkdirSync(waiting, { recursive: true });
+  fs.writeFileSync(path.join(waiting, String(process.pid)), `${Math.floor(Date.now() / 1000)}\ngate\n`);
+  const tryShim = path.join(h.home, 'try-first.pl');
+  fs.writeFileSync(tryShim, `exec 'perl', ${JSON.stringify(helper)}, '--build', '--try', @ARGV;`);
+  const tried = h.run(['sh', '-c', 'echo updater-ran'], first, undefined, false, tryShim);
+  assert.equal(await tried.done, 0, tried.output);
+  assert.match(tried.output, /updater-ran/);
+});
+
+test("a measurement through the gate, waiting for builds to end, gives the gate to a landing's check", async (t) => {
+  // With two builds at once, a run through the gate waited out a whole build
+  // ahead of a landing's check (Codex's review, 24 Nov).
+  const { h, build, alone, end } = builds(t, 2);
+  const a = build('a');
+  await until(() => a.output.includes('a started'), 'a did not start');
+  const m = alone('m');
+  await until(() => m.output.includes('Waiting for'), 'm did not wait for the build');
+  const mark = await holdMark(t, h.home, 'landing-run');
+  await until(() => m.output.includes("Letting a landing's check or the app's update build go first"), 'm kept the gate');
+  // The gate is free for the landing's check now.
+  const gate = path.join(h.home, '.cache/threadbear-check/gate');
+  await until(() => spawnSync('perl', ['-MFcntl=:flock', '-e', 'open(my $f, ">>", $ARGV[0]) or exit 2; exit(flock($f, LOCK_EX | LOCK_NB) ? 0 : 1)', gate]).status === 0, 'the gate stayed taken');
+  mark.kill('SIGKILL');
+  end('a');
+  await until(() => m.output.includes('m started'), 'm did not start once the landing and a had gone');
+  end('m');
+  for (const r of [a, m]) assert.equal(await r.done, 0, r.output);
+});

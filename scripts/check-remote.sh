@@ -82,6 +82,13 @@ if [ "${1:-}" = "--on-host" ]; then
     -mmin +720 -exec rm -rf {} + 2>/dev/null
   # A checkout's mirror that hasn't sent a run for a week (a removed worktree).
   find "$base/mirror" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null
+  # This run has the host now, so it's no longer waiting to go first
+  # (scripts/host-turn.sh); and markers runs that were killed left.
+  rm -f "$base/first/$id"
+  find "$base/first" -mindepth 1 -maxdepth 1 -mmin +720 -exec rm -f {} + 2>/dev/null
+  # Says to what this run starts that it already has the host: a `heavy` job
+  # in it doesn't wait for a landing's check waiting for this one to end.
+  export THREADBEAR_HOST_TURN=1
   # Folders this run makes are private whatever the host's umask (see probe).
   umask 022
   mkdir -p "$TMPDIR"
@@ -786,7 +793,9 @@ leave_line() {
     # Still there after a claim: it never reached the host, so claim again.
     free_elsewhere || continue
     claimed=1
-    timed "$ASK_SECS" "${SSH[@]}" "$HOST" "mv '$remote_run' '$remote_run.withdrawn'" >/dev/null 2>&1 </dev/null
+    # Its mark as a landing's check waiting there goes too, so nothing on
+    # that host waits for a check that isn't coming (scripts/host-turn.sh).
+    timed "$ASK_SECS" "${SSH[@]}" "$HOST" "mv '$remote_run' '$remote_run.withdrawn'; rm -f '$remote_base/first/$id'" >/dev/null 2>&1 </dev/null
     where="$(where_is_copy)"
     [ "$where" != started ] || return 1
     [ "$where" != withdrawn ] || break
@@ -930,6 +939,17 @@ rewrite_logs() {
 # tests.
 copied_host="" copy_secs=0 moves=""
 stay_secs="${THREADBEAR_CHECK_STAY_SECS:-60}"
+# A landing's check (THREADBEAR_CHECK_FIRST, from tb land) goes ahead of
+# whatever else is waiting on its host (scripts/host-turn.sh), and never
+# stays in line on a busy host for its copy's sake: every other landing waits
+# while it does. A copy is seconds since each checkout has a mirror there,
+# and a slow one (949 s to Tinker Desk on 23 Nov, behind builds) says more
+# about the host than the link. So it always looks for a free host instead.
+TURN=after
+if [ "${THREADBEAR_CHECK_FIRST:-}" = 1 ]; then
+  TURN=first
+  stay_secs=999999999
+fi
 while :; do
   # A disk that's filled up since (the check that won may have done it) is no
   # place to wait: choosing again passes it over and deletes the copy.
@@ -1073,26 +1093,20 @@ while :; do
   # start (Codex's review). One that loses its ssh while waiting for the lock
   # stops as soon as it gets it.
   guarded="$(guarded_cmd "$guard_pid" /bin/bash -c "$inner")"
-  lock="$remote_base/lock"
   # The host's gate (scripts/perf-lock.pl) first, held throughout as the
   # check has the host alone: builds that share the host hold the check lock
   # shared, and macOS grants a shared lock even while this waits for it, so
   # without the gate a stream of overlapping builds would keep a check out.
-  gate="$remote_base/gate"
+  # Then the check lock. scripts/host-turn.sh takes both there, a landing's
+  # check (FIRST) ahead of anything else waiting.
   # A free host is taken without waiting (75 if another check got there
   # first); otherwise this waits for its turn.
   now=0
   [ "$FREE" = 1 ] && [ "$tries" -lt 3 ] && now=1
-  if [ "$HOST_OS" = Linux ]; then
-    # A server that runs its own runner and threads: the check goes in under them.
-    run="nice -n 10 $guarded"
-    if [ "$now" = 1 ]; then remote_cmd="flock -n -E 75 $gate flock -n -E 75 $lock $run"
-    else remote_cmd="flock -n $gate flock -n $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; flock $gate flock $lock $run"; fi
-  else
-    run="$guarded"
-    if [ "$now" = 1 ]; then remote_cmd="/usr/bin/lockf -t 0 -k $gate /usr/bin/lockf -t 0 -k $lock $run"
-    else remote_cmd="/usr/bin/lockf -t 0 -k $gate /usr/bin/lockf -t 0 -k $lock true 2>/dev/null || echo 'Waiting for another check on $HOST to finish...'; /usr/bin/lockf -k $gate /usr/bin/lockf -k $lock $run"; fi
-  fi
+  run="$guarded"
+  # A server that runs its own runner and threads: the check goes in under them.
+  [ "$HOST_OS" != Linux ] || run="nice -n 10 $guarded"
+  remote_cmd="/bin/bash '$remote_run/scripts/host-turn.sh' $TURN $([ "$now" = 1 ] && echo now || echo wait) '$remote_base' $id $(single_quoted "$HOST") $(single_quoted "$run")"
 
   # A failed step's log path is on the host: its logs come back here, and the
   # path in the output is changed to match.

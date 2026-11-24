@@ -455,6 +455,20 @@ their own.
 So a landing waits for at most the check that's running and the next one,
 unless a check fails.
 
+The line moves only as fast as the check hosts let its checks start, as
+every landing waits while one does. On 23 Nov landings' checks waited 2.6
+hours in all, holding the lock, behind agents' builds, spec runs and checks
+on Tinker Desk (one copied there for 949 s and then sat 36 minutes in its
+line), while the cloud box could have run several. So a landing's check
+(`THREADBEAR_CHECK_FIRST`, which tb land sets on every check it runs) goes
+ahead of anything else waiting on its host: other checks, GPUI builds and
+measurements wait while it does, and on Tinker Desk `heavy` starts no job
+(`scripts/host-turn.sh`; it still waits for what's already running). And it
+never stays in line on a busy host while another that can run it is free,
+however long its copy there took (`scripts/check-remote.sh`, `leave_line`).
+A check that needs no Mac goes to the cloud box first (runner.json's
+`checkHosts` order), keeping Tinker Desk for the ones that do.
+
 ### Finding who broke a group
 
 A thread runs a test file or two itself and leaves the whole suite to its
