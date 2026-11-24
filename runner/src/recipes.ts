@@ -22,7 +22,9 @@
 // (Runner.briefFor, instructionsNews). Mike's point: most of what he'd pass
 // on isn't a scheduled job but how he has agents work ("show me a few
 // options", "try it yourself first"), and those lived in his own CLAUDE.md
-// where nobody else could switch them on. Nothing is written to the user's
+// where nobody else could switch them on. Only habits some people want and
+// others don't belong here: what makes every agent use Threadbear well is
+// built into Threadbear instead (FORMAT.md, "What makes a recipe"). Nothing is written to the user's
 // CLAUDE.md or AGENTS.md: off is at once, and Claude and Codex both hear it.
 // Like the standing instructions, a habit steers every thread, so a file
 // alone doesn't count: what's given is the wording as it was when the user

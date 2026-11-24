@@ -437,7 +437,7 @@ test('recipes: no habits while the experiment is off, and one with a setup keeps
 
 test('recipes: the habits that come with Threadbear hold nothing of anyone\'s', () => {
   const habits = readRecipes(BUILTIN_RECIPES_DIR, undefined).filter((r) => r.habit);
-  assert.ok(habits.length >= 3);
+  assert.ok(habits.length >= 1);
   for (const r of habits) {
     assert.doesNotMatch(r.habit ?? '', /Mike|Neon|Codex|Gemini|BrowserBear|ComputerCub|~\/|\/Users\//, r.id);
     assert.ok(r.about, r.id);

@@ -10,6 +10,20 @@ go in your recipes folder (`~/ThreadbearThreads/recipes` unless runner.json's
 `recipes.folder` says otherwise), one folder each. A folder there with the same
 id as one that comes with Threadbear is used in its place.
 
+## What makes a recipe
+
+A recipe is something extra you choose: a routine (a morning brief, a weekly
+look back, a standup draft) or a way of working not everyone wants (always
+show me three options). Two kinds of thing don't belong here:
+
+- What every agent should do anyway to use Threadbear well (try a step before
+  handing it over, put options in the review window). That goes in Threadbear
+  itself, so a new user gets it from their first thread without switching
+  anything on. Mike's call on 24 Nov 2026, after the first habit recipes
+  turned out to repeat what agents already did.
+- Generic advice any model already follows (give links, be concise). It costs
+  every thread and changes nothing.
+
 ## The file
 
 ```
