@@ -449,6 +449,12 @@ File references are where to look.
   in an empty folder under your temp folder (`threadbear-acp-session-*`),
   removed when it ends, as Antigravity writes a `skills/` folder into the
   folder its session opens in. Threadbear never updates or downloads it.
+  To show how much of your Google plan is left, it also starts it for a few
+  seconds a minute after the runner starts, every 10 minutes after that and
+  shortly after each Gemini turn (at most every 2 minutes), in an empty
+  folder under your temp folder (`threadbear-acp-*`, removed after), and asks
+  it `/usage`, which the server answers itself without a model turn
+  (`runner/src/adapters/acp/agy-usage.ts`, `runner/src/limit-recheck.ts`).
 - **New installs start threads on Auto.** On Auto, Claude runs with its
   safety check approving or blocking each action, and Codex asks before
   edits. An install set up before 9 Nov 2026 keeps starting threads on
@@ -931,7 +937,7 @@ File references are where to look.
 | OpenCode's Zen (opencode.ai), models.dev, and whichever providers you've logged it into | theirs | Only with a thread on OpenCode: that thread's prompts and tool output, through the official CLI, and small jobs' text when a pool of only OpenCode logins is picked for them in Settings |
 | Cursor (api2.cursor.sh) | theirs | Only with a thread on Cursor: the same, on your own login |
 | xAI (cli-chat-proxy.grok.com and Grok's other services) | theirs | Only with a thread on Grok: the same, on your own login, and small jobs' text when a pool of only Grok logins is picked for them in Settings. After a Grok turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cli-chat-proxy.grok.com as it does for the others |
-| Google (cloudcode-pa.googleapis.com and Antigravity's other services) | theirs | Only with a thread on Gemini: the same, on your own Google login. After a Gemini turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cloudcode-pa.googleapis.com as it does for the others |
+| Google (cloudcode-pa.googleapis.com and Antigravity's other services) | theirs | With a thread on Gemini: the same, on your own Google login. When Gemini is set up, also its every-10-minute `/usage` read, which asks Google for your plan's quota. After a Gemini turn fails because the API couldn't be reached, the runner opens (and closes) a connection to cloudcode-pa.googleapis.com as it does for the others |
 | Fly.io (api.machines.dev) | yours, if you set it up | Never from the Mac: only from your Convex deployment, and only once you've made a virtual runner there (`boxes:setRunnerService`, docs/virtual-runners.md) and set `FLY_API_TOKEN` and `FLY_APP` on the deployment. It makes, pauses, resumes, lists and deletes a Fly Machine for each thread on a virtual runner (`convex/boxService.ts`, `convex/boxProviders/fly.ts`), and every 10 minutes lists them to delete any nobody wants. A machine's environment holds only your deployment's address and a single-use boot token that lapses in 10 minutes, and its tags name the box's rows. |
 | Mike's push relay | Mike's | Only when a paired iPhone or Android phone gets a notification (an Android phone's goes on to Google's Firebase Cloud Messaging, from the relay). It's sent from your Convex deployment, not the Mac. The text is encrypted for the phone; the relay sees the device token and thread id (`convex/push.ts`, `docs/push-relay.md`). The first time, your deployment registers with it, giving its own address; the relay keeps that address and checks it by posting a one-time code back to your deployment's `/relay/verify` (`convex/http.ts`). |
 | A UnifiedPush server (ntfy.sh or whichever distributor the phone uses) | the distributor's | Only with the Android app's F-Droid build paired: each notification is posted from your Convex deployment, not the Mac, to the https address the phone's distributor gave it, encrypted so the server sees neither the text nor the thread (`convex/push.ts` `sendWebPush`, `docs/push-relay.md`, "UnifiedPush"). Private and local addresses are refused. |

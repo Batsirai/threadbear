@@ -58,6 +58,10 @@ export type AcpAdapterDeps = {
   dataDir?: string;
 };
 
+// How often a login whose turns don't report its limits is read (an agent
+// whose AcpAgent.limits is a usage command).
+export const LIMITS_POLL_MS = 10 * 60_000;
+
 // "Always allow" for a file edit: the thread's edits, while they aren't to
 // a file that runs as code. A command's rule is the exact command in that
 // folder (codex/approvals.ts).
@@ -136,38 +140,23 @@ export class AcpAdapter implements AgentAdapter {
   readonly settingsApplyNextTurn = true;
   readonly wakesAfterTasks = false;
   // Only for an agent that can say (AcpAgent.limits): limit-recheck.ts
-  // takes any adapter with one as able to read.
+  // takes any adapter with one as able to read. null when the agent said
+  // nothing that reads (or didn't list its usage command): never a reason
+  // to show an error.
   readonly readLimits?: (account: Account) => Promise<Limits | null>;
+  // An agent whose turns carry no reading (one read by a usage command,
+  // Gemini): limit-recheck.ts reads it this often, and soon after its turns.
+  readonly limitsPollMs?: number;
   private deps: AcpAdapterDeps;
 
   constructor(deps: AcpAdapterDeps) {
     this.deps = deps;
     this.provider = deps.agent.provider;
     const limits = deps.agent.limits;
-    if (limits) this.readLimits = (account) => this.limitsNow(account, limits);
-  }
-
-  // A login's limits from a process of its own, started for this and
-  // closed after: initialize, then the agent's request. No session is
-  // opened, so nothing shows in the agent's own list.
-  private async limitsNow(account: Account, limits: NonNullable<AcpAgent['limits']>): Promise<Limits | null> {
-    const { deps } = this;
-    const bin = this.binary();
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
-    let p: AcpProcess;
-    try {
-      p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, noTools: true, binary: bin }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label: `limits:${account.id}`, timings: deps.timings });
-    } catch (e) {
-      removeQuietly(cwd);
-      throw e;
-    }
-    try {
-      const init = await p.start();
-      if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
-      return limits.read(await p.request(limits.method, {})) ?? null;
-    } finally {
-      await p.close().catch(() => undefined);
-      removeQuietly(cwd);
+    if (limits && 'method' in limits) this.readLimits = (account) => this.limitsNow(account, limits);
+    else if (limits) {
+      this.readLimits = (account) => this.usageNow(account, limits);
+      this.limitsPollMs = LIMITS_POLL_MS;
     }
   }
 
@@ -199,28 +188,122 @@ export class AcpAdapter implements AgentAdapter {
   // folder of temp means it's in nobody's way, and it's closed where the
   // agent can.
   async models(account: Account): Promise<ModelChoice[]> {
+    return this.shortLived(account, `models:${account.id}`, async (_p, r) => modelChoices(r?.configOptions, r?.models));
+  }
+
+  // A login's limits from the agent's own request (Grok's _x.ai/billing):
+  // initialize, then the request. No session is opened, so nothing shows in
+  // the agent's own list.
+  private async limitsNow(account: Account, limits: Extract<NonNullable<AcpAgent['limits']>, { method: string }>): Promise<Limits | null> {
+    return this.shortLived(account, `limits:${account.id}`, async (p) => limits.read(await p.request(limits.method, {})) ?? null, { session: false, noTools: true, deadlineMs: LIMITS_DEADLINE_MS });
+  }
+
+  // A login's limits from the agent's own usage command (Antigravity's
+  // /usage), which it answers itself in a session with no model turn.
+  private async usageNow(account: Account, limits: Extract<NonNullable<AcpAgent['limits']>, { command: string }>): Promise<Limits | null> {
+    return this.shortLived(
+      account,
+      `usage:${account.id}`,
+      async (p, r, commands) => {
+        if (!r?.sessionId) return null;
+        // Only a command the session lists: anything else would go to the
+        // model as a prompt, and cost a turn.
+        const listed = await commands(USAGE_COMMANDS_WAIT_MS);
+        if (!listed.includes(limits.command)) {
+          this.deps.log.info("the agent didn't list its usage command, so its plan wasn't read", { provider: this.provider });
+          return null;
+        }
+        let text = '';
+        const sessionId = r.sessionId;
+        p.onNotification = (method, params) => {
+          if (method !== 'session/update' || !isPlainObject(params) || params.sessionId !== sessionId || !isPlainObject(params.update)) return;
+          const u = params.update;
+          if (u.sessionUpdate === 'agent_message_chunk' && isPlainObject(u.content) && u.content.type === 'text' && typeof u.content.text === 'string' && text.length < USAGE_TEXT_MAX) text += u.content.text;
+        };
+        await p.request('session/prompt', { sessionId, prompt: [{ type: 'text', text: `/${limits.command}` }] }, USAGE_PROMPT_MS);
+        // Not even the plan's name without a reading: any reading, a
+        // plan-only one too, stamps the login as read now, which would hide
+        // how old its windows are and drop any whose reset has passed
+        // (usage.ts compute).
+        const read = limits.read(text, r);
+        if (!read && text) this.deps.log.info("the agent's usage answer didn't read", { provider: this.provider, chars: text.length });
+        return read ?? null;
+      },
+      { deadlineMs: LIMITS_DEADLINE_MS },
+    );
+  }
+
+  // A process of its own for a small job, in an empty temp folder: closed,
+  // with its folder, however the job ends. With a session (unless session
+  // is false), `commands` waits (up to ms) for the session's
+  // available_commands_update, which comes just after session/new answers,
+  // and says the names it listed. deadlineMs: the whole job, start to
+  // close, after which its process is killed (which fails whatever it's
+  // waiting on), so a hung agent never outlives the read that started it.
+  private async shortLived<T>(
+    account: Account,
+    label: string,
+    job: (p: AcpProcess, session: SessionResult | undefined, commands: (ms: number) => Promise<string[]>) => Promise<T>,
+    o: { session?: boolean; noTools?: boolean; deadlineMs?: number } = {},
+  ): Promise<T> {
     const { deps } = this;
     const bin = this.binary();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'threadbear-acp-'));
     let p: AcpProcess;
     try {
-      p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label: `models:${account.id}`, timings: deps.timings });
+      p = new AcpProcess({ binary: bin, args: deps.agent.args({ dataDir: deps.dataDir, binary: bin, ...(o.noTools ? { noTools: true } : {}) }), env: this.env(account, bin), cwd, registry: deps.registry, log: deps.log, label, timings: deps.timings });
     } catch (e) {
-      fs.rmSync(cwd, { recursive: true, force: true });
+      removeQuietly(cwd);
       throw e;
     }
+    let listed: string[] | undefined;
+    let wake: (() => void) | undefined;
+    p.onNotification = (method, params) => {
+      if (method !== 'session/update' || !isPlainObject(params) || !isPlainObject(params.update) || params.update.sessionUpdate !== 'available_commands_update') return;
+      const cmds = params.update.availableCommands;
+      listed = Array.isArray(cmds) ? cmds.flatMap((c) => (isPlainObject(c) && typeof c.name === 'string' ? [c.name] : [])) : [];
+      wake?.();
+    };
+    const commands = (ms: number): Promise<string[]> =>
+      listed
+        ? Promise.resolve(listed)
+        : new Promise((resolve) => {
+            const t = setTimeout(() => resolve(listed ?? []), ms);
+            t.unref();
+            wake = () => (clearTimeout(t), resolve(listed ?? []));
+          });
+    let r: SessionResult | undefined;
+    let init: InitializeResult | undefined;
+    const deadline = o.deadlineMs ? setTimeout(() => p.kill(), o.deadlineMs) : undefined;
+    deadline?.unref();
     try {
-      const init = await p.start();
+      init = await p.start();
       if (!deps.agent.identifies(init)) throw new Error(`The program found for ${providerName(this.provider)} isn't it.`);
-      const r = await p.request<SessionResult>('session/new', { cwd, mcpServers: [] });
-      if (r?.sessionId && init.agentCapabilities?.sessionCapabilities?.close !== undefined) await p.request('session/close', { sessionId: r.sessionId }).catch(() => undefined);
-      return modelChoices(r?.configOptions, r?.models);
+      if (o.session !== false) r = await p.request<SessionResult>('session/new', { cwd, mcpServers: [] });
+      return await job(p, r, commands);
     } finally {
+      if (r?.sessionId && p.alive && init?.agentCapabilities?.sessionCapabilities?.close !== undefined) await p.request('session/close', { sessionId: r.sessionId }, CLOSE_SESSION_MS).catch(() => undefined);
+      clearTimeout(deadline);
       await p.close().catch(() => undefined);
       removeQuietly(cwd);
     }
   }
 }
+
+// How long a usage command's read waits for the session to list its
+// commands, and for the command's answer (Antigravity 1.4.5 lists them with
+// session/new's answer, and answers in under a second).
+const USAGE_COMMANDS_WAIT_MS = 5_000;
+const USAGE_PROMPT_MS = 30_000;
+// A whole read of a login's limits in a process of its own, under
+// limit-recheck's READ_DEADLINE_MS (60 s), so its process is gone before the
+// recheck moves on. Antigravity 1.4.5's /usage takes 4 to 18 s, Grok's
+// _x.ai/billing under a second.
+const LIMITS_DEADLINE_MS = 50_000;
+// A short-lived session's session/close: it's closed anyway after.
+const CLOSE_SESSION_MS = 5_000;
+// More than any answer is: what a runaway one adds past it is dropped.
+const USAGE_TEXT_MAX = 64_000;
 
 type State = 'starting' | 'ready' | 'turn' | 'closing' | 'closed';
 // failure: what the agent said went wrong in the turn outside the prompt's
@@ -1089,12 +1172,14 @@ export class AcpSession implements AgentSession {
   }
 
   // A reading of the login's limits on this thread's own process, for an
-  // agent that can say (AcpAgent.limits): after a turn that ran out of
+  // agent that can say with a request (AcpAgent.limits' method, Grok; a
+  // usage command would be a prompt in the thread's own session, so Gemini's
+  // is read after turns by limit-recheck.ts instead): after a turn that ran out of
   // usage, and at most every LIMITS_EVERY_MS after others. It gives up
   // after TURN_LIMITS_MS, and a failure (the process gone) is only logged.
   private async limitsAfter(result: TurnResult): Promise<void> {
     const limits = this.deps.agent.limits;
-    if (!limits || !this.proc.alive || result.outcome === 'interrupted') return;
+    if (!limits || !('method' in limits) || !this.proc.alive || result.outcome === 'interrupted') return;
     const ran = result.errorKind === 'usageLimit';
     if (!ran && (result.outcome !== 'completed' || (this.limitsReadAt !== undefined && this.now() - this.limitsReadAt < LIMITS_EVERY_MS))) return;
     this.limitsReadAt = this.now();

@@ -27,7 +27,11 @@
 // as a session opens, asks before every tool in its default mode, and its
 // shell tool's arguments are CommandLine and Cwd. "exec <command>" runs in
 // the first additional directory (where it was told the work is), "read
-// <path>" is its view_file.
+// <path>" is its view_file. Its session/new says the plan's tier, it lists
+// its slash commands just after, and "/usage" is answered by the server with
+// FAKE_ACP_USAGE (or 1.4.5's answer of 23 Nov 2026), with no model turn.
+// FAKE_ACP_NO_USAGE_COMMAND leaves it out of the list, and "/usage" then goes
+// to the model as any prompt would.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -301,7 +305,26 @@ async function prompt(id, p) {
   send({ id, result: { stopReason: 'end_turn' } });
 }
 
+const AGY_USAGE = `### Session Usage
+- **Session total:** data not available yet
+
+### Quota Limits
+- **Gemini Models**
+  *(Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Gemini 3.8 Flash)*
+  - **Weekly Limit Remaining:** 55% remaining (resets Nov 28, 2026, 08:49 UTC)
+  - **Five Hour Limit Remaining:** 91% remaining (resets Nov 23, 2026, 09:35 UTC)
+- **Claude and GPT models**
+  *(Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B)*
+  - **Weekly Limit Remaining:** 100% remaining (resets Nov 30, 2026, 05:08 UTC)
+  - **Five Hour Limit Remaining:** 100% remaining (resets Nov 23, 2026, 10:08 UTC)
+`;
+
 async function agyPrompt(id, p, s, word, rest) {
+  if (word === '/usage' && !env.FAKE_ACP_NO_USAGE_COMMAND) {
+    log({ usageCommand: true });
+    update(p.sessionId, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: env.FAKE_ACP_USAGE ?? AGY_USAGE } });
+    return send({ id, result: { stopReason: 'end_turn' } });
+  }
   const tool = async (kind, title, rawInput, extra, run) => {
     const toolCallId = `call-${Math.random().toString(36).slice(2)}`;
     update(p.sessionId, { sessionUpdate: 'tool_call', toolCallId, title, kind, status: 'pending', rawInput });
@@ -388,6 +411,11 @@ const handlers = {
     sessions.set(sessionId, { cwd: p.cwd, dirs: p.additionalDirectories, steps: 0 });
     openedSession(p.cwd);
     log({ newSession: { cwd: p.cwd, mcpServers: p.mcpServers, ...(p.additionalDirectories ? { additionalDirectories: p.additionalDirectories } : {}) } });
+    if (AGY) {
+      const commands = [{ name: 'plan', description: 'Plan carefully' }, { name: 'logout', description: 'Log out' }, ...(env.FAKE_ACP_NO_USAGE_COMMAND ? [] : [{ name: 'usage', description: 'Show model token usage and quota limits.' }])];
+      setImmediate(() => update(sessionId, { sessionUpdate: 'available_commands_update', availableCommands: commands }));
+      return { sessionId, configOptions: configOptions(), _meta: { antigravity: { tier: { name: 'Google AI Ultra', id: 'g1-ultra-lite-tier' } } } };
+    }
     return { sessionId, configOptions: configOptions(), ...(GROK ? { models: grokModels() } : {}) };
   },
   'session/resume': (p) => {

@@ -1705,9 +1705,16 @@ says little; with no week before to go by, the line just says when it
 resets. A sign-in that's ending or has ended shows under its row even when it's
 shut.
 
+A Gemini login on a Google AI plan shows the plan's 5-hour and weekly
+windows for the Gemini models, which Threadbear reads from Gemini's own
+`/usage` every 10 minutes and after each Gemini turn (it costs nothing), with
+the plan's Claude and GPT models' week as a meter of its own that never makes
+the login look full.
+
 A login with no number yet says why on its row, with a dashed ring: a
 Claude or Codex login that hasn't run a turn here yet; a Grok login
-Threadbear hasn't read yet (it reads one a minute after it starts); or OpenCode,
+Threadbear hasn't read yet (it reads one a minute after it starts); Gemini,
+before its first reading; or OpenCode,
 whose own models spend a balance rather than a weekly limit.
 
 A Claude login with a limit of its own on Fable shows that week too,

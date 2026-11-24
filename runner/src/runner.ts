@@ -3169,6 +3169,9 @@ export class Runner {
     // when their parent's next turn ended, while Mike was away, and the CLI
     // told the parent he had stopped them (7 Nov 2026, thread 7a98a6fd).
     this.expireApprovals(st, 'The turn ended.', { mainOnly: true });
+    // A login whose turns bring no usage reading (Gemini) is read soon after:
+    // the one the turn ran on, which a move mid-turn has taken off rec.
+    this.limitRecheck?.afterTurn(rt.sessionAccountId ?? rec.accountId);
     let turnCost: number | undefined;
     if (r.totalCostUsd !== undefined) {
       // total_cost_usd is a running total for the native session (resume

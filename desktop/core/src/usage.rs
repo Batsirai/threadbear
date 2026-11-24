@@ -1701,11 +1701,17 @@ pub struct Unknown {
 /// Why there's no reading, by provider. Claude and Codex report theirs on
 /// every turn, so one with none hasn't run a turn here. The runner reads a
 /// Grok login's plan from Grok a minute after it starts (`_x.ai/billing`,
-/// since 24 Nov 2026), so one with none hasn't been read yet; OpenCode's own
-/// models bill a balance.
+/// since 24 Nov 2026), and a Gemini login's from its own `/usage` every 10
+/// minutes and after each of its turns (since 23 Nov 2026), so one with none
+/// hasn't been read yet (or its answer didn't read); OpenCode's own models
+/// bill a balance.
 pub fn unknown_reason(provider: &str, provider_name: &str) -> Unknown {
     let (text, tip) = match provider {
         "claude" | "codex" | "" => ("No turn has run on it yet".to_owned(), "Its limit shows after its first turn here".to_owned()),
+        "antigravity" => (
+            "No reading from Gemini yet".to_owned(),
+            "Threadbear asks Gemini how much of your Google plan is left every 10 minutes and after each Gemini turn".to_owned(),
+        ),
         "grok" => (
             "Not read yet".to_owned(),
             "Threadbear asks Grok how much of its plan is left a minute after the runner starts, and after Grok turns".to_owned(),

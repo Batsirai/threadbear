@@ -11,9 +11,11 @@ import type { InitializeResult } from './connection.ts';
 import { exeName } from '../../platform.ts';
 import { grokGuardDir, grokTrusts, guardPluginName } from './grok-guard.ts';
 import { GROK_BILLING_METHOD, grokLimits } from './grok-billing.ts';
+import { agyLimits } from './agy-usage.ts';
 import type { AdapterOutput } from '../types.ts';
 
 export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok' | 'antigravity'>;
+type AcpLimits = Extract<AdapterOutput, { kind: 'limits' }>;
 
 // What a process is started for: the runner's data dir (where Grok's hook
 // lives), and whether it's a small job that may use no tools at all.
@@ -81,10 +83,16 @@ export type AcpAgent = {
   // binary: the program the thread runs, for a refusal that depends on its version.
   refuses?(o: { cwd: string; mode: PermissionMode; trusted?: boolean; binary?: string }): string | undefined;
   // How the agent says how much of its plan a login has left without a
-  // turn: the request to send after initialize, and its answer as a
-  // reading (Grok's _x.ai/billing: grok-billing.ts). Read after turns and
-  // by limit-recheck.ts.
-  limits?: { method: string; read(result: unknown): Extract<AdapterOutput, { kind: 'limits' }> | undefined };
+  // model turn, so a read costs nothing. Either a request to send after
+  // initialize, with no session, and its answer as a reading (Grok's
+  // _x.ai/billing: grok-billing.ts), read on a thread's own process after
+  // turns and by limit-recheck.ts; or a slash command the agent answers
+  // itself in a session (Antigravity's /usage: agy-usage.ts), sent only when
+  // the session lists it among its commands, read with its answer's text and
+  // session/new's result. That one's turns carry no reading, so the runner
+  // reads it in a short-lived process every few minutes and soon after each
+  // of its turns (AcpAdapter.limitsPollMs, limit-recheck.ts).
+  limits?: { method: string; read(result: unknown): AcpLimits | undefined } | { command: string; read(text: string, session: unknown): AcpLimits | undefined };
 };
 
 function isExecutableFile(file: string): boolean {
@@ -409,6 +417,7 @@ const ANTIGRAVITY: AcpAgent = {
   folderNote: (cwd) => `The project you're working in is ${cwd}: run commands there and use full paths under it. Your session's own folder is only a scratch space.`,
   toolInput: antigravityInput,
   readsInFolderGoAhead: ANTIGRAVITY_READ_KEYS,
+  limits: { command: 'usage', read: agyLimits },
   // An MCP tool's request says its server and tool in _meta.mcp (1.4.5).
   mcpToolName(call) {
     const meta = (call as { _meta?: unknown })._meta;

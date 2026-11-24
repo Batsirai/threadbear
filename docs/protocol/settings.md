@@ -104,6 +104,25 @@ where it installs (Antigravity: an `agy_acp_server.par` on the PATH).
   its MCP calls say `_meta.mcp: { server, tool }`. Keys for Google's API in
   the runner's environment are blanked, so its Google sign-in is what's used.
   It has no updater, so Update does nothing for it.
+- **Gemini's plan usage** (since 23 Nov 2026). Antigravity's turns carry no
+  usage reading, so the runner reads the Google plan's quota itself with the
+  server's own `/usage` command, which it answers in its ACP layer with no
+  model turn and no quota spent: a short-lived process in an empty temp folder
+  (`session/new`, then `session/prompt` with the text `/usage` only if the
+  session's `available_commands_update` lists `usage`, then `session/close`).
+  It's read a minute after the runner starts, whenever its last reading or
+  try is 10 minutes old (`LIMITS_POLL_MS`), and 5 seconds after a Gemini turn
+  ends, at most every 2 minutes (`runner/src/limit-recheck.ts`). The answer
+  is markdown, not a contract (`runner/src/adapters/acp/agy-usage.ts`): the
+  "Gemini Models" group's weekly and 5-hour lines become the login's
+  `weekly` and `five_hour` windows (remaining percent, resets read only when
+  they say UTC), which decide its room as Claude's and Codex's do, with
+  `blocked` when either is under 1%. Any other group ("Claude and GPT
+  models") adds a `weekly_model` window, `Weekly <group>`, and an `other`
+  one, `5-hour <group>`, which never decide it. `plan` is session/new's
+  `_meta.antigravity.tier.name` ("Google AI Ultra"), sent only with a reading. An answer that doesn't
+  read, or no Gemini group (or two), is no reading: nothing is recorded and
+  nothing is shown as an error. The login's token is never read.
 - **Cards for ACP tools.** Every frame of a tool call (its updates and its
   permission requests) is kept by id for the session, and a call is judged
   on all of them: what it said earlier can't be washed out by a later
@@ -713,7 +732,8 @@ thread to another login when the one it's on runs out of room.
   reading is 10 minutes old or more and its provider can read without a
   turn (Codex: `account/rateLimits/read` in a short-lived app-server;
   Grok: `_x.ai/billing` in a short-lived `grok agent`, since 24 Nov 2026;
-  `runner/src/limit-recheck.ts`). The answer goes into the usage store
+  `runner/src/limit-recheck.ts`). Gemini is read this way all the time, not
+  only when it's out (ACP agents, "Gemini's plan usage"). The answer goes into the usage store
   like a turn's, so room lifts the block and threads waiting for room
   carry on by themselves. A recheck that finds room in every window it
   names also ends the block a turn that ran dry put on the login, and a

@@ -192,6 +192,8 @@ test('readLimits asks a short-lived Grok for _x.ai/billing, opening no session',
   const lines = fs.readFileSync(path.join(root, 'agent.log'), 'utf8').trim().split('\n').map((x) => JSON.parse(x));
   assert.ok(lines.some((x) => x.billing));
   assert.ok(!lines.some((x) => x.newSession), 'no session in Grok\'s own list');
+  // Its turns read it on their own process, so it isn't polled as Gemini is.
+  assert.equal(adapter.limitsPollMs, undefined);
   // An agent that can't say has no readLimits, so limit-recheck passes it by.
   assert.equal(new AcpAdapter({ agent: ACP_AGENTS.opencode, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run2'), nullLogger), log: nullLogger }).readLimits, undefined);
 });
@@ -226,8 +228,8 @@ test('a login with no reading at all is read once; one with room is left alone',
   // Held out after a run-dry: read again on our own schedule, however fresh
   // the turns' readings are.
   const justRead: Account = { ...fine, usage: { ...fine.usage!, readAt: new Date(now - 60_000).toISOString() } };
-  assert.equal(dueForRecheck(justRead, true, now, undefined, true), true);
-  assert.equal(dueForRecheck(justRead, true, now, now - 60_000, true), false);
+  assert.equal(dueForRecheck(justRead, true, now, undefined, { dry: true }), true);
+  assert.equal(dueForRecheck(justRead, true, now, now - 60_000, { dry: true }), false);
 });
 
 for (const bare of [false, true]) {
