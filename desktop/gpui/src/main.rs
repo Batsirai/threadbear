@@ -148,6 +148,7 @@ mod terminal;
 mod terminal_element;
 mod text_services;
 mod thread;
+mod thread_canvas;
 mod thread_link_marks;
 mod thread_map;
 mod thread_palette;

@@ -899,7 +899,7 @@ fn step(
         "dock-move" | "panel" | "float" | "mode" | "zoom" | "rename" | "undo-archive"
         | "open-archived" | "error" | "mouse-button" | "copy-thread-id" | "menus" | "menu-item"
         | "app-menu" | "data-dir" | "share" | "signin" | "edit-message" | "message-words"
-        | "refusal" | "appearance" | "resize" => shell_step(app, cmd, window, cx),
+        | "refusal" | "appearance" | "resize" | "canvas" => shell_step(app, cmd, window, cx),
         "search" => {
             let words = text(cmd, "text").to_string();
             let search = app.read(cx).search.clone();
@@ -1747,6 +1747,9 @@ fn shell_step(
             }
             Ok(json!(format!("ok {}", dock_summary(app, cx))))
         }
+        // The Canvas page (thread_canvas.rs): show it, fly in and out, and
+        // read the board.
+        "canvas" => app.update(cx, |t, cx| t.canvas_command(cmd, window, cx)),
         "mode" => {
             let mode = match cmd["mode"].as_str().unwrap_or("inbox") {
                 "scheduled" => shell::SidebarMode::Scheduled,
