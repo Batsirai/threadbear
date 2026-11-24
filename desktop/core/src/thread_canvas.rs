@@ -984,8 +984,8 @@ mod tests {
         let mut l = Layout::default();
         l.sync(&list, &[("p".into(), "Empty".into(), false)], 10);
         assert!(
-            l.areas.contains_key("p"),
-            "a project with nothing live has its place"
+            !l.areas.contains_key("p"),
+            "a project with nothing live has no area"
         );
         l.camera = Some([0.3, 10., 20.]);
         let back = Layout::from_json(&l.to_json());
