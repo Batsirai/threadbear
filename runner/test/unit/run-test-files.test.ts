@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { PATIENCE_MS } from '../helpers/patience.ts';
+import { NO_SIGNALS_ON_WINDOWS } from '../helpers/platform.ts';
 import { test } from 'node:test';
 
 const helpers = path.resolve(import.meta.dirname, '../helpers');
@@ -85,7 +86,7 @@ test('an option it does not know, a reporter without a destination, or a missing
 
 // Codex's review: run() alone, unlike node --test, leaves the files' own
 // processes running when it's stopped, and the reporters never finish.
-test('stopped with SIGTERM, it ends the files still running and the reporters still say what failed', async (t) => {
+test('stopped with SIGTERM, it ends the files still running and the reporters still say what failed', NO_SIGNALS_ON_WINDOWS, async (t) => {
   const f = files(t, { a: '', long: "fs.writeFileSync(process.env.PID_FILE, String(process.pid)); return new Promise((r) => setTimeout(r, 120_000));" });
   const pidFile = path.join(f.dir, 'pid');
   const failed = path.join(f.dir, 'failed');
