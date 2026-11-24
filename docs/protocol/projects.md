@@ -582,8 +582,10 @@ A habit steers every thread, so a recipe's file alone doesn't count, as
 with the standing instructions. What's given is the wording as it was when
 the user switched the recipe on (`recipes.add`, `recipes.setOn` with `on:
 true`), kept in `recipes.json` with an HMAC of it keyed by the runner's
-token. `recipes.*` aren't open to a thread's own key (connection.md, "A
-thread's own key"), so only the app can switch one on. In `habit`, `text`
+token. The line is the standing instructions' (settings.md): `recipes.*`
+are refused to a thread below Full access (connection.md, "A thread's own
+key"), so such a thread can neither switch one on nor sign one by writing
+files. A thread on Full access can call them, as it can `instructions.set`. In `habit`, `text`
 is the file's wording now and `bytes` its size; `given` says agents are
 being told it; `changed` that the recipe is on but what the file says isn't
 what was switched on (the file was edited, a release changed a built-in's,
