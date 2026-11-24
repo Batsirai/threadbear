@@ -541,8 +541,9 @@ It warns in Updates (including its icon's tooltip) and `tb status` after a newer
 three days of failed checks. The same check reads cef-rs's releases from
 crates.io's index (`index.crates.io/3/c/cef`): when a published `cef` crate
 binds a CEF newer than the pin, the warning asks for an update to it;
-when none does, it says it's waiting on cef-rs, since no agent can move
-the pin without bindings. Beta builds don't count. A later patch doesn't
+when none does, no agent can move the pin, so it's only a quiet line in the
+Updates panel saying it's waiting on cef-rs (`webRuntimeNote`): the icon,
+its tooltip and `tb status` stay clear. Beta builds don't count. A later patch doesn't
 reset the age of a pin that's already behind. Its small cache survives a
 restart and network failures. The warning describes this runner release's
 pin, so an older app can still need its pending app update. Dev runners and

@@ -2422,7 +2422,7 @@ async function dispatch(client, method, p) {
       // Threads named in oldRunners get onOldRunner in their summaries, as
       // the real primary marks a draining runner's threads.
       updates = { state: p.state ?? 'idle', oldRunners: Array.isArray(p.oldRunners) ? p.oldRunners : [] };
-      for (const k of ['commit', 'subject', 'reason', 'launcherReason', 'webRuntimeProblem']) if (typeof p[k] === 'string') updates[k] = p[k];
+      for (const k of ['commit', 'subject', 'reason', 'launcherReason', 'webRuntimeProblem', 'webRuntimeNote']) if (typeof p[k] === 'string') updates[k] = p[k];
       if (p.launcherChanged) updates.launcherChanged = true;
       // Like the real runner since 15 Nov: its update of the launcher stages.
       if (p.launcherChanged && p.launcherStages !== false) updates.launcherStages = true;

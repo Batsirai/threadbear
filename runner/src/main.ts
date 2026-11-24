@@ -1277,6 +1277,8 @@ async function main(): Promise<void> {
     if (u.followProblem) out.followProblem = u.followProblem;
     const webRuntimeProblem = webRuntimeUpdates.problem();
     if (webRuntimeProblem) out.webRuntimeProblem = webRuntimeProblem;
+    const webRuntimeNote = webRuntimeUpdates.note();
+    if (webRuntimeNote) out.webRuntimeNote = webRuntimeNote;
     const behind = sync.behindRunners();
     if (behind.length) out.behindRunners = behind;
     const up = upstream.status();

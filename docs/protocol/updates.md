@@ -47,6 +47,10 @@ type RunnerUpdates = {
   // This release's CEF pin is over 14 days behind stable, or the daily
   // check has failed for 3 days. Also on runner.status as webRuntimeProblem.
   webRuntimeProblem?: string
+  // Over 14 days behind stable, but no cef-rs bindings exist for anything
+  // newer, so nothing can be done yet (from 24 Nov 2026). A quiet line in the
+  // Updates panel: it doesn't show the Updates icon or go in its tooltip.
+  webRuntimeNote?: string
   behindRunners?: { name: string; problem: string }[]
   // Mike's releases, for a fork (below). Left out while off, except on
   // Mike's own runner once it has tagged one.

@@ -203,6 +203,8 @@ export type RunnerUpdates = {
   // This machine isn't following GitHub's main properly (follow-origin.ts).
   followProblem?: string;
   webRuntimeProblem?: string;
+  // Behind, with nothing to do yet (waiting on cef-rs): the panel only.
+  webRuntimeNote?: string;
   // The other runners that say that of themselves, on the main Mac's runner.
   behindRunners?: { name: string; problem: string }[];
   // Someone's own changes to the old Swift app not yet rebuilt in the GPUI

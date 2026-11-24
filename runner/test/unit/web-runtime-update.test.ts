@@ -136,7 +136,7 @@ test('reads the newest CEF cef-rs binds, skipping yanked and prerelease crates',
   assert.equal(newestBindings(''), undefined);
 });
 
-test('says to wait on cef-rs when no bindings are newer than the pin, and to update when some are', async () => {
+test('only notes waiting on cef-rs when no bindings are newer than the pin, and flags an update when some are', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tb-cef-'));
   const clock = new FakeClock(at);
   const stable = '158.0.3+g8c29be2+chromium-158.0.8127.18';
@@ -148,11 +148,13 @@ test('says to wait on cef-rs when no bindings are newer than the pin, and to upd
   try {
     await check.check();
     clock.advance(14 * DAY_MS);
-    assert.equal(check.problem(), `Web runtime: CEF ${PIN.split('+')[0]} is over two weeks behind stable 158.0.3. Waiting on cef-rs to support 158.0.3. Chromium's sandbox is off.`);
-    assert.doesNotMatch(check.problem()!, /agent/);
+    // Nothing anyone can do: a quiet note, not a flagged problem.
+    assert.equal(check.problem(), undefined);
+    assert.equal(check.note(), `Web runtime: CEF ${PIN.split('+')[0]} is over two weeks behind stable 158.0.3. Waiting on cef-rs to support 158.0.3. Chromium's sandbox is off.`);
     crates = [...crates, crate('158.0.0+158.0.3')];
     await check.check();
     assert.match(check.problem()!, /Ask your agent to update it to 158\.0\.3, the newest cef-rs supports\./);
+    assert.equal(check.note(), undefined);
     failing = true;
     await check.check();
     assert.match(check.problem()!, /update it to 158\.0\.3/, 'a failed crates check keeps the last answer');

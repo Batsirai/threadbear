@@ -108,23 +108,39 @@ export class WebRuntimeUpdates {
     this.saved = saved?.pin === PIN ? saved : { pin: PIN };
   }
 
+  // Something to do: flagged on the Updates icon and in tb status.
   problem(): string | undefined {
     if (this.d.installed && !this.d.installed()) return undefined;
     const s = this.saved, now = this.d.clock.now();
     const lines: string[] = [];
-    if (s.behindSince !== undefined && now - s.behindSince >= 14 * DAY_MS) {
-      const pin = PIN.split('+')[0], latest = s.latest?.split('+')[0];
-      const bindings = s.bindings?.split('.').map(Number);
-      // Only a CEF cef-rs has bindings for is one an agent can move to.
-      const next = !bindings ? "Ask your agent to update Threadbear's web runtime."
-        : newer(bindings, parts(PIN)!) ? `Ask your agent to update it to ${s.bindings}, the newest cef-rs supports.`
-        : `Waiting on cef-rs to support ${latest}.`;
-      lines.push(`Web runtime: CEF ${pin} is over two weeks behind stable ${latest}. ${next} Chromium's sandbox is off.`);
-    }
+    const behind = this.behind();
+    if (behind && !behind.waiting) lines.push(behind.line);
     if (s.failingSince !== undefined && now - s.failingSince >= 3 * DAY_MS) {
       lines.push("Couldn't check CEF security updates for three days. The web runtime may be out of date.");
     }
     return lines.length ? lines.join(' ') : undefined;
+  }
+
+  // Behind, but nobody can move it until cef-rs publishes bindings: a quiet
+  // line in the Updates panel, never a flag (Mike, 24 Nov: every flagged
+  // line is one he can act on).
+  note(): string | undefined {
+    if (this.d.installed && !this.d.installed()) return undefined;
+    const behind = this.behind();
+    return behind?.waiting ? behind.line : undefined;
+  }
+
+  private behind(): { line: string; waiting: boolean } | undefined {
+    const s = this.saved;
+    if (s.behindSince === undefined || this.d.clock.now() - s.behindSince < 14 * DAY_MS) return undefined;
+    const pin = PIN.split('+')[0], latest = s.latest?.split('+')[0];
+    const bindings = s.bindings?.split('.').map(Number);
+    // Only a CEF cef-rs has bindings for is one an agent can move to.
+    const waiting = bindings !== undefined && !newer(bindings, parts(PIN)!);
+    const next = !bindings ? "Ask your agent to update Threadbear's web runtime."
+      : waiting ? `Waiting on cef-rs to support ${latest}.`
+      : `Ask your agent to update it to ${s.bindings}, the newest cef-rs supports.`;
+    return { line: `Web runtime: CEF ${pin} is over two weeks behind stable ${latest}. ${next} Chromium's sandbox is off.`, waiting };
   }
 
   start(): void {

@@ -835,11 +835,13 @@ impl Threadbear {
             && launcher.is_none()
             && not_following.is_empty()
             && runner.web_runtime_problem.is_none()
+            && runner.web_runtime_note.is_none()
         {
             out.push(line("The runner is up to date.".to_owned()));
         }
         out.extend(not_following.into_iter().map(line));
         out.extend(runner.web_runtime_problem.clone().map(line));
+        out.extend(runner.web_runtime_note.clone().map(line));
         out.extend(build.map(line));
         if let Some(old) = old {
             out.push(line(old));
@@ -1413,11 +1415,13 @@ impl Threadbear {
                     && launcher.is_none()
                     && not_following.is_empty()
                     && runner.web_runtime_problem.is_none()
+                    && runner.web_runtime_note.is_none()
                 {
                     lines.push("The runner is up to date.".to_owned());
                 }
                 lines.extend(not_following);
                 lines.extend(runner.web_runtime_problem.clone());
+                lines.extend(runner.web_runtime_note.clone());
                 lines.extend(build);
                 if let Some(old) = old {
                     lines.push(old);
