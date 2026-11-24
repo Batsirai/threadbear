@@ -14,6 +14,7 @@ import { backgroundFlag } from './protocol.ts';
 import { parseIsoTime, parseWhen as parseLater, relativeFuture } from './when.ts';
 import { DEV_HELP, formatModels, logsCommand, runDev } from './tb-dev.ts';
 import { findWorktreePatch, isInside } from './patches.ts';
+import { patchCheckCommand } from './patch-check.ts';
 import { TRUST_ALL } from './patch-trust.ts';
 import { checkoutTop, land, landTargetFromGit, realpath, type LandTarget } from './worktrees.ts';
 import { landRefusal, pushAfterLanding } from './follow-origin.ts';
@@ -126,6 +127,7 @@ const HELP = `tb: talk to the Threadbear runner
   tb accounts <account> [--json]  that account's models and its default
   tb pools [--json]               the pools, their logins and room (* new threads start on it)
   tb actions <threadId> [--json]  the thread's actions, panels and patches (from its folder)
+  tb patch-check <file.ts>... [--json]  loads patch files now: each one's load error, or the ids it gives
   tb highlights <threadId> [--json]  what the thread made, shared and pinned, and the librarian's brief
   tb panel <threadId> <panelId> [--json]  draws an image panel or fills a list panel now
   tb show-panel <threadId> <panel> [--reload] [--json]  opens a panel when the user looks at that thread (--reload: its page afresh)
@@ -216,6 +218,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   move: ['to', 'cwd', 'account', 'preview', 'json'],
   delete: [],
   accounts: ['json'],
+  'patch-check': ['json'],
   pools: ['json'],
   schedule: ['at', 'cron', 'tz', 'title', 'thread', 'cwd', 'account', 'pool', 'model', 'effort', 'ask', 'auto', 'full', 'json'],
   schedules: ['json', 'text', 'title', 'at', 'cron', 'tz', 'cwd', 'account', 'pool', 'model', 'effort', 'ask', 'auto', 'full'],
@@ -298,6 +301,8 @@ async function main(argv: string[]): Promise<number> {
     cfg = loadConfig(process.env, { readOnly: true });
   }
   if (cmd === 'logs') return logsCommand(cfg, values);
+  // Loads patch files here, not in the runner: no runner needed.
+  if (cmd === 'patch-check') return patchCheckCommand(args, Boolean(values.json));
   // The app's activity log is files on this Mac: no runner needed.
   if (cmd === 'activity') return activityCommand(cfg, values);
   // Works with no runner too: from any thread/ worktree, by git alone.
