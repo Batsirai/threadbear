@@ -717,7 +717,7 @@ impl Threadbear {
     }
 
     fn is_panel_showing(&self, panel: &str, cx: &App) -> bool {
-        self.dock.read(cx).controller.is_showing(panel)
+        self.dock.read(cx).is_showing(panel)
     }
 
     /// The pane sections open in the dock, in layout order (`openPanes`),

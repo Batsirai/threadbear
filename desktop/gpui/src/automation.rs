@@ -1710,7 +1710,7 @@ fn shell_step(
                     }
                     t.show_pane(id, cx);
                 } else if let Some(show) = cmd["show"].as_bool() {
-                    let shown = t.dock.read(cx).controller.is_showing(shell::HIGHLIGHTS);
+                    let shown = t.dock.read(cx).is_showing(shell::HIGHLIGHTS);
                     if show != shown {
                         t.click_rail(shell::HIGHLIGHTS, cx);
                     }
@@ -1731,7 +1731,6 @@ fn shell_step(
                 .read(cx)
                 .dock
                 .read(cx)
-                .controller
                 .is_showing(cmd["id"].as_str().unwrap_or(shell::HIGHLIGHTS));
             Ok(json!(if showing { "ok showing" } else { "ok hidden" }))
         }

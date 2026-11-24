@@ -2980,7 +2980,7 @@ impl SidePane {
     pub(crate) fn dock_showing(&self, panel: &str, cx: &App) -> bool {
         self.app
             .upgrade()
-            .is_some_and(|app| app.read(cx).dock.read(cx).controller.is_showing(panel))
+            .is_some_and(|app| app.read(cx).dock.read(cx).is_showing(panel))
     }
 
     /// The section that draws what's over the whole pane (a menu, the ⓘ

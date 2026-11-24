@@ -465,7 +465,7 @@ impl Threadbear {
             .thread_panels
             .panes
             .iter()
-            .filter(|(id, _)| self.dock.read(cx).controller.is_showing(&thread_panel(id)))
+            .filter(|(id, _)| self.dock.read(cx).is_showing(&thread_panel(id)))
             .map(|(_, p)| p.pane.clone())
             .collect();
         for pane in showing {
@@ -524,7 +524,7 @@ impl Threadbear {
             }
         }
         for (id, panel) in &self.thread_panels.panes {
-            let behind = !self.dock.read(cx).controller.is_showing(&thread_panel(id));
+            let behind = !self.dock.read(cx).is_showing(&thread_panel(id));
             panel.pane.update(cx, |p, _| p.behind = behind);
         }
         self.mark_thread_panels_seen(cx);
@@ -600,7 +600,7 @@ impl Threadbear {
                     "mode": thread.map(|t| if t.permission_mode.is_empty() { "full" } else { t.permission_mode.as_str() }),
                     "archived": thread.is_some_and(|t| t.is_archived()),
                     "title": self.thread_panel_title(panel),
-                    "showing": self.dock.read(cx).controller.is_showing(panel),
+                    "showing": self.dock.read(cx).is_showing(panel),
                     "transcript": pane.map(|p| p.pane.read(cx).dump(cx)),
                 }))
             })

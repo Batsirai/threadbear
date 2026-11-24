@@ -683,7 +683,7 @@ impl Threadbear {
         // Usage, as a honey pot filled to the room the next thread would get,
         // its tooltip each pool's best room (usage.rs). Toggles its panel
         // under the threads, as VS Code's bar does its views.
-        let usage_shown = self.dock.read(cx).controller.is_showing(shell::USAGE);
+        let usage_shown = self.dock.read(cx).is_showing(shell::USAGE);
         let (pot, tip) = self.honey_pot();
         let mut button = RailButton::new(
             "rail-usage",
@@ -766,7 +766,7 @@ impl Threadbear {
             return div().into_any_element();
         };
         let dock = self.dock.read(cx);
-        let showing = |panel: &str| dock.controller.is_showing(panel);
+        let showing = |panel: &str| dock.is_showing(panel);
         let highlights_shown = showing(shell::HIGHLIGHTS);
         let files_shown = showing(shell::FILES);
         let patches_shown = showing(shell::PATCHES);
@@ -783,10 +783,8 @@ impl Threadbear {
             .into_iter()
             .map(|p| {
                 // Or the thread's pinned copy of it (pinned_panels.rs).
-                let shown = dock.controller.is_showing(&p.id)
-                    || dock
-                        .controller
-                        .is_showing(&crate::pinned_panels::pinned_panel(&thread.id, &p.id));
+                let shown = dock.is_showing(&p.id)
+                    || dock.is_showing(&crate::pinned_panels::pinned_panel(&thread.id, &p.id));
                 (p, shown)
             })
             .collect();
@@ -932,7 +930,7 @@ impl Threadbear {
         if let Some(thread) = self.pane_thread() {
             let project_page = self.projects.open.is_some();
             let dock = self.dock.read(cx);
-            let showing = |p: &str| dock.controller.is_showing(p);
+            let showing = |p: &str| dock.is_showing(p);
             let open_ask = thread
                 .asks
                 .iter()

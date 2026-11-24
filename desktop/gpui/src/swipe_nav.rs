@@ -331,11 +331,7 @@ impl Threadbear {
                             if event.touch_phase == TouchPhase::Started {
                                 this.swipe_nav.board_scroll = this
                                     .panel_available(crate::shell::HIGHLIGHTS, cx)
-                                    && this
-                                        .dock
-                                        .read(cx)
-                                        .controller
-                                        .is_showing(crate::shell::HIGHLIGHTS)
+                                    && this.dock.read(cx).is_showing(crate::shell::HIGHLIGHTS)
                                     && this.pane_thread().is_some_and(|thread| {
                                         this.side.read(cx).board_scroll_at(
                                             &thread,

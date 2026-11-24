@@ -231,7 +231,6 @@ impl SidePane {
         app.read(cx)
             .dock
             .read(cx)
-            .controller
             .is_showing(&threadbear_core::pinned_panels::panel(thread_id, panel_id))
     }
 

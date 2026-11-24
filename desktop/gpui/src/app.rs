@@ -386,11 +386,7 @@ impl Threadbear {
                 let app = watched.upgrade()?;
                 let app = app.read(cx);
                 (app.projects.open.is_none()
-                    && app
-                        .dock
-                        .read(cx)
-                        .controller
-                        .is_showing(crate::agent_browser::BROWSER))
+                    && app.dock.read(cx).is_showing(crate::agent_browser::BROWSER))
                 .then(|| app.pane_thread().map(|t| t.id))?
             })
         });

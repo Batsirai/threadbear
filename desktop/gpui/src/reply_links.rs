@@ -591,7 +591,7 @@ impl ThreadPane {
 fn show_pane(app: &Entity<crate::app::Threadbear>, section: &str, cx: &mut App) {
     let section = section.to_owned();
     app.update(cx, |t, cx| {
-        if !t.dock.read(cx).controller.is_showing(&section) {
+        if !t.dock.read(cx).is_showing(&section) {
             t.show_pane(&section, cx);
         }
     });
