@@ -712,7 +712,7 @@ impl ThreadPane {
                 .linked_text(&doc, &format!("agent-{ix}"), cx)
                 .selectable(true)
                 .style(text_style)
-                .shared_code_block_highlighter(plain_code_blocks());
+                .shared_code_block_highlighter(code_blocks(cx));
             crate::reply_links::link_aware(text, ix, row, &self.summary.id, cx)
         });
         let card = v_flex()
@@ -844,7 +844,7 @@ impl ThreadPane {
             .linked_text(&doc, &row.id, cx)
             .selectable(true)
             .style(text_style)
-            .shared_code_block_highlighter(plain_code_blocks());
+            .shared_code_block_highlighter(code_blocks(cx));
         // A ```bash block's play and copy icons (shell_blocks.rs).
         let text = crate::shell_blocks::with_icons(text, &source, &self.summary.id);
         // TextKit leaves out the space over a text's first paragraph, so a
@@ -1396,27 +1396,22 @@ fn footer_text(done: &TurnCompletion) -> String {
 pub(crate) const LIGHT_TIME: std::time::Duration = std::time::Duration::from_millis(3300);
 
 /// What a code block's highlighter is.
-type CodeHighlighter = std::sync::Arc<
-    dyn Fn(
-            &gpui_kit::base::text::CodeBlock,
-        ) -> Vec<(std::ops::Range<usize>, gpui_kit::HighlightStyle)>
-        + Send
-        + Sync,
->;
+type CodeHighlighter = std::sync::Arc<gpui_kit::component::text::SharedCodeBlockHighlighter>;
 
-/// The transcript's code blocks stay plain, as the Swift app's do; the kit's
-/// highlighter is for the file preview (files.rs).
+/// The transcript's code blocks, coloured by their fence's language with the
+/// theme's syntax colours, as the file preview colours a file (Mike, 24 Nov:
+/// "code snippets like this aren't syntax highlighted"). A fence with no
+/// language, or one syntect doesn't know, stays plain.
 ///
-/// The same one every frame, never a new closure: the kit compares
-/// highlighters by pointer, and a new one tells it the text is reflowing, so
-/// it keeps the selection it had through it and doesn't take a new one. With
-/// a new closure every render, a Shift-click's selection (or any made while
-/// the pane redrew) was neither drawn nor copied (12 Nov; the bar over words
-/// with nothing highlighted in Mike's recording).
-pub(crate) fn plain_code_blocks() -> CodeHighlighter {
-    static PLAIN: std::sync::LazyLock<CodeHighlighter> =
-        std::sync::LazyLock::new(|| std::sync::Arc::new(|_| Vec::new()));
-    PLAIN.clone()
+/// The same one every frame for a theme, never a new closure: the kit
+/// compares highlighters by pointer, and a new one tells it the text is
+/// reflowing, so it keeps the selection it had through it and doesn't take a
+/// new one. With a new closure every render, a Shift-click's selection (or
+/// any made while the pane redrew) was neither drawn nor copied (12 Nov; the
+/// bar over words with nothing highlighted in Mike's recording).
+pub(crate) fn code_blocks(cx: &gpui_kit::App) -> CodeHighlighter {
+    use gpui_kit::component::ActiveTheme as _;
+    gpui_kit::component::text::shared_code_block_highlighter(&cx.theme().highlight_theme)
 }
 
 impl crate::thread::ThreadPane {
@@ -1447,16 +1442,30 @@ impl crate::thread::ThreadPane {
 
 #[cfg(test)]
 mod highlighter_tests {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    use gpui_kit::component::text::shared_code_block_highlighter;
+
     /// The kit takes a different highlighter for a reflow, which keeps the old
     /// selection over a new one: a Shift-click in a reply showed and copied
     /// nothing whenever the pane redrew (proven with the kit's own logs and
     /// the real pointer, features/tools/real-select.ts, 12 Nov).
     #[test]
     fn the_transcript_hands_over_the_same_highlighter_every_time() {
+        let theme = HighlightTheme::default_dark();
         assert!(std::sync::Arc::ptr_eq(
-            &super::plain_code_blocks(),
-            &super::plain_code_blocks()
+            &shared_code_block_highlighter(&theme),
+            &shared_code_block_highlighter(&theme)
         ));
+    }
+
+    /// A ```ts fence in a reply is coloured; one with no language isn't.
+    #[test]
+    fn a_fence_with_a_language_is_coloured() {
+        use gpui_kit::base::text::CodeBlock;
+        let highlight = shared_code_block_highlighter(&HighlightTheme::default_dark());
+        let code = "const added = labels.filter((l) => !old.includes(l));";
+        assert!(!highlight(&CodeBlock::from_code(code, Some("ts"))).is_empty());
+        assert!(highlight(&CodeBlock::from_code(code, None::<&str>)).is_empty());
     }
 }
 
@@ -1480,7 +1489,7 @@ mod across_tests {
     }
 
     impl Render for Thread {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
                 .size_full()
                 .child(div().w(px(320.)).child(SelectableText::new(
@@ -1495,7 +1504,7 @@ mod across_tests {
                             "",
                         )
                         .selectable(true)
-                        .shared_code_block_highlighter(super::plain_code_blocks()),
+                        .shared_code_block_highlighter(super::code_blocks(cx)),
                     ),
                 )
         }

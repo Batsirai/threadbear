@@ -1616,7 +1616,7 @@ impl ThreadPane {
                         self.linked_text(&doc, &row.id, cx)
                             .selectable(true)
                             .style(text_style)
-                            .shared_code_block_highlighter(super::plain_code_blocks()),
+                            .shared_code_block_highlighter(super::code_blocks(cx)),
                     ),
             );
         }
