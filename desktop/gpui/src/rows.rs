@@ -713,6 +713,7 @@ impl ThreadPane {
                 .selectable(true)
                 .style(text_style)
                 .shared_code_block_highlighter(code_blocks(cx));
+            let text = crate::shell_blocks::with_header(text, &body, &self.summary.id);
             crate::reply_links::link_aware(text, ix, row, &self.summary.id, cx)
         });
         let card = v_flex()
@@ -845,8 +846,9 @@ impl ThreadPane {
             .selectable(true)
             .style(text_style)
             .shared_code_block_highlighter(code_blocks(cx));
-        // A ```bash block's play and copy icons (shell_blocks.rs).
-        let text = crate::shell_blocks::with_icons(text, &source, &self.summary.id);
+        // Each code block's header bar: language, copy, and play on a ```bash
+        // block (shell_blocks.rs).
+        let text = crate::shell_blocks::with_header(text, &source, &self.summary.id);
         // TextKit leaves out the space over a text's first paragraph, so a
         // reply that opens with a heading starts without the heading's 6.
         let top = if markdown::starts_with_heading(&source) {

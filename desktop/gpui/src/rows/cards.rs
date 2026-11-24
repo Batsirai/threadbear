@@ -1593,13 +1593,9 @@ impl ThreadPane {
         // The plan (its start, until it's opened), or once approved its
         // checklist with the plan under it when opened.
         let plan_markdown = if expanded { body_text } else { preview };
-        let doc = (!plan_markdown.is_empty() && (plan.entries.is_empty() || expanded)).then(|| {
-            self.markdown_state(
-                &format!("plan-{}", plan.item_id),
-                &markdown_source(&plan_markdown, &self.summary.id),
-                cx,
-            )
-        });
+        let plan_source = markdown_source(&plan_markdown, &self.summary.id);
+        let doc = (!plan_markdown.is_empty() && (plan.entries.is_empty() || expanded))
+            .then(|| self.markdown_state(&format!("plan-{}", plan.item_id), &plan_source, cx));
         let text_style = self.reading_style(cx);
         let mut content = v_flex().child(heading);
         let mut body = v_flex().mt(px(8.));
@@ -1612,12 +1608,14 @@ impl ThreadPane {
                     .when(!plan.entries.is_empty(), |d| d.mt(px(23.)))
                     .text_size(px(size::BODY))
                     .line_height(px(size::BODY_LINE))
-                    .child(
+                    .child(crate::shell_blocks::with_header(
                         self.linked_text(&doc, &row.id, cx)
                             .selectable(true)
                             .style(text_style)
                             .shared_code_block_highlighter(super::code_blocks(cx)),
-                    ),
+                        &plan_source,
+                        &self.summary.id,
+                    )),
             );
         }
         content = content.child(body);
