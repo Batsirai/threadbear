@@ -985,7 +985,13 @@ impl Threadbear {
                 };
                 left = left.child(self.recipe_markdown(format!("recipe-about-{id}"), about, cx));
                 if let Some(example) = d.example.clone() {
-                    left = left.child(section_title("What a run looks like")).child(
+                    // A habit doesn't run: its example is an exchange.
+                    let title = if recipe.instant {
+                        "What it changes"
+                    } else {
+                        "What a run looks like"
+                    };
+                    left = left.child(section_title(title)).child(
                         v_flex()
                             .gap(px(8.))
                             .p(px(16.))
