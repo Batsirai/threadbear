@@ -27,7 +27,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { askWhenFromTool, jobsNudge, jobsNudged, droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { askWhenFromTool, jobsNudge, jobsNudged, heldNudge, heldNudged, droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -83,6 +83,8 @@ export type ThreadControl = {
   // Its shell jobs still running, by description, when their end wakes it
   // (Runner.shellJobs): end_turn asks whether its asks wait for them.
   shellJobs?: (threadId: string) => string[];
+  // Asks its last turn held back for a job, still unseen (Runner.heldAsks).
+  heldAsks?: (threadId: string) => string[];
   // What end_turn owes a review by another lab (runner/lab-review.ts).
   reviewOwes?: (threadId: string) => ReturnType<Runner['reviewOwes']>;
   requestSecret?: (threadId: string, req: SecretRequest) => Promise<SecretAnswer>;
@@ -379,12 +381,28 @@ export function buildThreadbearTools(
     return list.some((sc) => sc.threadId === selfId && !sc.paused && !sc.finishedAt && Boolean(sc.nextRunAt));
   };
   // Asks made while a shell job of the thread's own runs: the agent says
-  // whether they wait for it (needs.ts, JOBS_NUDGE). Once a turn; a call
-  // that still doesn't say asks at once, as before.
+  // whether they wait for it (needs.ts, JOBS_NUDGE). And a turn ending with
+  // nothing for the user after one that held asks back is asked about them
+  // (HELD_NUDGE). Each once a turn: by the events, and by the turn each
+  // last went to, as a sub-agent's call never reaches the thread's events
+  // and would be refused every time (projectNotedTurn, above). A call that
+  // still doesn't say asks at once, as before.
+  let jobsNotedTurn: number | undefined;
+  let heldNotedTurn: number | undefined;
   const checkJobs = (input: unknown, needs: string, events: PersistedEvent[]): void => {
-    if (needs !== 'you' || askWhenFromTool(input) || jobsNudged(events)) return;
+    const turn = events.findLast((e) => e.type === 'turn.started')?.seq;
+    if (needs !== 'you') {
+      if (heldNudged(events) || (turn !== undefined && turn === heldNotedTurn)) return;
+      const held = control.heldAsks?.(selfId) ?? [];
+      if (!held.length) return;
+      heldNotedTurn = turn;
+      throw new Error(heldNudge(held));
+    }
+    if (askWhenFromTool(input) || jobsNudged(events) || (turn !== undefined && turn === jobsNotedTurn)) return;
     const jobs = control.shellJobs?.(selfId) ?? [];
-    if (jobs.length) throw new Error(jobsNudge(jobs));
+    if (!jobs.length) return;
+    jobsNotedTurn = turn;
+    throw new Error(jobsNudge(jobs));
   };
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
@@ -1740,8 +1758,8 @@ export function buildThreadbearTools(
         if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
-        checkJobs(input, needs, events);
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        checkJobs(input, needs, events);
         const projectNote = await projectStepNote(input, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
         let restart = '';
@@ -1876,8 +1894,8 @@ export function buildThreadbearTools(
         if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
-        checkJobs(args, needs, events);
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
+        checkJobs(args, needs, events);
         const projectNote = await projectStepNote(args, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
         // Asking Mike to Restart to Update means wanting to know when he

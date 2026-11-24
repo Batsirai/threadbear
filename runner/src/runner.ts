@@ -1777,8 +1777,42 @@ export class Runner {
   // Codex doesn't wake for them, so its asks go to Mike at once.
   shellJobs(threadId: string): string[] {
     const st = this.threads.get(threadId);
-    if (!st || this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks === false) return [];
-    return st.rt.tasks.filter((t) => t.kind === 'shell').map((t) => t.description || t.type);
+    return st ? this.wakingShells(st).map((t) => t.description || t.type) : [];
+  }
+
+  private wakingShells(st: ThreadState): ThreadState['rt']['tasks'] {
+    if (this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks === false) return [];
+    return st.rt.tasks.filter((t) => t.kind === 'shell');
+  }
+
+  // The jobs a turn's asks wait for: its shell jobs still running as it
+  // ends, by id, so a dev server started later (or one left after the
+  // landing has gone) doesn't hold them. None on a CLI that doesn't wake
+  // when its jobs end (Codex): nothing would bring the asks back.
+  private afterJobs(st: ThreadState, said: { afterJobs?: true }): { afterJobs?: string[] } {
+    const ids = said.afterJobs ? this.wakingShells(st).map((t) => t.id) : [];
+    return ids.length ? { afterJobs: ids } : {};
+  }
+
+  // For end_turn's handler: asks the last turn held back for its jobs
+  // (askWhen "jobsEnd") that Mike hasn't ticked, so the turn a job's end
+  // opens doesn't end with needs "nothing" and lose them (HELD_NUDGE).
+  heldAsks(threadId: string): string[] {
+    const n = this.threads.get(threadId)?.rec.needs;
+    const rec = this.threads.get(threadId)?.rec;
+    if (!n?.afterJobs || !rec || n.seq !== rec.lastTurnCompletedSeq) return [];
+    const ticked = new Set(n.ticked);
+    return (n.asks ?? []).filter((_, i) => !ticked.has(i)).map((a) => a.action);
+  }
+
+  // Whether a job the last turn's asks wait for is still going, or has just
+  // finished with its result still to be read (the wake grace).
+  private asksHeld(st: ThreadState): boolean {
+    const { rec, rt } = st;
+    const ids = rec.needs?.seq === rec.lastTurnCompletedSeq ? rec.needs.afterJobs : undefined;
+    if (!ids?.length) return false;
+    const going = [...rt.tasks, ...(rt.wakeTimer ? rt.finished : [])];
+    return going.some((t) => ids.includes(t.id));
   }
 
   // For end_turn's handler: whether the thread's CLI still runs background
@@ -3220,7 +3254,7 @@ export class Runner {
     // Any completed turn replaces the last one's card; one that said
     // neither leaves no card, and counts as before.
     if (outcome === 'completed') {
-      if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}), ...(said.afterJobs ? { afterJobs: true as const } : {}) };
+      if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}), ...this.afterJobs(st, said) };
       else delete rec.needs;
       // How it came out replaces why it was started, on the row of a thread
       // Mike didn't start. His own threads have no byline, so it's dropped.
@@ -4834,7 +4868,7 @@ export class Runner {
     // Not finished yet, as far as Mike's concerned: no dot, notification or
     // phone push until they're done and the agent has had its say on them.
     // Asks the agent said wait for its shell jobs count them too.
-    const afterJobs = Boolean(rec.needs?.afterJobs && rec.needs.seq === rec.lastTurnCompletedSeq);
+    const afterJobs = this.asksHeld(st);
     const unfinished = running || agentsStillWorking(background, afterJobs);
     const s: ThreadSummary = {
       id: rec.id,

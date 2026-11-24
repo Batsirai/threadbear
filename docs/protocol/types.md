@@ -179,7 +179,8 @@ type ThreadSummary = {
   live: boolean         // a CLI process is attached right now
   needsYou: boolean     // waiting, or a turn finished after lastSeenSeq
                         // that didn't end with needs "nothing", with no
-                        // sub-agents still working (Needs you)
+                        // sub-agents still working, nor a shell job its
+                        // asks wait for (Needs you)
   needs?: "you" | "nothing" // what the last completed turn said; absent
                         // when it said neither (see Needs you)
   asks?: OpenAsk[]      // that turn's asks, when needs is "you"

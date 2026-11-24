@@ -143,6 +143,20 @@ export function jobsNudged(events: PersistedEvent[]): boolean {
   return nudgedSince(events, JOBS_NUDGE);
 }
 
+// What end_turn says, once a turn, to a turn ending with nothing for the
+// user when the turn before held asks back for a job (askWhen "jobsEnd")
+// that he never saw: the turn the job's end opens tends to report the job
+// ("Landed") and nothing else, and its card replaces the held one (Codex
+// and Gemini's review, 24 Nov 2026).
+export const HELD_NUDGE = 'Not ended: last turn you held asks back until your job ended, and the user has not seen them';
+export function heldNudge(asks: string[]): string {
+  const which = asks.slice(0, 5).map((a) => `"${cutSafely(a, 100)}"`).join(', ');
+  return `${HELD_NUDGE} (${which}). If they still stand, end with them again as asks. If they are answered or no longer apply, call end_turn again as you were: this note comes once a turn.`;
+}
+export function heldNudged(events: PersistedEvent[]): boolean {
+  return nudgedSince(events, HELD_NUDGE);
+}
+
 // Words worth matching on: lower case, three letters or more, so "a", "an"
 // and "to" don't tie a bullet to the wrong button.
 function matchWords(s: string): Set<string> {

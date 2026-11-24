@@ -31,13 +31,18 @@ tell that job from a watcher or a dev server, so an end_turn with needs
 when its jobs end (not Codex), is refused once a turn (`JOBS_NUDGE`,
 needs.ts) unless it has `askWhen`: "jobsEnd" (the asks wait) or "now" (Mike
 is asked at once; also what a second call without it gets). With "jobsEnd"
-the turn's `needs` record keeps `afterJobs`, the summary carries
-`asksAfterJobs: true`, and while a `shell` entry is in `background`
-(finished ones included until they're read) the thread is treated as with
-sub-agents above: `needsYou` false, wait state `job`, under Running, no
+the turn's `needs` record keeps `afterJobs`, the ids of the shell jobs
+running as it ended (so a dev server left going after the landing, or one
+started later, holds nothing), and while one of those is still going
+(or just finished, until it's read) the summary carries `asksAfterJobs:
+true` and the thread is treated as with sub-agents above: `needsYou`
+false (unless it's marked unread), wait state `job`, under Running, no
 `needs` on the phone's document. The job's end opens a turn, where the
-agent ends with its asks again; if no turn comes, the asks are his once
-the job has gone. Monitors never hold anything back.
+agent ends with its asks again: one that ends with needs "nothing" instead
+is refused once (`HELD_NUDGE`) with the asks it held, so "Landed" doesn't
+replace a card Mike never saw. If no turn comes, the asks are his once
+the job has gone. Monitors never hold anything back, and nor does anything
+on Codex, which isn't woken when a job ends: "jobsEnd" there asks at once.
 
 - **The tool.** Every thread's own agent (not its sub-agents) has
   `end_turn` in the `threadbear` tools: `{ needs?: "you" | "nothing",

@@ -1286,6 +1286,40 @@ test('end_turn asks once whether asks wait for a shell job still running, and th
   assert.equal(sum.waitState, 'needsYou');
 });
 
+test('held asks: the next turn is asked once before ending with nothing, and a job started later holds nothing', async () => {
+  // Codex and Gemini's review, 24 Nov: the turn the landing's end opens
+  // said "Landed", needs nothing, and the held card was gone unseen.
+  const ask = { asks: [{ question: 'Pass on the Terminal tabs PR?', options: [{ label: 'Pass' }, { label: 'Take it' }] }], askWhen: 'jobsEnd' };
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  s.text('m1', 'Landing now.');
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Land the picker fix' }] });
+  const { call } = tools(h, thread.id, undefined, () => true);
+  toolCall(s, 'e1', END_TURN, ask);
+  assert.equal((await call('end_turn', ask)).error, false);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: 'Noted: this thread needs the user.', truncated: false, images: [] } });
+  s.result('completed');
+  assert.equal(h.runner.get(thread.id).waitState, 'job');
+  // The landing goes and a dev server is left: it isn't what the asks wait for.
+  s.out({ kind: 'tasks', tasks: [{ id: 'b2', type: 'local_bash', kind: 'shell', description: 'Dev server' }] });
+  h.clock.advance(60_000);
+  assert.equal(h.runner.get(thread.id).asksAfterJobs, undefined);
+  assert.equal(h.runner.get(thread.id).waitState, 'needsYou');
+  // The next turn can't end with nothing without hearing about them, once.
+  h.runner.send(thread.id, 'next');
+  await tick();
+  const s2 = h.adapter.last;
+  s2.text('m2', 'Landed.');
+  const done = { needs: 'nothing' };
+  toolCall(s2, 'e2', END_TURN, done);
+  const refused = await call('end_turn', done);
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /^Not ended: last turn you held asks back until your job ended, and the user has not seen them \("Pass on the Terminal tabs PR\?"\)/);
+  s2.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: false, text: refused.text, truncated: false, images: [] } });
+  toolCall(s2, 'e3', END_TURN, done);
+  assert.equal((await call('end_turn', done)).error, false);
+});
+
 test('end_turn with asks and a shell job running: "now" is taken at once and goes to the Inbox, and with no job nothing is asked', async () => {
   const ask = { asks: [{ question: 'Does the preview look right?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
   const h = makeHarness();

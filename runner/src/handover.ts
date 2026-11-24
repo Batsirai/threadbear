@@ -827,6 +827,10 @@ export class ThreadRouter implements ThreadControl {
     return this.runner.shellJobs(threadId);
   }
 
+  heldAsks(threadId: string): string[] {
+    return this.runner.heldAsks(threadId);
+  }
+
   // Always this runner's, for the session it runs itself, as above.
   reviewOwes(threadId: string): ReturnType<Runner['reviewOwes']> {
     return this.runner.reviewOwes(threadId);
