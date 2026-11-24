@@ -331,7 +331,9 @@ rest, and `tb <command> --help` explains one.
   Mac is split when a Linux host and a Mac both answer: the steps a Linux
   host can run (`LINUX_STEPS` in check-remote.sh, `check.sh --part linux`)
   go to the cloud box and the rest (`--part mac`: the Swift ones) to Tinker
-  Desk, at the same time, and it passes only if both halves do. Its output
+  Desk, at the same time, and it passes only if both halves do. The Mac half
+  also checks the desktop app's macOS build (`desktop macos check`), which
+  the Linux host can't compile. Its output
   shows each half's lines marked `[no Mac]` and `[Mac]` as they come, then
   the two merged as one check, `Checking on cloud+tinker-desk`. With only
   one kind of host answering it runs whole as before; a Linux half no Linux
