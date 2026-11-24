@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AcpAdapter, AcpSession } from '../../src/adapters/acp/adapter.ts';
-import { ACP_AGENTS } from '../../src/adapters/acp/agents.ts';
+import { ACP_AGENTS, type AcpAgent } from '../../src/adapters/acp/agents.ts';
 import { AcpRpcError, failureNote, laterFailure, outOfUsage } from '../../src/adapters/acp/connection.ts';
 import { grokLimits } from '../../src/adapters/acp/grok-billing.ts';
 import { acpAsker } from '../../src/models/acp-oneshot.ts';
@@ -29,7 +29,10 @@ import type { UsageReading } from '../../src/usage.ts';
 import { CARRY_ON_BACK, type UsageSink } from '../../src/runner.ts';
 
 const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
-const grok = ACP_AGENTS.grok;
+// The pretend Grok runs under this node, with Grok's own args after it:
+// Windows can't start a .mjs as a program (spawn EFTYPE).
+const grok: AcpAgent = { ...ACP_AGENTS.grok, args: (run) => [FAKE, ...ACP_AGENTS.grok.args(run)] };
+const NODE = () => process.execPath;
 const account: Account = { id: 'grok-main', provider: 'grok', title: 'Grok', configDir: '/g' };
 const SAID = 'API error (status 402 Payment Required): Grok Build usage balance exhausted';
 // What _x.ai/billing said for that login the next morning.
@@ -70,7 +73,7 @@ afterEach(async () => {
 function adapterFor(root: string, billing?: unknown, extraEnv: Record<string, string> = {}): AcpAdapter {
   return new AcpAdapter({
     agent: grok,
-    binary: () => FAKE,
+    binary: NODE,
     registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
     log: nullLogger,
     env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome, FAKE_ACP_LOG: path.join(root, 'agent.log'), ...(billing ? { FAKE_GROK_BILLING: JSON.stringify(billing) } : {}), ...extraEnv },
@@ -235,7 +238,7 @@ test('a login with no reading at all is read once; one with room is left alone',
 for (const bare of [false, true]) {
   test(`a small job on a login out of balance counts as a limit, so the pool tries the next login${bare ? ' (only the notes say why)' : ''}`, async () => {
     const root = tmp();
-    const ask = acpAsker({ agent: grok, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome, ...(bare ? { FAKE_GROK_BARE_ERROR: '1' } : {}) }, dataDir: path.join(root, 'data') });
+    const ask = acpAsker({ agent: grok, binary: NODE, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome, ...(bare ? { FAKE_GROK_BARE_ERROR: '1' } : {}) }, dataDir: path.join(root, 'data') });
     const r = await ask({ account, user: 'broke', cwd: path.join(root, 'job'), timeoutMs: 20_000 });
     assert.equal(r.ok, false);
     assert.ok(!r.ok && r.limit, 'a limit');
