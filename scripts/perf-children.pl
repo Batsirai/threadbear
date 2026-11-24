@@ -535,13 +535,16 @@ for (my $pass = 0; ; $pass++) {
     $ever_known{$_} = $known{$_} for keys %known;
     my %anchor_pids = map { $_->{pid} => 1 } values %$held;
     kill_owned(\%known, $rows, \%groups, \%anchor_pids);
-    # Registered apps/mock runners still get their graceful TERM interval.
+    # Registered apps/mock runners still get their graceful TERM interval:
+    # 5 s, or THREADBEAR_STOP_GRACE_SECS for tests (as hangup-guard.sh), whose
+    # stand-ins ignore TERM on purpose.
     if ($pass == 0) {
         for my $pid (keys %known) {
             kill 'TERM', $pid if !$anchor_pids{$pid} && exists($groups{$rows->{$pid}->{group}}) &&
                 started($pid) eq $known{$pid};
         }
-        $deadline = clock_gettime(CLOCK_MONOTONIC) + 5;
+        my $grace = ($ENV{THREADBEAR_STOP_GRACE_SECS} // '') =~ /\A[1-9][0-9]?\z/ ? 0 + $ENV{THREADBEAR_STOP_GRACE_SECS} : 5;
+        $deadline = clock_gettime(CLOCK_MONOTONIC) + $grace;
     }
     last unless grep { !$anchor_pids{$_} } keys %known;
     last if clock_gettime(CLOCK_MONOTONIC) >= $deadline;

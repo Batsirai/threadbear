@@ -60,6 +60,10 @@ patch-trust-later.test.ts
 patch-trust.test.ts
 patches.test.ts
 perf-build.test.ts
+perf-lock-groups.test.ts
+perf-lock-probe.test.ts
+perf-lock-queue.test.ts
+perf-lock-reap.test.ts
 perf-lock.test.ts
 perf-swift.test.ts
 projects.test.ts

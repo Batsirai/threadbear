@@ -643,9 +643,24 @@
       "count": 1
     }
   },
+  "runner/test/unit/perf-lock-groups.test.ts": {
+    "mikecann-lint/no-sleep-in-tests": {
+      "count": 1
+    }
+  },
+  "runner/test/unit/perf-lock-probe.test.ts": {
+    "mikecann-lint/no-sleep-in-tests": {
+      "count": 2
+    }
+  },
+  "runner/test/unit/perf-lock-queue.test.ts": {
+    "mikecann-lint/no-sleep-in-tests": {
+      "count": 3
+    }
+  },
   "runner/test/unit/perf-lock.test.ts": {
     "mikecann-lint/no-sleep-in-tests": {
-      "count": 7
+      "count": 1
     }
   },
   "runner/test/unit/proc.test.ts": {
