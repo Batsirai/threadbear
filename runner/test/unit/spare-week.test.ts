@@ -236,6 +236,7 @@ test('automatic nudges are runner messages in the event log, while Find work is 
   sw.check();
   const id = h.runner.list()[0]!.id;
   assert.equal(h.events(id).find((e) => e.type === 'user.message')?.origin, 'runner');
+  assert.equal(h.events(id).find((e) => e.type === 'user.message')?.wakeReason, 'Its weekly allowance is about to reset');
   h.adapter.last.init();
   h.adapter.last.result();
   await tick();
@@ -243,10 +244,12 @@ test('automatic nudges are runner messages in the event log, while Find work is 
   assert.equal(sw.check()[0]?.stage, 'last-call');
   await tick();
   assert.deepEqual(h.events(id).filter((e) => e.type === 'user.message').map((e) => e.origin), ['runner', 'runner']);
+  assert.deepEqual(h.events(id).filter((e) => e.type === 'user.message').map((e) => e.wakeReason), ['Its weekly allowance is about to reset', 'Its weekly allowance resets within hours']);
   archived.add(id);
   const manual = sw.findWork('claude-3');
   assert.equal(manual.started, true);
   assert.equal(h.events(manual.threadId).find((e) => e.type === 'user.message')?.origin, undefined);
+  assert.equal(h.events(manual.threadId).find((e) => e.type === 'user.message')?.wakeReason, undefined);
 });
 
 // THREADBEAR-2H: a runner handing over to a new release kept its half-hourly

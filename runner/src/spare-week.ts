@@ -241,8 +241,8 @@ export type SpareWeekDeps = {
 
 export function spareWeekBinding(runner: Pick<Runner, 'create' | 'send'>): Pick<SpareWeekDeps, 'start' | 'send'> {
   return {
-    start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, accountId: r.accountId, origin: r.origin, startedBy: { kind: 'runner', label: 'Threadbear', why: r.why } }).thread.id,
-    send: (threadId, text) => void runner.send(threadId, text, [], { queue: true, origin: 'runner' }),
+    start: (r) => runner.create({ text: r.text, title: r.title, cwd: r.cwd, accountId: r.accountId, origin: r.origin, wakeReason: r.origin === 'runner' ? 'Its weekly allowance is about to reset' : undefined, startedBy: { kind: 'runner', label: 'Threadbear', why: r.why } }).thread.id,
+    send: (threadId, text) => void runner.send(threadId, text, [], { queue: true, origin: 'runner', wakeReason: 'Its weekly allowance resets within hours' }),
   };
 }
 

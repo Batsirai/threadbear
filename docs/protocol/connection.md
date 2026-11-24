@@ -296,6 +296,10 @@ is done, so a client that waits for it can send big frames straight after.
 | `clis.setPolicy` | `{ provider: Provider, policy: "auto" \| "notify" \| "off" }` | `{ clis: CliStatus[] }` |
 | `usage.stats` | `{ days?: number }` | `UsageStats` (see Usage history): each login's tokens by the hour and its limit readings over time, for the Usage panel's charts. `days` is 1 to 14 (default 8). A runner older than this answers `-32601` |
 
+For a thread the runner starts itself, `threads.create` also takes
+`origin: "runner"` and `wakeReason?: string`, passed to its opening
+`user.message` just as on a later send (Events, `user.message`).
+
 Errors use JSON-RPC error objects: `-32602` bad params, `-32004` thread not
 found, `-32005` schedule not found, `-32006` sub-agent not found, `-32007` project not found, `-32010` account not found, `-32020` busy (e.g. two sends racing), `-32030` a draining runner no longer holds that thread (Handovers), `-32031` the thread isn't on the runner the request named (`threads.send`'s `runnerId`), `-32050` background work would be stopped (`threads.edit`), `-32060` the calling thread doesn't have the access for this (A thread's own key),
 `-32601` a method this runner doesn't have (`clis.*` on a runner older than

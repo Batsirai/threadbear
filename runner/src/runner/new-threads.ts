@@ -33,6 +33,7 @@ export const newThreadsPart = {
     permissionMode?: PermissionMode;
     title?: string;
     origin?: MessageOrigin;
+    wakeReason?: string;
     scheduleId?: string;
     // false: start in the folder as it is, even in a repo that asks for a
     // worktree per thread.
@@ -70,7 +71,7 @@ export const newThreadsPart = {
     const { st, notes, loginNote } = made;
     if (spare) this.cli(st, { kind: 'claim', spare });
     if (projectIds.length) this.projects!.changeMembership(st.rec.id, { add: projectIds, by: 'mike' });
-    const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, scheduleId: params.scheduleId });
+    const turnId = this.sendTo(st, params.text ?? '', params.images ?? [], { origin: params.origin, wakeReason: params.wakeReason, scheduleId: params.scheduleId });
     // Under the first turn, so they read as part of starting it.
     for (const text of notes) this.emit(st, { type: 'system.note', text }, st.rt.turn?.turnId ?? turnId);
     // Kept on show by its shape, as moveLogin's is (is_login_note).
