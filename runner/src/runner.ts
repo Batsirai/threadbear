@@ -158,6 +158,7 @@ import { COPIED_REFUSAL, neutraliseCopied, realCopy } from './real-copy.ts';
 import type { YearTokenAnswer, YearTokenParams } from './year-token-maker.ts';
 import { placeBucket, placeOf } from './place.ts';
 import { allowed as waitMoveAllowed, waitStateOf, type WaitState } from './wait-state.ts';
+import { archivedNote, hibernatedNote, scheduledNote, unarchivedNote, unscheduledNote, wokenNote } from './place-notes.ts';
 
 export type Notification =
   | { method: 'thread.updated'; params: { thread: ThreadSummary } }
@@ -1594,6 +1595,24 @@ export class Runner {
 
   private scheduled(threadId: string): boolean {
     return (this.schedulesFor?.(threadId) ?? []).some((x) => x.threadId === threadId && !x.paused && !x.finishedAt && Boolean(x.nextRunAt));
+  }
+
+  // The line for a move into or out of Hibernating for a schedule, once
+  // the summary that saw it is made. Checked again, as a turn may have
+  // started in between.
+  private sayScheduled(st: ThreadState, into: boolean): void {
+    if (st.rt.deleted || this.stopping) return;
+    if ((st.rt.waitState === 'scheduled') !== into) return;
+    const now = this.clock.now();
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (!into) {
+      this.emit(st, { type: 'system.note', text: unscheduledNote({ now, timeZone }) });
+      return;
+    }
+    const next = (this.schedulesFor?.(st.rec.id) ?? [])
+      .filter((x) => x.threadId === st.rec.id && !x.paused && !x.finishedAt && x.nextRunAt)
+      .sort((a, b) => Date.parse(a.nextRunAt!) - Date.parse(b.nextRunAt!))[0];
+    this.emit(st, { type: 'system.note', text: scheduledNote({ title: next?.title, next: next?.nextRunAt ? Date.parse(next.nextRunAt) : undefined, now, timeZone }) });
   }
 
   private waitState(st: ThreadState, sum: ThreadSummary): WaitState {
@@ -3398,7 +3417,7 @@ export class Runner {
       else if (!rec.queue.length && !rt.turn && finished && !review && !rec.labReviewOwed && !this.stopping) {
         this.park(st, { kind: 'scheduleRunEnded' });
         this.emit(st, { type: 'system.note', text: 'Back in the archive: the scheduled run ended with nothing for you.' });
-        this.update({ threadId: rec.id, archived: true, archivedBy: by ?? 'threadbear' });
+        this.update({ threadId: rec.id, archived: true, archivedBy: by ?? 'threadbear', noted: true });
       }
       this.markDirty(st);
     }
@@ -3415,13 +3434,13 @@ export class Runner {
     }
     if (archive && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Archived, as the agent was asked to once it had finished.' });
-      this.update({ threadId: rec.id, archived: true, archivedBy: 'agent' });
+      this.update({ threadId: rec.id, archived: true, archivedBy: 'agent', noted: true });
     }
     if (waitFor && !rt.turn && !rec.archivedAt && !this.stopping) this.waitOn(st, waitFor, snooze, turn.endTurnBy);
     else if (snooze && !rt.turn && !rec.archivedAt && !this.stopping) this.snoozeAfterTurn(st, snooze, turn.endTurnBy, turn.wakeCheck);
     else if (forApp && !rt.turn && !rec.archivedAt && !this.stopping) {
       this.emit(st, { type: 'system.note', text: 'Hibernating until the Threadbear app restarts onto the new build, a day at most.' });
-      this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString() });
+      this.update({ threadId: rec.id, snoozedUntil: new Date(this.clock.now() + APP_RESTART_MAX_AGE_MS).toISOString(), noted: true });
       // After update, which clears it with the rest of a wait: the app shows
       // it under Running, as its work isn't over until Mike's running it.
       this.park(st, { kind: 'forApp' });
@@ -3516,7 +3535,7 @@ export class Runner {
       const by = rec.unarchivedBySchedule.by;
       this.park(st, { kind: 'scheduleRunEnded' });
       this.emit(st, { type: 'system.note', text: 'Back in the archive: the scheduled run ended with nothing for you.' });
-      this.update({ threadId: rec.id, archived: true, archivedBy: by ?? 'threadbear' });
+      this.update({ threadId: rec.id, archived: true, archivedBy: by ?? 'threadbear', noted: true });
       this.markDirty(st);
       return;
     }
@@ -3559,7 +3578,7 @@ export class Runner {
     const text = until === 'restart' ? 'Hibernating until the runner next starts, as the agent was asked to.'
       : until === 'release' ? 'Hibernating until the runner starts on a new release, as the agent was asked to.' : `Hibernating until ${localWhen(Date.parse(until), timeZone)}, as the agent was asked to.`;
     this.emit(st, { type: 'system.note', text });
-    this.update({ threadId: rec.id, snoozedUntil: until });
+    this.update({ threadId: rec.id, snoozedUntil: until, noted: true });
   }
 
   // A snooze its agent asked for that didn't take, after a check a wake
@@ -3920,6 +3939,12 @@ export class Runner {
     // With poolId: the provider picked in the menu (its column), for a
     // pool with logins of both. Else the model's, else the thread's own.
     provider?: Provider;
+    // The caller has already said in the thread why it's hibernating or
+    // archiving it (end_turn's snooze or archive, the quiet inbox): no
+    // second line from here (place-notes.ts).
+    noted?: boolean;
+    // Why, for that line, when the caller knows and hasn't said it.
+    why?: string;
   }): { thread: ThreadSummary } {
     const st = this.mustGet(params.threadId);
     const { rec, rt } = st;
@@ -4127,6 +4152,25 @@ export class Runner {
         { type: 'system.note', text: `${joinWords(nextTurn)} ${nextTurn.length === 1 ? 'applies' : 'apply'} from the next turn. This turn carries on as it started.` },
         rt.turn?.turnId,
       );
+    }
+    // Who it was, for the line in the thread (place-notes.ts).
+    const who = params.byAgent ? 'agent' as const : 'mike' as const;
+    const noteZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (params.snoozedUntil !== undefined && !params.noted) {
+      if (params.snoozedUntil === null) {
+        if (rec.snoozedUntil && !rec.archivedAt) this.emit(st, { type: 'system.note', text: wokenNote({ who, now: this.clock.now(), timeZone: noteZone }) });
+      } else if (params.snoozedUntil === 'restart' || params.snoozedUntil === 'release' || !Number.isNaN(Date.parse(params.snoozedUntil))) {
+        this.emit(st, { type: 'system.note', text: hibernatedNote({ who, until: params.snoozedUntil, now: this.clock.now(), timeZone: noteZone }) });
+      }
+    }
+    if (params.archived !== undefined && !params.noted) {
+      if (params.archived && !rec.archivedAt) {
+        // A verdict from the Archive menu says it already (ARCHIVE_NOTES).
+        const verdict = (params.archivedBy ?? 'mike') === 'mike' && params.verdict && params.verdict !== 'shouldHaveShown';
+        if (!verdict) this.emit(st, { type: 'system.note', text: archivedNote({ by: params.archivedBy ?? 'mike', now: this.clock.now(), timeZone: noteZone, ...(params.why ? { why: params.why } : {}) }) });
+      } else if (!params.archived && rec.archivedAt && params.verdict !== 'shouldHaveShown') {
+        this.emit(st, { type: 'system.note', text: unarchivedNote({ who, now: this.clock.now(), timeZone: noteZone }) });
+      }
     }
     if (params.snoozedUntil !== undefined) {
       // Any wait it had ends; a snooze from the inbox or the archive starts
@@ -4983,6 +5027,12 @@ export class Runner {
     // Info, not a warning (which reaches Sentry): summaries are made a batch
     // at a time, so a quick turn can skip a step the table lists.
     if (rt.waitState && !waitMoveAllowed(rt.waitState, state)) this.log.info('wait state moved where the table has no move', { threadId: rec.id, from: rt.waitState, to: state });
+    // Under Hibernating for a schedule, or back out when it's gone: said
+    // in the thread, as nothing else there would (place-notes.ts). Not on
+    // the first summary after a start, which has no state to move from.
+    if (rt.waitState && rt.waitState !== state && (state === 'scheduled' || (rt.waitState === 'scheduled' && (state === 'done' || state === 'needsYou')))) {
+      queueMicrotask(() => this.sayScheduled(st, state === 'scheduled'));
+    }
     rt.waitState = state;
     s.waitState = state;
     return s;
@@ -5404,7 +5454,7 @@ export class Runner {
     if (archive) st.rec.forceUnread = false;
     this.emit(st, { type: 'system.note', text });
     this.markDirty(st);
-    if (archive && !st.rt.turn && !st.rec.archivedAt && this.opening(threadId).text === undefined) this.update({ threadId, archived: true, archivedBy: 'threadbear' });
+    if (archive && !st.rt.turn && !st.rec.archivedAt && this.opening(threadId).text === undefined) this.update({ threadId, archived: true, archivedBy: 'threadbear', noted: true });
   }
 }
 

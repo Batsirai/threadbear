@@ -833,6 +833,14 @@ sees you talking about it in another thread, it wakes this one and says
 where. Give it a limit as well ("or Saturday at the latest") and, if you
 haven't brought it up by then, it comes back saying so.
 
+Whenever a thread is hibernated, woken, archived or brought back, a grey
+line in it says who did it (you, an agent or Threadbear), when, and why
+if there's more to say: "Hibernated by you on Tue 24 Nov, 3:32 pm, until
+Wed 25 Nov, 9:00 am." A thread that's done with a check-in booked moves
+under Hibernating by itself, with no snooze, and its line says so and
+names the check-in; it goes back to the Inbox, saying so, if the check-in
+is deleted or paused. These lines are on the Mac only.
+
 When a thread is done, archive it: press ⌘E, hover its row and press the
 box, or swipe the row left with two fingers on the trackpad (right with
 natural scrolling off), or drag it left with the mouse, and let go once the
