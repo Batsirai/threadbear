@@ -313,13 +313,15 @@ the restart is asked for.
 
 ### App restarts
 
-The GPUI app waits until main's `desktop/` tree has stayed the same for ten
-minutes before requesting an update build. Landings outside that tree do not
+The GPUI app waits until main's `desktop/` tree has stayed the same for
+runner.json's `updateQuietMinutes` (two by default, three on Mike's Mac)
+before requesting an update build. Landings outside that tree do not
 restart the wait. It observes changes during a build too, keeps one build
 at a time, lets a staged version go in before building another, and considers
-only the latest tree afterwards. Automatic remote update builds try both
-host leases without queueing; a busy host or a live
-measurement waiter defers the update until a later look. A build already
+only the latest tree afterwards. Automatic remote update builds go ahead of
+other work waiting on the host (`THREADBEAR_REMOTE_FIRST`): each trusted host
+is tried without queueing, then the first busy one is waited on, the build
+going next. A build already
 running keeps its leases until its work and cleanup finish. Only
 `updateBuildHosts` can supply the binaries, as before.
 

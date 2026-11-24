@@ -517,14 +517,18 @@ File references are where to look.
   Real-input test tools read process names with `ps` and, on macOS,
   executable paths through system Python's `ctypes` and `libproc`. They use
   those names to refuse input while an ffmpeg encoder is running.
-  Automatic update builds try both locks without waiting, and leave a host
-  with live measurement waiters alone. A busy host makes the app try again
-  at a later look, reading the latest main then; a build already running
-  finishes with both locks held. Once every trusted host has been busy
-  for 45 minutes, the next update build queues for the lease like any
-  other run, so a host kept busy all day can't hold the app back for good
-  (`~/Library/Caches/Threadbear/update-desktop/deferred-since` holds when
-  that began, and goes once a build runs). While a build runs or waits for a host,
+  Automatic update builds go ahead of everything else waiting on the host,
+  as a landing's check does: while one waits, it holds a lock on a file of
+  its own in `~/.cache/threadbear-check/first` there, and other checks,
+  builds and measurements (and Mike's `heavy` jobs on Tinker Desk) wait
+  while such a file is locked, before they go in and again once they have
+  (`scripts/host-turn.sh`, `scripts/perf-lock.pl`). It tries each trusted
+  host without waiting, and with every one busy waits on the first for what
+  is running there to end, then builds; a build already running finishes
+  with both locks held. `THREADBEAR_UPDATE_QUEUE_AFTER` (seconds) has it
+  try again at a later look instead until every host has been busy that
+  long (`~/Library/Caches/Threadbear/update-desktop/deferred-since` holds
+  when that began, and goes once a build runs). While a build runs or waits for a host,
   `~/Library/Caches/Threadbear/update-desktop/phase` holds one line saying
   whether it's waiting, queued (and behind how many runs) or building, and
   since when, which the app reads once a second for its Updates panel; it

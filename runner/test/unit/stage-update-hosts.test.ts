@@ -46,7 +46,7 @@ function setup(config: Record<string, unknown> | null, remote?: 'busy' | 'legacy
   const note = (what: string) => `#!/bin/bash\necho "$*" >> '${marks}/${what}'\n`;
   write(path.join(checkout, 'desktop', 'scripts', 'remote.sh'), `${note('remote')}
 cat >/dev/null
-echo "try=\${THREADBEAR_REMOTE_TRY-unset}" >> '${marks}/remote'
+echo "try=\${THREADBEAR_REMOTE_TRY-unset} first=\${THREADBEAR_REMOTE_FIRST-unset}" >> '${marks}/remote'
 [ "$1" != gone.invalid ] || exit 3
 ${remote === 'busy' ? '[ "$1" = free.invalid ] || [ "${THREADBEAR_REMOTE_TRY-}" != 1 ] || exit 75' : ''}
 ${remote === 'slow' ? `echo $$ > '${marks}/remote-pid'; trap 'echo stopped >> "${marks}/remote"; exit 143' TERM; sleep 30 & wait` : ''}
@@ -104,8 +104,19 @@ test('check hosts alone never build the update, and this Mac does not build it e
   assert.ok(!fs.existsSync(path.join(r.root, 'next.app')));
 });
 
-test('a busy update host defers without staging or marking main as broken', () => {
+// 24 Nov: the update build was put off in 1,162 of 1,350 tries behind
+// agents' work on Tinker Desk. Now it goes ahead of that (first=1), and with
+// every host busy it waits on the first for what's running to end.
+test('a busy update host: one try, then it waits there to go next, ahead of other work', () => {
   const r = setup({ updateBuildHosts: ['builder.invalid'] }, 'busy')();
+  assert.equal(r.status, 0, r.out);
+  assert.match(r.out, /waits its turn on builder\.invalid/);
+  assert.match(r.marked('remote'), /try=1 first=1\n[^]*builder\.invalid --[^]*try=0 first=1\n$/);
+  assert.match(r.marked('bundle'), /^builtOn=builder\.invalid$/m);
+});
+
+test('with a wait set, a busy update host defers without staging or marking main as broken', () => {
+  const r = setup({ updateBuildHosts: ['builder.invalid'] }, 'busy')({ THREADBEAR_UPDATE_QUEUE_AFTER: '2700' });
   assert.equal(r.status, 4, r.out);
   assert.match(r.marked('remote'), /try=1/);
   assert.equal(r.marked('bundle'), '');
@@ -117,12 +128,12 @@ test('a busy update host defers without staging or marking main as broken', () =
 // nothing while fixes sat on main. Busy for long enough, it queues.
 test('busy hosts for long enough: the update queues for the lease instead of trying again', () => {
   const run = setup({ updateBuildHosts: ['builder.invalid'] }, 'busy');
-  const first = run();
+  const first = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '2700' });
   assert.equal(first.status, 4, first.out);
   const since = fs.readFileSync(first.deferred, 'utf8').trim();
   assert.match(since, /^\d+$/);
   // Still inside the grace: tries again later, and keeps when it started.
-  const second = run();
+  const second = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '2700' });
   assert.equal(second.status, 4, second.out);
   assert.equal(fs.readFileSync(second.deferred, 'utf8').trim(), since);
   assert.doesNotMatch(second.marked('remote'), /try=0/);
@@ -130,14 +141,14 @@ test('busy hosts for long enough: the update queues for the lease instead of try
   const third = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '0' });
   assert.equal(third.status, 0, third.out);
   assert.match(third.out, /waits its turn on builder\.invalid/);
-  assert.match(third.marked('remote'), /try=1\n[^]*builder\.invalid --[^]*try=0\n$/);
+  assert.match(third.marked('remote'), /try=1 first=1\n[^]*builder\.invalid --[^]*try=0 first=1\n$/);
   assert.match(third.marked('bundle'), /^builtOn=builder\.invalid$/m);
   assert.ok(!fs.existsSync(third.deferred), 'a build clears the deferral');
 });
 
 test('a host that went away after a busy one neither resets the busy clock nor stops the queueing', () => {
   const run = setup({ updateBuildHosts: ['busy.invalid', 'gone.invalid'] }, 'busy');
-  const first = run();
+  const first = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '2700' });
   assert.equal(first.status, 4, first.out);
   const since = fs.readFileSync(first.deferred, 'utf8').trim();
   const later = run({ THREADBEAR_UPDATE_QUEUE_AFTER: '0' });

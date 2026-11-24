@@ -30,14 +30,17 @@
 # could build it (none answered, or the one building it went away or ran short
 # of disk), 5 if no host is trusted to build it and this Mac doesn't build,
 # 1 on a failed build (an earlier staged bundle is left as it was).
-# A busy build host (or one with queued measurements) also exits 4: update
-# builds try the leases without queueing, so screen tests can go first. But
-# not for ever: with agents keeping Tinker Desk busy all day there was never
-# a free moment, and 63 tries over a day built nothing while fixes waited on
-# main (18 Nov). Once tries have found every host busy for QUEUE_AFTER (45
-# minutes; THREADBEAR_UPDATE_QUEUE_AFTER in seconds), the next run queues
-# for the first busy host's lease like any other run and builds when its
-# turn comes.
+# The build goes ahead of agents' builds, checks and measurements waiting on
+# the host, as a landing's check does (THREADBEAR_REMOTE_FIRST, remote.sh;
+# scripts/perf-lock.pl): Mike asked on 24 Nov, when 1,162 of 1,350 tries had
+# been put off behind them and his app ran half an hour to two hours behind
+# main. Each host is tried first, without waiting; when every one is busy,
+# it waits on the first busy host for what's running there to end, and
+# builds next. It used to try again later instead, so screen tests could go
+# first, and from 18 Nov waited only once tries had found every host busy for
+# 45 minutes (63 tries that day built nothing). THREADBEAR_UPDATE_QUEUE_AFTER
+# (seconds) still sets such a wait; without it, none. Waiting, the run exits 4
+# only if it gives up.
 set -euo pipefail
 
 CHECKOUT=""
@@ -117,8 +120,8 @@ CHECK_HOSTS="$(hosts_in checkHosts)"
 
 # When tries first found every trusted host busy, kept until one builds.
 DEFERRED="$CACHE/deferred-since"
-QUEUE_AFTER="${THREADBEAR_UPDATE_QUEUE_AFTER:-2700}"
-[[ "$QUEUE_AFTER" =~ ^[0-9]+$ ]] || QUEUE_AFTER=2700
+QUEUE_AFTER="${THREADBEAR_UPDATE_QUEUE_AFTER:-0}"
+[[ "$QUEUE_AFTER" =~ ^[0-9]+$ ]] || QUEUE_AFTER=0
 
 BINS="$CACHE/bins"
 rm -rf "$BINS"
@@ -193,7 +196,7 @@ if [[ -n "$HOSTS" ]]; then
     # (remote.sh --build), asked for by environment as TRY is.
     # BUILD_STARTED is the host's first word once the run has its turn.
     : >"$out"
-    THREADBEAR_REMOTE_BUILD=1 THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; echo BUILD_STARTED; cd desktop && nice ./scripts/pinned-cargo.sh build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
+    THREADBEAR_REMOTE_BUILD=1 THREADBEAR_REMOTE_FIRST=1 THREADBEAR_REMOTE_TRY="$2" "$SRC/desktop/scripts/remote.sh" "$1" -- bash -c "set -o pipefail; echo BUILD_STARTED; cd desktop && nice ./scripts/pinned-cargo.sh build --release -p threadbear-gpui --features $FEATURES 2>&1 | tail -3 && echo \"BUILT_IN=\$CARGO_TARGET_DIR\"" </dev/null > "$out" 2>&1 &
     REMOTE_PID=$!
     watch_phase "$1" "$2" &
     WATCH_PID=$!
