@@ -24,6 +24,7 @@ import { detachable, landInBackground, landWorker } from './land-detach.ts';
 import { activityCommand } from './activity.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
 import { pickRunner } from './moves.ts';
+import { staleRelease } from './release.ts';
 
 const OPTIONS = {
   cwd: { type: 'string' },
@@ -288,6 +289,9 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
   }
+  // A tb older or newer than the release this Mac runs (release.ts, staleRelease).
+  const stale = staleRelease();
+  if (stale) console.error(`tb: this is release ${stale.mine}'s tb, but the runner's current release is ${stale.current}: run ${stale.tb} instead. (A thread keeps the PATH it started with.)`);
   let cfg: ReturnType<typeof loadConfig>;
   try {
     cfg = loadConfig();

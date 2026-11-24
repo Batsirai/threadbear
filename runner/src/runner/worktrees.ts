@@ -6,7 +6,7 @@ import type { Runner } from '../runner.ts';
 import type { RunnerPart } from './part.ts';
 import type { Action, EventBody } from '../protocol.ts';
 import type { ThreadRecord } from '../store.ts';
-import { BIN_DIR, threadEnv } from '../restart.ts';
+import { threadBinDir, threadEnv } from '../restart.ts';
 import { cleanUpWorktree, clearBuildCaches, mainCheckoutOf, makeWorktree, readPlainFile, realpath, sameSubfolder, stillCheckedOut, worktreeFolderNow, worktreeGone, type WorktreeRecord } from '../worktrees.ts';
 import { isDirectory } from '../fsutil.ts';
 import { CLICKS_ONLY_NOTE } from '../platform.ts';
@@ -571,8 +571,9 @@ export const worktreesPart = {
   worktreeAction(this: Runner, rec: ThreadRecord): Action | undefined {
     const w = rec.worktree;
     if (!w || w.removedAt) return undefined;
-    // This runner's own tb, in full: a login shell's PATH may not have it.
-    const tb = path.join(BIN_DIR, 'tb');
+    // The runner's tb, in full: a login shell's PATH may not have it. The
+    // current release's, as on a thread's PATH (threadBinDir says why).
+    const tb = path.join(threadBinDir(), 'tb');
     const quoted = /^[\w./-]+$/.test(tb) ? tb : `'${tb.replace(/'/g, `'\\''`)}'`;
     return {
       id: 'worktree.land',
