@@ -4,13 +4,15 @@
 // folders only root or this account can change (cloud's cache moved to a
 // volume on 24 Nov 2026, and the guard that refused every link stopped every
 // build there). Tried for real on cloud when written.
-import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { closedTmpParent } from '../helpers/closed-tmp.ts';
+import { testSkippedOnWindows } from '../helpers/platform.ts';
+
+const test = testSkippedOnWindows('The build-host folder guard uses /bin/bash and POSIX ownership and permissions on macOS and Linux');
 
 const SCRIPT = path.join(import.meta.dirname, '..', '..', '..', 'scripts', 'own-folders.sh');
 
