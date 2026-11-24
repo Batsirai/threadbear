@@ -332,7 +332,7 @@ export type ThreadRecord = {
   // its turn.completed and which of its asks he has ticked.
   // (A record from 11 to 13 Nov 2026 may also hold `open`, the agent's own
   // lines for the done card: nothing reads it now.)
-  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[] };
+  needs?: { seq: number; needs: NeedsWho; asks?: Ask[]; ticked?: number[]; afterJobs?: true };
   // Set when the folder or account changes, or the record had to be
   // rebuilt; the next turn starts a new native session with a note.
   // lost: the session to resume couldn't be found (never saved; only set

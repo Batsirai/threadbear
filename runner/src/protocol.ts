@@ -265,6 +265,9 @@ export type ThreadSummary = {
   needs?: NeedsWho;
   asks?: OpenAsk[];
   asksSeq?: number;
+  // The agent said those asks wait until its own shell jobs end (end_turn's
+  // askWhen "jobsEnd"): while one runs the thread isn't waiting on Mike.
+  asksAfterJobs?: true;
   pendingReviews?: number;
   createdAt: string;
   updatedAt: string;
@@ -699,8 +702,10 @@ export type BackgroundTask = {
 // card it left open isn't his to answer yet (docs/protocol/needs-you.md, "Needs you";
 // Mike, 2 Nov). Shells and monitors don't count: one is often a watcher
 // waiting for Mike to do what he was asked, as with the SD card on 1 Nov.
-export function agentsStillWorking(tasks: BackgroundTask[] | undefined): boolean {
-  return Boolean(tasks?.some((t) => t.kind === 'agent' || t.kind === 'other'));
+// A shell counts only when the agent said its asks wait for its jobs
+// (`afterJobs`: end_turn's askWhen "jobsEnd", the summary's asksAfterJobs).
+export function agentsStillWorking(tasks: BackgroundTask[] | undefined, afterJobs = false): boolean {
+  return Boolean(tasks?.some((t) => t.kind === 'agent' || t.kind === 'other' || (afterJobs && t.kind === 'shell')));
 }
 
 // "2 sub-agents, 1 shell job in the background" for tb list's flags; '' with none.

@@ -1772,6 +1772,15 @@ export class Runner {
     return this.threads.get(threadId)?.rt.session?.unreadMessage?.() === true;
   }
 
+  // For end_turn's handler: the thread's shell jobs still running, when
+  // their end wakes it, so asks can wait for them (needs.ts, JOBS_NUDGE).
+  // Codex doesn't wake for them, so its asks go to Mike at once.
+  shellJobs(threadId: string): string[] {
+    const st = this.threads.get(threadId);
+    if (!st || this.adapters[st.rt.sessionProvider ?? st.rec.provider]?.wakesAfterTasks === false) return [];
+    return st.rt.tasks.filter((t) => t.kind === 'shell').map((t) => t.description || t.type);
+  }
+
   // For end_turn's handler: whether the thread's CLI still runs background
   // jobs or sub-agents of its own whose end wakes it (threadbear-mcp.ts,
   // projectStepNote). Codex doesn't wake for them (wakesAfterTasks).
@@ -3211,7 +3220,7 @@ export class Runner {
     // Any completed turn replaces the last one's card; one that said
     // neither leaves no card, and counts as before.
     if (outcome === 'completed') {
-      if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}) };
+      if (said) rec.needs = { seq: ev.seq, needs: said.needs, ...(said.asks ? { asks: said.asks } : {}), ...(said.afterJobs ? { afterJobs: true as const } : {}) };
       else delete rec.needs;
       // How it came out replaces why it was started, on the row of a thread
       // Mike didn't start. His own threads have no byline, so it's dropped.
@@ -4824,7 +4833,9 @@ export class Runner {
     const background = this.background(st);
     // Not finished yet, as far as Mike's concerned: no dot, notification or
     // phone push until they're done and the agent has had its say on them.
-    const unfinished = running || agentsStillWorking(background);
+    // Asks the agent said wait for its shell jobs count them too.
+    const afterJobs = Boolean(rec.needs?.afterJobs && rec.needs.seq === rec.lastTurnCompletedSeq);
+    const unfinished = running || agentsStillWorking(background, afterJobs);
     const s: ThreadSummary = {
       id: rec.id,
       title: rec.title,
@@ -4852,6 +4863,7 @@ export class Runner {
     if (rec.waitingForNetwork) s.waitingForNetwork = { since: rec.waitingForNetwork.since };
     if (rec.needs && rec.needs.seq === rec.lastTurnCompletedSeq) {
       s.needs = rec.needs.needs;
+      if (afterJobs) s.asksAfterJobs = true;
       if (rec.needs.asks) {
         const ticked = new Set(rec.needs.ticked);
         s.asks = rec.needs.asks.map((a, i) => (ticked.has(i) ? { ...a, ticked: true as const } : a));

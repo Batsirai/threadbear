@@ -184,6 +184,7 @@ type ThreadSummary = {
                         // when it said neither (see Needs you)
   asks?: OpenAsk[]      // that turn's asks, when needs is "you"
   asksSeq?: number      // seq of the turn.completed they came with
+  asksAfterJobs?: true  // those asks wait until the thread's own shell jobs end (Needs you)
   createdAt: string
   updatedAt: string
   lastActivityAt: string

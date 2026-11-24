@@ -102,6 +102,10 @@ pub struct ThreadSummary {
     pub asks: Option<Vec<OpenAsk>>,
     #[serde(default, deserialize_with = "crate::wire::optional_uint")]
     pub asks_seq: Option<u64>,
+    /// The agent said its asks wait until its own shell jobs end (the
+    /// runner's `asksAfterJobs`).
+    #[serde(default, deserialize_with = "crate::wire::field")]
+    pub asks_after_jobs: Option<bool>,
     #[serde(default, deserialize_with = "crate::wire::optional_uint")]
     pub pending_reviews: Option<u64>,
     #[serde(default, deserialize_with = "crate::wire::field")]
@@ -444,6 +448,17 @@ impl ThreadSummary {
             )
         })
     }
+    /// The agent said its asks wait for its own shell jobs, and one is still
+    /// going (or just finished, its result still to be read): not Mike's to
+    /// answer yet, as with sub-agents (24 Nov 2026).
+    pub fn asks_wait_for_jobs(&self) -> bool {
+        self.asks_after_jobs == Some(true)
+            && self
+                .background
+                .iter()
+                .flatten()
+                .any(|b| b.get("kind").and_then(Value::as_str) == Some("shell"))
+    }
     /// The first name for `agents_still_working`, kept for the thread pane.
     pub fn working(&self) -> bool {
         self.agents_still_working()
@@ -480,7 +495,11 @@ impl ThreadSummary {
     /// all yet (Swift `waitingOnMike`, whose comments say why sub-agents
     /// still working count differently from a shell job).
     pub fn waiting_on_mike(&self) -> bool {
-        if self.needs.as_deref() != Some("you") || self.busy() || self.agents_still_working() {
+        if self.needs.as_deref() != Some("you")
+            || self.busy()
+            || self.agents_still_working()
+            || self.asks_wait_for_jobs()
+        {
             return false;
         }
         let asks = self.asks.as_deref().unwrap_or(&[]);

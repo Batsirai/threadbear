@@ -15,15 +15,36 @@ under Running, and the phone's thread document leaves `needs` out until
 they're done. `needs` and `asks` stay on the summary, so the card shows if
 he opens the thread and he can answer early. A question or approval the
 agent is stuck on (`status` "waiting") still counts straight away, and shell
-jobs and monitors don't hold anything back: one is often watching for Mike
-to do what he was asked. The stuck-job check (Stuck background jobs) wakes
+jobs and monitors don't hold anything back by themselves: one is often
+watching for Mike to do what he was asked, or is something he needs while
+he answers (a dev server). The stuck-job check (Stuck background jobs) wakes
 the thread if a sub-agent stalls, so an ask can't stay hidden for good.
+
+A shell job the thread is itself waiting on (a landing, a build, a check)
+does hold the asks back, when the agent says so: end_turn's `askWhen:
+"jobsEnd"`. On 24 Nov 2026 a thread wrote "it's landing now, I'll confirm
+here once it's on main", asked Mike about a PR on the same card, and sat in
+his Inbox with the landing still going, after he'd asked about ten times
+for threads to stay out of it until they've finished. The runner can't
+tell that job from a watcher or a dev server, so an end_turn with needs
+"you" while a shell job of the thread's is running, on a CLI that wakes
+when its jobs end (not Codex), is refused once a turn (`JOBS_NUDGE`,
+needs.ts) unless it has `askWhen`: "jobsEnd" (the asks wait) or "now" (Mike
+is asked at once; also what a second call without it gets). With "jobsEnd"
+the turn's `needs` record keeps `afterJobs`, the summary carries
+`asksAfterJobs: true`, and while a `shell` entry is in `background`
+(finished ones included until they're read) the thread is treated as with
+sub-agents above: `needsYou` false, wait state `job`, under Running, no
+`needs` on the phone's document. The job's end opens a turn, where the
+agent ends with its asks again; if no turn comes, the asks are his once
+the job has gone. Monitors never hold anything back.
 
 - **The tool.** Every thread's own agent (not its sub-agents) has
   `end_turn` in the `threadbear` tools: `{ needs?: "you" | "nothing",
   summary?: string[], asks?: { action, reply?, why?, options?,
   suggested?, links? }[], next?: string[], archive?: boolean,
-  byline?: string }`. `byline` is under "Who started a thread".
+  byline?: string, askWhen?: "now" | "jobsEnd" }`. `byline` is under
+  "Who started a thread", `askWhen` above.
   The asks are the agent's "What I need from you" list, written there
   instead of in its message: each is one paragraph, `action` its first
   sentence (one concrete thing to do, or a question) and `why` the rest

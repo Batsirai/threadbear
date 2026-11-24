@@ -47,11 +47,16 @@ working now, and one you've just sent a message to: while your message
 still has its spinner (a busy Mac can take a while to pick it up), the
 thread has already left the Inbox. If the message can't go, it comes back. A thread that
 asks you something keeps its place in the inbox, wake-up or not, and so does
-one that has left a job running while it waits for you: a small grey
+one that has left a job running while it waits for you (a preview server
+you need, a job watching for you to do the step): a small grey
 arc turning by its time says the job is still going, and hovering it says what it is. Sub-agents are
 different: while they're working the thread stays in Running, even if it has
 asked you something, as what they find can change what it asks. It comes to
 the inbox when they're done, and you can still open it and answer early.
+The same goes for a job the thread is itself waiting on, like a landing or a
+build: the agent is asked which kind its job is when it has a question for
+you with one still running, and if the job has to finish first, the thread
+stays in Running until it has.
 Hibernating and Archived, at the foot, hold the threads that are put away
 (see [Hibernate and archive](#hibernate-and-archive)). They start folded,
 showing only how many; click a heading to open or fold it. A thread whose agent

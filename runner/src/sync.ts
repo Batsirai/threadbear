@@ -1109,7 +1109,7 @@ export function toThreadDoc(t: ThreadSummary, runnerId: string, now: number, pen
   // running, and its working line can't tell a sub-agent from a shell job. So
   // it isn't told until the agents are done, which goes for phones already
   // out there too. The asks still go up: the card shows if he opens the thread.
-  if (t.needs && !(t.needs === 'you' && agentsStillWorking(t.background))) doc.needs = t.needs;
+  if (t.needs && !(t.needs === 'you' && agentsStillWorking(t.background, t.asksAfterJobs))) doc.needs = t.needs;
   if (t.pendingReviews) doc.pendingReviews = t.pendingReviews;
   if (t.waitingForRoom) doc.waitingForRoom = { until: t.waitingForRoom.until, ...(t.waitingForRoom.accountId ? { accountId: t.waitingForRoom.accountId } : {}) };
   if (t.waitingForNetwork) doc.waitingForNetwork = { since: t.waitingForNetwork.since };

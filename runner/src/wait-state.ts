@@ -103,6 +103,7 @@ export type WaitInputs = {
   needsYou: boolean;
   needs?: 'you' | 'nothing';
   asks?: { ticked?: boolean }[];
+  asksAfterJobs?: true;
   pendingReviews?: number;
   background?: { kind: string }[];
   snoozedUntil?: string;
@@ -140,10 +141,12 @@ export function waitStateOf(t: WaitInputs, opts: { now: number; scheduled: boole
 }
 
 // The last turn asked Mike for something and he hasn't done it all. Sub-agents
-// still at work hold it back, as what they find can change the ask; a shell
-// job doesn't, as it's often watching for Mike to do it (needs-you.md).
+// still at work hold it back, as what they find can change the ask. A shell
+// job holds it back only when the agent said the asks wait for it
+// (asksAfterJobs), as one is often watching for Mike to do it, or is
+// something he needs while he answers (needs-you.md).
 function waitingOnMike(t: WaitInputs, busy: boolean): boolean {
-  if (t.needs !== 'you' || busy || t.background?.some((b) => b.kind === 'agent' || b.kind === 'other')) return false;
+  if (t.needs !== 'you' || busy || t.background?.some((b) => b.kind === 'agent' || b.kind === 'other' || (t.asksAfterJobs && b.kind === 'shell'))) return false;
   const asks = t.asks ?? [];
   return asks.length === 0 || asks.some((a) => a.ticked !== true);
 }

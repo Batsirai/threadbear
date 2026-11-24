@@ -1252,6 +1252,64 @@ test('a reply that came only as a summary: end_turn asks for it again, and the r
   assert.doesNotMatch(read.text, /resent the full/);
 });
 
+test('end_turn asks once whether asks wait for a shell job still running, and the thread stays under Running when they do', async () => {
+  // 24 Nov 2026: "it's landing now, I'll confirm here once it's on main",
+  // with an ask about a PR, sat in Mike's Inbox while the landing ran.
+  const ask = { asks: [{ question: 'Pass on the Terminal tabs PR?', options: [{ label: 'Pass' }, { label: 'Take it' }] }] };
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  s.text('m1', 'Landing now.');
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Land the picker fix' }] });
+  const { call } = tools(h, thread.id, undefined, () => true);
+  toolCall(s, 'e1', END_TURN, ask);
+  const refused = await call('end_turn', ask);
+  assert.equal(refused.error, true);
+  assert.match(refused.text, /^Not ended: you are asking the user something while a background job of yours is still running \("Land the picker fix"\)/);
+  assert.match(refused.text, /askWhen: "jobsEnd"/);
+  assert.match(refused.text, /askWhen: "now"/);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: false, text: refused.text, truncated: false, images: [] } });
+  // Said: taken, and the thread isn't waiting on Mike while the job runs.
+  const held = { ...ask, askWhen: 'jobsEnd' };
+  toolCall(s, 'e2', END_TURN, held);
+  assert.equal((await call('end_turn', held)).error, false);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e2', ok: true, text: 'Noted: this thread needs the user.', truncated: false, images: [] } });
+  s.result('completed');
+  let sum = h.runner.get(thread.id);
+  assert.equal(sum.needs, 'you');
+  assert.equal(sum.asksAfterJobs, true);
+  assert.equal(sum.needsYou, false);
+  assert.equal(sum.waitState, 'job');
+  // The job ends and no turn comes to read it: the asks are Mike's.
+  s.out({ kind: 'tasks', tasks: [] });
+  h.clock.advance(60_000);
+  sum = h.runner.get(thread.id);
+  assert.equal(sum.waitState, 'needsYou');
+});
+
+test('end_turn with asks and a shell job running: "now" is taken at once and goes to the Inbox, and with no job nothing is asked', async () => {
+  const ask = { asks: [{ question: 'Does the preview look right?', options: [{ label: 'Yes' }, { label: 'No' }] }] };
+  const h = makeHarness();
+  const { thread, s } = start(h);
+  s.text('m1', 'The preview is up.');
+  s.out({ kind: 'tasks', tasks: [{ id: 'b1', type: 'local_bash', kind: 'shell', description: 'Dev server' }] });
+  const { call } = tools(h, thread.id, undefined, () => true);
+  const now = { ...ask, askWhen: 'now' };
+  toolCall(s, 'e1', END_TURN, now);
+  assert.equal((await call('end_turn', now)).error, false);
+  s.out({ kind: 'event', event: { type: 'tool.result', itemId: 'e1', ok: true, text: 'Noted: this thread needs the user.', truncated: false, images: [] } });
+  s.result('completed');
+  const sum = h.runner.get(thread.id);
+  assert.equal(sum.asksAfterJobs, undefined);
+  assert.equal(sum.waitState, 'needsYou');
+
+  const other = makeHarness();
+  const o = start(other);
+  o.s.text('m1', 'Done.');
+  const plain = tools(other, o.thread.id, undefined, () => true);
+  toolCall(o.s, 'e1', END_TURN, ask);
+  assert.equal((await plain.call('end_turn', ask)).error, false);
+});
+
 test('end_turn asks once about an ask pointing at another thread with no link, and takes a thread: link', async () => {
   // 17 Nov 2026: "Pick a direction ... in its own thread", no answers, no
   // link, and on the phone no way to that thread.

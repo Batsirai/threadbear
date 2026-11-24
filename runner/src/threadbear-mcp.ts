@@ -27,7 +27,7 @@ import { SAID_MAX } from './wake-when.ts';
 
 export { parseWhen, relativeFuture, relativeTime };
 import { RUNNER_VERSION, expandHome } from './config.ts';
-import { droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
+import { askWhenFromTool, jobsNudge, jobsNudged, droppedOpenLines, OPEN_GONE, ALREADY_ENDED, ARCHIVE_ADDED, MAX_UNTIL, MAX_WAIT_FOR, SNOOZE_ADDED, snoozeFromTool, endTurnDescription, endTurnForm, endTurnMisfit, endTurnTaken, strayAskFields, strayAskProblem, openCardsNote, END_TURN_TOOL, BULLETS_ONLY, ENDED, takenEndTurn, MAX_BYLINE, NARRATION_ONLY, NO_REPLY, needsFromTool, oneReplyAccepted, handsOverAStep, oneReplyAlreadyWritten, summaryFromTool, triedFirstNudged, tryFirstNudge, projectStepNudge, projectStepNudged, unansweredItems, deadEndNudge, deadEndNudged, hasDeadEnd, plainCardNudge, plainCardNudged, wantsPlainCard, turnReply, unreadMessageRefusal, type TurnReply } from './needs.ts';
 
 // end_turn's needs, both forms: "done" meant this turn's step until 11 Nov
 // 2026, when thread 0222c475 said nothing with three draft PRs unmerged in
@@ -80,6 +80,9 @@ export type ThreadControl = {
   // Background jobs or sub-agents of this thread's still running, which
   // wake it when they end (Runner.ownWorkRunning).
   ownWorkRunning?: (threadId: string) => boolean;
+  // Its shell jobs still running, by description, when their end wakes it
+  // (Runner.shellJobs): end_turn asks whether its asks wait for them.
+  shellJobs?: (threadId: string) => string[];
   // What end_turn owes a review by another lab (runner/lab-review.ts).
   reviewOwes?: (threadId: string) => ReturnType<Runner['reviewOwes']>;
   requestSecret?: (threadId: string, req: SecretRequest) => Promise<SecretAnswer>;
@@ -374,6 +377,14 @@ export function buildThreadbearTools(
     if (!schedules) return false;
     const list = await inTime((async () => schedules.list(selfId))(), ID_LIST_TIMEOUT_MS, "couldn't read the schedules").catch(() => [] as Schedule[]);
     return list.some((sc) => sc.threadId === selfId && !sc.paused && !sc.finishedAt && Boolean(sc.nextRunAt));
+  };
+  // Asks made while a shell job of the thread's own runs: the agent says
+  // whether they wait for it (needs.ts, JOBS_NUDGE). Once a turn; a call
+  // that still doesn't say asks at once, as before.
+  const checkJobs = (input: unknown, needs: string, events: PersistedEvent[]): void => {
+    if (needs !== 'you' || askWhenFromTool(input) || jobsNudged(events)) return;
+    const jobs = control.shellJobs?.(selfId) ?? [];
+    if (jobs.length) throw new Error(jobsNudge(jobs));
   };
   const projectStepNote = async (input: { archive?: unknown; snooze?: unknown; waitFor?: unknown }, needs: string, next: string[] | undefined, events: PersistedEvent[]): Promise<string | undefined> => {
     if (opts.projectStepNote === false || needs !== 'nothing' || !projects) return undefined;
@@ -1642,6 +1653,11 @@ export function buildThreadbearTools(
     .optional()
     .describe('Threads the rest of this work waits on, as ids or { thread, until: "it reports the I/O saving" }: hibernates until each finishes (or has done its until), then wakes with their replies; snooze is the latest (1 day if left out). Needs "nothing".');
 
+  const askWhenArg = z
+    .enum(['now', 'jobsEnd'])
+    .optional()
+    .describe('Asks while a job of yours runs: "jobsEnd" holds them until it ends, "now" asks at once.');
+
   // end_turn with one reply (docs/protocol/needs-you.md, "One reply"): the card and
   // a headline; the reply is the message the agent writes next. Nothing to
   // check for a reply, as it comes after; only a second call, a sign-in no
@@ -1700,6 +1716,7 @@ export function buildThreadbearTools(
           .string()
           .optional()
           .describe('Hibernates this thread once the turn is over, until 2h, 1d, tomorrow, an ISO time with its offset, "restart" (the runner next starting), "release" (it starting on a new release) or words saying when ("when the phone arrives"), with needs "nothing": when the user asked for that, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. Except words for something to happen ("until X ships"): those wake you with a turn to check. Asked after you called end_turn? Call it again with this.'),
+        askWhen: askWhenArg,
         waitFor: waitForArg,
         findings: findingsArg,
       },
@@ -1723,6 +1740,7 @@ export function buildThreadbearTools(
         if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks, signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks);
         if (needs === 'you' && hasDeadEnd(asks) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks));
+        checkJobs(input, needs, events);
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks) && !plainCardNudged(events)) throw new Error(plainCardNudge());
         const projectNote = await projectStepNote(input, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
@@ -1810,6 +1828,7 @@ export function buildThreadbearTools(
           .string()
           .optional()
           .describe('Hibernate this thread once the turn is over, until 30m, 2h, 1d, tomorrow, an ISO time with its offset, "restart" (until the runner next starts), "release" (until it starts on a new release), or words saying when ("when the phone arrives"). Only with needs "nothing": when the user has asked for this thread to be snoozed or hibernated, or when the rest waits on a message (one wakes it), until it should have come. It only brings the thread back, it doesn\'t run you: for a step of your own later, use schedule_message. Except words for something to happen ("until X ships"): those wake you with a turn to check. If they ask after you have called end_turn, call it again with this.'),
+        askWhen: askWhenArg,
         waitFor: waitForArg,
         findings: findingsArg,
       },
@@ -1857,6 +1876,7 @@ export function buildThreadbearTools(
         if (opts.tryFirstNote !== false && needs === 'you' && handsOverAStep(notSignIns(asks ?? [], signIns).filter((a) => !asksForAppRestart([a]))) && !triedFirstNudged(events)) throw new Error(tryFirstNudge());
         if (needs === 'you') await checkThreadLinks(asks ?? []);
         if (needs === 'you' && hasDeadEnd(asks ?? []) && !deadEndNudged(events)) throw new Error(deadEndNudge(asks ?? []));
+        checkJobs(args, needs, events);
         if (opts.plainCardNote !== false && needs === 'you' && wantsPlainCard(asks ?? []) && !plainCardNudged(events)) throw new Error(plainCardNudge());
         const projectNote = await projectStepNote(args, needs, parsed?.next, events);
         if (projectNote) throw new Error(projectNote);
