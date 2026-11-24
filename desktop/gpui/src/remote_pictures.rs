@@ -237,7 +237,7 @@ pub(crate) fn words(picture: &Picture, runner_name: &str) -> Option<String> {
 
 /// The picture as far as it's got, without asking for it.
 #[cfg(feature = "automation")]
-fn peek(runner: &str, path: &str, cx: &App) -> Option<Picture> {
+pub(crate) fn peek(runner: &str, path: &str, cx: &App) -> Option<Picture> {
     let state = cx
         .try_global::<RemotePictures>()?
         .pictures

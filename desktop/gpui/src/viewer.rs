@@ -77,7 +77,7 @@ impl ViewerState {
     /// For scripts: "" while it's closed, else "<n> of <total> <path>", with
     /// " (loading)" until the picture's drawn, " (couldn't show)" if it won't be.
     #[cfg(feature = "automation")]
-    pub(crate) fn describe(&self) -> String {
+    pub(crate) fn describe(&self, cx: &App) -> String {
         if !self.open {
             return String::new();
         }
@@ -86,13 +86,26 @@ impl ViewerState {
             self.index + 1,
             self.pictures.len(),
             self.current_path().unwrap_or(""),
-            self.state_words()
+            self.state_words(cx)
         )
     }
 
     #[cfg(feature = "automation")]
-    fn state_words(&self) -> &'static str {
+    fn state_words(&self, cx: &App) -> &'static str {
         match self.pictures.get(self.index) {
+            // Another Mac's is drawn from the tiles' books, so it's as far
+            // as they've got: one that Mac never sent couldn't be shown.
+            Some(p) if p.image.is_some() && self.runner.is_some() => {
+                let runner = self.runner.as_deref().unwrap_or_default();
+                match crate::remote_pictures::peek(runner, &p.path, cx) {
+                    Some(crate::remote_pictures::Picture::Ready(_)) => "",
+                    Some(
+                        crate::remote_pictures::Picture::Failed(_)
+                        | crate::remote_pictures::Picture::Truncated,
+                    ) => " (couldn't show)",
+                    _ => " (loading)",
+                }
+            }
             Some(p) if p.image.is_some() => "",
             Some(p) if p.failed => " (couldn't show)",
             _ => " (loading)",
@@ -606,7 +619,7 @@ pub(crate) fn viewer_command(
         viewer.index + 1,
         viewer.pictures.len(),
         viewer.current_path().unwrap_or(""),
-        viewer.state_words()
+        viewer.state_words(cx)
     )))
 }
 
