@@ -391,6 +391,9 @@ test('a 402 while Grok still reads room: reading that same room again is no reas
   for (const o of roomy) s.out(o);
   await tick();
   assert.ok(h.runner.get(thread.id).waitingForRoom);
+  // The reading after the 402 said 60%, but the store keeps it blocked, so
+  // limit-recheck (which reads the store) goes on reading it.
+  assert.equal(h.fake.list().find((a) => a.id === 'grok-main')?.usage?.blocked, true);
   const sent = s.sent.length;
   h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], blocked: false });
   await tick();
@@ -432,4 +435,26 @@ test('a 402 from a turn still running on the old login after Mike moved the thre
   assert.ok(h.runner.ranDry.has('grok-main'));
   assert.equal(h.runner.ranDry.has('claude-3'), false);
   assert.equal(h.runner.get(thread.id).accountId, 'claude-3');
+});
+
+test("with no reading after the 402 (Grok gone), a recheck's reading is the room to beat, so a top-up still counts", async () => {
+  const played = (await outOfBalanceOutputs()).filter((o) => o.kind === 'result');
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  assert.equal(h.runner.dryRoom.get('grok-main'), Infinity, 'nothing read yet');
+  const spent = grokLimits(SPENT)!;
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: spent.windows, blocked: spent.blocked });
+  assert.equal(h.runner.dryRoom.get('grok-main'), 0);
+  assert.ok(h.runner.get(thread.id).waitingForRoom);
+  const topped = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } })!;
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: topped.windows, blocked: topped.blocked });
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
 });

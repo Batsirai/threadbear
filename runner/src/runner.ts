@@ -1183,10 +1183,13 @@ export class Runner {
       this.ranDry.delete(accountId);
       this.dryRoom.delete(accountId);
       this.readBack.add(accountId);
-    } else if (reading.blocked === false && dryUntil !== undefined && dryUntil > this.clock.now()) {
-      // Not enough to count as back, so the store keeps the block too: a
-      // login it showed as having room would get no more rechecks.
-      reading = { ...reading, blocked: true, blockedUntil: dryUntil };
+    } else if (dryUntil !== undefined && dryUntil > this.clock.now()) {
+      // Not enough to count as back. What it read is the room to beat from
+      // now on (a reading lost after the turn left none), and the store
+      // keeps the block too: a login it showed as having room would get no
+      // more rechecks.
+      if (was !== undefined) this.dryRoom.set(accountId, Math.min(was, reading.blocked ? 0 : (least ?? was)));
+      if (reading.blocked === false) reading = { ...reading, blocked: true, blockedUntil: dryUntil };
     }
     usage.record(accountId, reading);
     // A thread waiting on that login hears now, not at the reset it named.
@@ -2923,7 +2926,8 @@ export class Runner {
         // A login that just ran dry: the reading its CLI took after the turn
         // is what it ran dry at, if less than the reading before it.
         const was = this.dryRoom.get(id);
-        if (was !== undefined && (this.ranDry.get(id) ?? 0) > this.clock.now()) {
+        const dry = was !== undefined && (this.ranDry.get(id) ?? 0) > this.clock.now();
+        if (dry) {
           const least = o.blocked ? 0 : o.windows.length ? Math.min(...o.windows.map((w) => w.remainingPercent)) : was;
           this.dryRoom.set(id, Math.min(was, least));
           // And it holds until the window at its limit resets, if it says.
@@ -2933,7 +2937,10 @@ export class Runner {
         try {
           this.usage?.record(id, {
             windows: o.windows,
-            ...(o.blocked !== undefined ? { blocked: o.blocked } : {}),
+            // While it's dry the store keeps it blocked, whatever this
+            // session's reading says (a 402 while Grok still reads room, or
+            // another session's), so limit-recheck goes on reading it.
+            ...(dry && o.blocked !== true ? { blocked: true, blockedUntil: this.ranDry.get(id) } : o.blocked !== undefined ? { blocked: o.blocked } : {}),
             ...(o.email ? { email: o.email } : {}),
             ...(o.plan ? { plan: o.plan } : {}),
             ...(o.resets ? { resets: o.resets } : {}),
