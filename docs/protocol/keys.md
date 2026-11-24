@@ -108,16 +108,25 @@ schedule on it, and mint phone tokens. Now there are two kinds of key, and
   2026): that runner's threads' messages, tool output and pictures (read
   as empty, written as dropped, as a runner key's for a thread not its own;
   an id with no row counts as the runner's whose tombstone or sidebar row
-  it has), `removeThreads` in either form, taking or finishing its
-  commands, recording or letting go of its schedules' runs, and closing its
-  requests. An id whose rows are going (`threadClears`, the owner taking
-  the thread over) is answered as left out, as before. And a runner
-  doesn't take the mirror's newest message as where its start sends from
-  when that's past the thread's own last seq, which none of its own can
-  be: it sends the thread's whole history again rather than nothing after
-  it. The owner key can still put a schedule on that runner, ask it to run
-  one, queue it commands and take a thread over from it, and revoking the
-  runner key gives the id back.
+  it has), `removeThreads` in either form, freeing a file it uploaded,
+  taking or finishing its commands (or naming its thread as the one an
+  `any` command made), recording or letting go of its schedules' runs, and
+  closing its requests. An id whose rows are going (`threadClears`, the owner taking
+  the thread over) is answered as left out, as before. Rows written as a
+  keyed runner before this don't keep its history from going up:
+  `messageHeads` gives a runner key the newest of its own rows (its
+  `runnerId` on them; no head if 20 rows not its own are on top), a row of
+  its own thread it sends again takes the one at that seq back with its
+  own words if they differ (counted against it, waiting when there's no
+  room), and the runner itself doesn't take a head past the thread's own
+  last seq, which none of its own can be: it sends the whole history
+  again. This keeps a forgotten copy of the owner key from carrying on as
+  that runner; it isn't a fence against someone holding the owner key on
+  purpose, who can still do what the main Mac does (revoke that runner's
+  key, `auditRemove`). Rotate the owner key after giving a Mac its own
+  ("After a migration", below). The owner key can still put a schedule on
+  that runner, ask it to run one, queue it commands and take a thread over
+  from it, and revoking the runner key gives the id back.
 - **Refusals.** A function a runner key may not call, or a row that isn't
   its runner's, throws `ConvexError({ kind: "forbidden", message })`, the
   message starting "This runner's key can't ...". The runner turns the

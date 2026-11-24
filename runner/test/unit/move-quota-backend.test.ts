@@ -34,10 +34,11 @@ function mover(b: B) {
     info: (moveId: string) => fn(moves.moveInfo, { key, moveId, info: { cwd: '/x' } }),
     ready: (moveId: string) => fn(moves.moveReady, { key, moveId, plan: { cwd: '/x' }, sealKey: SEAL }),
     frozen: (moveId: string) => fn(moves.moveFrozen, { key, moveId }),
+    // A runner key's chunk goes up through /runner/upload; the main key's is a plain Convex upload.
     pack: async (moveId: string) => {
       const ticket = new URL(await fn(moves.moveChunkUrl, { key, moveId })).searchParams.get('ticket');
       const id = b.file(`chunk-${moveId}`);
-      assert.equal(await claimAndFinish(b.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: id, bytes: 1000 }), true);
+      if (ticket) assert.equal(await claimAndFinish(b.ctx, sync.claimUpload, sync.finishUpload, { ticket, storageId: id, bytes: 1000 }), true);
       return fn(moves.movePacked, { key, moveId, chunks: [id], sha256: SHA, bytes: 1000 });
     },
     claim: (moveId: string) => fn(moves.moveClaim, { key, moveId }),
@@ -68,7 +69,29 @@ function mover(b: B) {
     }
     throw new Error('rehomeRows never finished');
   };
-  return { fn, as, runAll };
+  // A whole move, S's and T's steps by their keys, its pages run.
+  const move = async (threadId: string, to: string, from: ReturnType<typeof as>, onto: ReturnType<typeof as>, run = true) => {
+    const { moveId } = await as(OWNER).start(threadId, to);
+    await from.info(moveId);
+    await onto.ready(moveId);
+    await from.frozen(moveId);
+    await from.pack(moveId);
+    await onto.claim(moveId);
+    await onto.done(moveId);
+    if (run) await runAll();
+    return moveId as string;
+  };
+  return { fn, as, runAll, move };
+}
+
+async function afterMinutes<T>(n: number, f: () => Promise<T>): Promise<T> {
+  const realNow = Date.now;
+  Date.now = () => realNow() + n * 60_000;
+  try {
+    return await f();
+  } finally {
+    Date.now = realNow;
+  }
 }
 
 const usage = (b: B, runnerId: string) => b.rows('runnerStorage').find((u) => u.runnerId === runnerId) ?? { bytes: 0, messageBytes: 0, bodyBytes: 0 };
@@ -138,13 +161,56 @@ test("a thread moved to a runner at its caps never puts it past them: its oldest
     assert.equal(s.rows('eventBodies').filter((r) => r.runnerId === CLOUD).length, 0);
     assert.equal(usage(s, CLOUD).messageBytes, 0);
     assert.equal(usage(s, CLOUD).bodyBytes, 0);
-    // The oldest went first: T's newest message is there.
-    assert.ok(s.rows('messages').some((r) => r.threadId === 'T' && r.seq === 30));
+    // T's rows are older than anything of Mac mini's own, so they're what
+    // gives way: none of O's go for them (Gemini's review).
+    assert.equal(s.rows('messages').filter((r) => r.threadId === 'O').length, 30);
+    assert.equal(s.rows('eventBodies').filter((r) => r.threadId === 'O').length, 10);
     // The picture: no room on Mac mini, so the backend's copy goes and nobody is charged for it.
     assert.equal(s.rows('replyImages').length, 0);
     assert.equal(s.hasFile('cloud-pic'), false);
     assert.equal(after.bytes, STORED - 1_000);
     assert.equal(s.rows('storageOwners').filter((o) => o.storageId === 'cloud-pic').length, 0);
+  });
+});
+
+// Codex Security's verify-fix (24 Nov 2026): the new runner sending the
+// moved thread's history again before its pages ran took each row back
+// (sync.ts takenBack) with no check of its own allowance.
+test("the new runner sending a moved thread's history again before its rows come over stays within its caps", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 30, 2_000);
+  await s.cloud.bodies('T', 1, 10, 2_000);
+  await s.mini.upsert('O', MINI);
+  await s.mini.append('O', 1, 30, 2_000);
+  await s.mini.bodies('O', 1, 10, 2_000);
+  const mini = usage(s, MINI);
+  await withCaps({ messageBytes: mini.messageBytes + 10_000, evictPerWrite: 3, bodyBytes: mini.bodyBytes + 5_000, bodyEvictPerWrite: 2 }, async () => {
+    const { moveId } = await s.owner.start('T', MINI);
+    await s.cloud.info(moveId);
+    await s.mini.ready(moveId);
+    await s.cloud.frozen(moveId);
+    await s.cloud.pack(moveId);
+    await s.mini.claim(moveId);
+    const within = () => {
+      const u = usage(s, MINI);
+      assert.ok(u.messageBytes <= CAP.messageBytes, `messages ${u.messageBytes} within ${CAP.messageBytes}`);
+      assert.ok(u.bodyBytes <= CAP.bodyBytes, `tool output ${u.bodyBytes} within ${CAP.bodyBytes}`);
+      assert.equal(u.messageBytes, held(s, 'messages', MINI));
+      assert.equal(u.bodyBytes, held(s, 'eventBodies', MINI));
+    };
+    // Mac mini's whole history of T, sent before any page has run.
+    for (let i = 0; i < 3; i++) {
+      await s.mini.append('T', 1, 30, 2_000);
+      await s.mini.bodies('T', 1, 10, 2_000);
+      within();
+    }
+    await s.mini.done(moveId);
+    await s.runAll();
+    within();
+    assert.equal(moveOf(s, moveId).state, 'done');
+    assert.equal(usage(s, CLOUD).messageBytes, 0);
+    assert.equal(usage(s, CLOUD).bodyBytes, 0);
   });
 });
 
@@ -231,4 +297,127 @@ test("a thread moved to a box and back keeps every row and file charged to the r
   assert.equal(usage(s, BOX_RUNNER).messageBytes, 0);
   assert.equal(usage(s, BOX_RUNNER).bodyBytes, 0);
   assert.deepEqual(s.rows('storageOwners').filter((o) => o.storageId === 'mini-pic').map((o) => o.runnerId), [MINI]);
+});
+
+// Codex's review (24 Nov 2026): a file that went to the owner lost its
+// record, and a move on to a runner key gave it one charging nothing.
+test("a picture moved to the main Mac and on to a runner key is charged to it", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 2, 100);
+  await s.cloud.picture('T', 'pic', 100_000);
+  await s.move('T', LAPTOP, s.cloud, s.owner);
+  assert.equal(s.rows('storageOwners').filter((o) => o.storageId === 'pic').length, 0, "the owner's files have no record");
+  assert.equal(usage(s, CLOUD).bytes, 0);
+  const before = usage(s, MINI).bytes;
+  await s.move('T', MINI, s.owner, s.mini);
+  const rec = s.rows('storageOwners').filter((o) => o.storageId === 'pic');
+  assert.equal(rec.length, 1);
+  assert.equal(rec[0]!.runnerId, MINI);
+  assert.ok(rec[0]!.bytes >= 64 * 1024, `charged ${rec[0]!.bytes}`);
+  assert.equal(usage(s, MINI).bytes - before, rec[0]!.bytes);
+});
+
+// Codex's review: 200 tool outputs of up to 512 KB in one page were more than
+// a mutation may read, so the page failed every time and the move stayed claimed.
+test("a moved thread's biggest tool outputs go over in pages a mutation can read", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  for (let i = 0; i < 40; i += 10) await s.cloud.bodies('T', i + 1, 10, 450_000);
+  const moveId = await s.move('T', MINI, s.cloud, s.mini, false);
+  for (let round = 0; round < 50; round++) {
+    const next: Record<string, unknown>[] = [];
+    for (let i = s.scheduled.length - 1; i >= 0; i--) {
+      const job = s.scheduled[i] as { fn: string; args: Record<string, unknown> };
+      if (job.fn.endsWith('rehomeRows')) next.unshift(...(s.scheduled.splice(i, 1) as (typeof job)[]).map((j) => j.args));
+    }
+    if (!next.length) break;
+    for (const a of next) {
+      s.resetReads();
+      await s.fn(moves.rehomeRows, a);
+      assert.ok(s.bytesRead() < 12 * 1024 * 1024, `a page read ${s.bytesRead()} bytes`);
+    }
+  }
+  assert.equal(moveOf(s, moveId).state, 'done');
+  assert.equal(s.rows('eventBodies').filter((r) => r.runnerId === MINI).length, 40);
+  assert.equal(usage(s, MINI).bodyBytes, held(s, 'eventBodies', MINI));
+});
+
+// Codex's review: two full runners moving their oldest threads to each other
+// each waited for room the other held, for good.
+test('two full runners moving threads to each other both finish, within their caps', async () => {
+  const s = await keyed();
+  await s.cloud.upsert('Y', CLOUD);
+  await s.cloud.append('Y', 1, 20, 2_000);
+  await s.mini.upsert('X', MINI);
+  await s.mini.append('X', 1, 20, 2_000);
+  await s.cloud.upsert('C', CLOUD);
+  await s.cloud.append('C', 1, 20, 2_000);
+  await s.mini.upsert('O', MINI);
+  await s.mini.append('O', 1, 20, 2_000);
+  const full = Math.max(usage(s, CLOUD).messageBytes, usage(s, MINI).messageBytes);
+  await withCaps({ messageBytes: full, evictPerWrite: 3 }, async () => {
+    const x = await s.move('X', CLOUD, s.mini, s.cloud, false);
+    const y = await s.move('Y', MINI, s.cloud, s.mini, false);
+    for (let i = 0; i < 20 && !(moveOf(s, x).state === 'done' && moveOf(s, y).state === 'done'); i++) {
+      await s.runAll();
+      // What stopped for want of room starts again with the sweep.
+      await afterMinutes(11 * (i + 1), () => s.fn(moves.expireMoves, {}));
+    }
+    assert.equal(moveOf(s, x).state, 'done');
+    assert.equal(moveOf(s, y).state, 'done');
+    for (const r of [CLOUD, MINI]) {
+      assert.ok(usage(s, r).messageBytes <= CAP.messageBytes);
+      assert.equal(usage(s, r).messageBytes, held(s, 'messages', r));
+    }
+    // Each thread's rows are its runner's now.
+    for (const [t, r] of [['X', CLOUD], ['Y', MINI]] as const) assert.deepEqual([...new Set(s.rows('messages').filter((m) => m.threadId === t).map((m) => m.runnerId))], [r]);
+  });
+});
+
+// Codex's review: rows of the thread nobody was charged for (the owner key's,
+// or left so by an older move) stayed uncounted once it moved to a runner key.
+test("a moved thread's rows nobody was charged for are its new runner's", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 5, 500);
+  for (let seq = 100; seq < 105; seq++) await s.ctx.db.insert('messages', { threadId: 'T', seq, role: 'assistant', text: `old ${seq}`, at: 'now' });
+  await s.ctx.db.insert('eventBodies', { threadId: 'T', seq: 100, text: 'old output', at: 1 });
+  await s.move('T', MINI, s.cloud, s.mini);
+  assert.deepEqual([...new Set(s.rows('messages').filter((m) => m.threadId === 'T').map((m) => m.runnerId))], [MINI]);
+  assert.deepEqual([...new Set(s.rows('eventBodies').filter((m) => m.threadId === 'T').map((m) => m.runnerId))], [MINI]);
+  assert.equal(usage(s, MINI).messageBytes, held(s, 'messages', MINI));
+  assert.equal(usage(s, MINI).bodyBytes, held(s, 'eventBodies', MINI));
+});
+
+// Gemini's review: a moved row older than all of T's, taken as "this call's
+// own" by T's room-making, sent it reading every row T has (48 MB of them
+// at its cap, past what a mutation may read). Now the row that would go
+// first goes, and a page reads only what it moves.
+test("moving older rows into a full runner reads only the page, not everything the runner has", async () => {
+  const s = await keyed();
+  await s.cloud.upsert('T', CLOUD);
+  await s.cloud.append('T', 1, 50, 500);
+  await s.mini.upsert('O', MINI);
+  for (let i = 0; i < 3_000; i += 500) await s.mini.append('O', i + 1, 500, 200);
+  await withCaps({ messageBytes: usage(s, MINI).messageBytes }, async () => {
+    const moveId = await s.move('T', MINI, s.cloud, s.mini, false);
+    for (let round = 0; round < 50; round++) {
+      const next: Record<string, unknown>[] = [];
+      for (let i = s.scheduled.length - 1; i >= 0; i--) {
+        const job = s.scheduled[i] as { fn: string; args: Record<string, unknown> };
+        if (job.fn.endsWith('rehomeRows')) next.unshift(...(s.scheduled.splice(i, 1) as (typeof job)[]).map((j) => j.args));
+      }
+      if (!next.length) break;
+      for (const a of next) {
+        s.resetReads();
+        await s.fn(moves.rehomeRows, a);
+        assert.ok(s.reads() < 1_000, `a page read ${s.reads()} rows`);
+      }
+    }
+    assert.equal(moveOf(s, moveId).state, 'done');
+    assert.equal(s.rows('messages').filter((r) => r.threadId === 'O').length, 3_000, "none of Mac mini's own gave way");
+    assert.equal(usage(s, MINI).messageBytes, held(s, 'messages', MINI));
+    assert.equal(usage(s, CLOUD).messageBytes, 0);
+  });
 });

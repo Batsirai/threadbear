@@ -21,7 +21,7 @@ import { mutation, query, type MutationCtx, type QueryCtx } from './_generated/s
 import type { Doc, Id } from './_generated/dataModel';
 import { internal } from './_generated/api';
 import { boxOfRunner, boxStateReachable, checkRunnerId, forbidden, hasAllowance, hasLiveKey, runnerAuth, sha256, withoutCredentials } from './lib';
-import { buryIndexRows, countBodyBytes, countMessageBytes, deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, moveView, roomForBody, roomForMessage, roomToStore, storageInUse, storedBytes, ticketKey } from './sync';
+import { buryIndexRows, countBodyBytes, countMessageBytes, deleteIfUnused, MAX_RUNNER_UPLOAD_BYTES, MIN_UPLOAD_CHARGE, RUNNER_KEY_CAPS as CAP, moveView, roomForBody, roomForMessage, roomToStore, storageInUse, storedBytes, ticketKey } from './sync';
 import { docBytes, ownThreadOnly, type Caller } from './runnerAccess';
 import { machines, move as moveMachine } from './machines';
 import { dropChunks } from './moveMachine';
@@ -49,8 +49,16 @@ const PLAN_MAX_BYTES = 16 * 1024;
 const PICK_CHARS = 1024;
 const LISTED = 50;
 // Rows handed over a run at a time (rehomeRows), as a thread can have more
-// than one mutation may read.
-const REHOME_PAGE = 200;
+// than one mutation may read: few enough of each table's that a page of its
+// largest rows, with the destination's room-making on top (REHOME_EVICT),
+// stays well inside Convex's 16 MiB a mutation reads. A tool output is up
+// to 512 KB (CAP.bodyDoc) and a plan's message 84 KB (CAP.planDoc): 16 of
+// the one and 100 of the other are about 8 MB, and the 8 and 50 rows the
+// room-making may read about 4 MB more (Codex's review, 24 Nov 2026: 200
+// tool outputs a page could be 100 MB, so the page failed every time and
+// the move stayed claimed).
+const REHOME_PAGE: Record<(typeof REHOME_TABLES)[number], number> = { messages: 100, eventBodies: 16, shareImages: 200, replyImages: 200, heldPictures: 200 };
+const REHOME_EVICT = { messages: 50, eventBodies: 8 };
 // A claimed move T has said is done but whose rows haven't all gone over
 // after this has them sent again (expireMoves).
 const REHOME_STUCK_MS = 10 * 60_000;
@@ -527,34 +535,60 @@ type PictureRow = { _id: Id<PictureTable>; storageId: Id<'_storage'> };
 
 // A picture's file to T: S's upload record (and what it counts against)
 // moves to T, or goes if T is the owner's, whose files have none; one with
-// no record gets one if T has an allowance (a key or a box), so T can
-// delete it. A file of S's that T has no room to keep (sync.ts roomToStore,
-// the limit on any upload of T's) isn't kept for it: the picture's row and
-// the backend's copy go, and S is no longer charged for it. The picture
-// itself moved with the thread, so T's runner sends it again when it has
-// room, as it does any picture the backend lacks (Daybreak 181).
+// no record (the owner's, or one a move to the owner took its record from)
+// gets one if T has an allowance (a key or a box), so T can delete it, and
+// is charged to T at its size as an upload of T's would be, so a file can't
+// reach T for free by way of the owner (Codex's review, 24 Nov 2026). A
+// file T has no room to keep (sync.ts roomToStore, the limit on any upload
+// of T's) isn't kept for it: the picture's row and the backend's copy go,
+// and S is no longer charged for it. The picture itself moved with the
+// thread, so T's runner sends it again when it has room, as it does any
+// picture the backend lacks (Daybreak 181).
 async function rehomeFile(ctx: MutationCtx, table: PictureTable, picture: PictureRow, from: string, to: string, toCharged: boolean): Promise<void> {
   const storageId = picture.storageId;
   const rows = await ctx.db.query('storageOwners').withIndex('by_storageId', (q) => q.eq('storageId', storageId)).collect();
+  // Its size as stored, for a file whose record doesn't say (one from before records had it).
+  const size = async () => Math.max(MIN_UPLOAD_CHARGE, (await ctx.db.system.get('_storage', storageId))?.size ?? 0);
+  const notKept = async () => {
+    await ctx.db.delete(table, picture._id as Id<'replyImages'>);
+    // Its record and S's charge for it go with the file (unless another row still names it).
+    await deleteIfUnused(ctx, storageId);
+  };
   if (!rows.length) {
-    if (toCharged) await ctx.db.insert('storageOwners', { storageId, runnerId: to, at: Date.now(), bytes: 0, attachedAt: Date.now() });
+    if (!toCharged) return;
+    const bytes = await size();
+    if (!(await roomToStore(ctx, to, bytes))) return notKept();
+    await ctx.db.insert('storageOwners', { storageId, runnerId: to, at: Date.now(), bytes, attachedAt: Date.now() });
+    await countStoredBytes(ctx, to, bytes);
     return;
   }
   for (const row of rows) {
     if (row.runnerId !== from) continue;
     const bytes = row.bytes ?? 0;
-    if (toCharged && !(await roomToStore(ctx, to, bytes))) {
-      await ctx.db.delete(table, picture._id as Id<'replyImages'>);
-      // Its record and S's charge for it go with the file (unless another row still names it).
-      await deleteIfUnused(ctx, storageId);
-      return;
-    }
+    const charge = row.bytes ?? (await size());
+    if (toCharged && !(await roomToStore(ctx, to, charge))) return notKept();
     await countStoredBytes(ctx, from, -bytes);
     if (toCharged) {
-      await ctx.db.patch(row._id, { runnerId: to });
-      await countStoredBytes(ctx, to, bytes);
+      await ctx.db.patch(row._id, { runnerId: to, bytes: charge });
+      await countStoredBytes(ctx, to, charge);
     } else await ctx.db.delete(row._id);
   }
+}
+
+// Whether T has no room for a moved row of `size` bytes and the row is
+// older than T's oldest (as T's room-making picks it: messages by
+// _creationTime, tool output by `at`), so the row is what would go first.
+// With no rows at all T's count is stale, which its room-making puts right.
+async function olderThanAllOf(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: { _creationTime: number; at?: unknown }, to: string, size: number): Promise<boolean> {
+  const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', to)).unique();
+  if (table === 'messages') {
+    if ((usage?.messageBytes ?? 0) + size <= CAP.messageBytes) return false;
+    const oldest = await ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', to)).first();
+    return oldest !== null && row._creationTime <= oldest._creationTime;
+  }
+  if ((usage?.bodyBytes ?? 0) + size <= CAP.bodyBytes) return false;
+  const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', to)).first();
+  return oldest !== null && (row.at as number) <= oldest.at;
 }
 
 // The claimed move a rehome page is for, or null for a page that's no
@@ -606,10 +640,9 @@ export const rehomeRows = machines.internalMutation({
       await rehomed(m);
       return null;
     }
-    // Who counts each side's rows (lib.ts hasAllowance): a runner key's
-    // runner or a box, never mistaken for the owner's because a box's key
-    // isn't a runnerKeys row (Daybreak 181, 24 Nov 2026).
-    const fromCharged = await hasAllowance(ctx, from);
+    // Who counts T's rows (lib.ts hasAllowance): a runner key's runner or a
+    // box, never mistaken for the owner's because a box's key isn't a
+    // runnerKeys row (Daybreak 181, 24 Nov 2026).
     const toCharged = await hasAllowance(ctx, to);
     // A box makes room among its own thread's rows only, and its one thread is this one.
     const onlyThread = toCharged && !(await hasLiveKey(ctx, to)) ? threadId : undefined;
@@ -617,33 +650,50 @@ export const rehomeRows = machines.internalMutation({
     const page = await ctx.db
       .query(name as 'messages')
       .withIndex('by_thread_seq', (q) => q.eq('threadId', threadId))
-      .paginate({ numItems: REHOME_PAGE, cursor });
-    // T takes S's rows as its own writes would be taken: within its
-    // allowances, its oldest going first to make room, a call's worth at a
-    // time (sync.ts roomForMessage, roomForBody), so a move never puts it
-    // past them. Out of room for now, the page stops there and runs again
-    // with a fresh allowance of room-making; the rows not yet given stay
-    // S's and the move stays claimed, so nothing is lost meanwhile.
-    const budget = { evicted: 0, owners: new Map<string, string | null>() };
-    const givenNow = new Set<string>();
+      .paginate({ numItems: REHOME_PAGE[name], cursor });
+    // T takes S's rows as if it had written them when they were written:
+    // within its allowances, its oldest going first to make room (sync.ts
+    // roomForMessage, roomForBody), so a move never puts it past them. A row
+    // keeps its age (a message its _creationTime, a tool output its `at`),
+    // so when T is full one older than anything T has is the one that would
+    // go first, and goes rather than come over; a newer one comes over in
+    // place of T's older rows only, never its newer ones (Gemini's review,
+    // 24 Nov 2026: given rows taken for room-making's "this call's own"
+    // could be the oldest, which sent it reading all of T's rows). Out of
+    // room for now, the page stops there and runs again with a fresh
+    // allowance of room-making; the rows not yet given stay S's and the
+    // move stays claimed, so nothing is lost meanwhile. Room-making is held
+    // to REHOME_EVICT rows a run (budget starts that far below the call's cap).
+    const evictFrom = name === 'messages' ? Math.max(0, CAP.evictPerWrite - REHOME_EVICT.messages) : Math.max(0, CAP.bodyEvictPerWrite - REHOME_EVICT.eventBodies);
+    const budget = { evicted: evictFrom, owners: new Map<string, string | null>() };
+    let moved = 0;
     let full = false;
     for (const row of page.page as Record<string, any>[]) {
       if (name === 'messages' || name === 'eventBodies') {
-        // Only S's: a row under another runner's id isn't S's to give.
+        // S's, or nobody's (the owner's, or one an older move or a runner's
+        // time on the main key left uncounted): all of the thread's rows end
+        // up counted against the runner it's on (Codex's review). A row under
+        // a third runner's id isn't S's to give.
         const owner = row.runnerId as string | undefined;
-        if (owner !== undefined ? owner !== from : fromCharged) continue;
+        if (owner !== undefined && owner !== from) continue;
         const { _id, _creationTime, runnerId: _r, ...rest } = row;
         const count = name === 'messages' ? countMessageBytes : countBodyBytes;
         if (toCharged) {
           const size = docBytes({ ...rest, runnerId: to });
-          const room = name === 'messages' ? await roomForMessage(ctx, to, size, givenNow, budget, undefined, onlyThread) : await roomForBody(ctx, to, size, null, budget, onlyThread);
+          if (await olderThanAllOf(ctx, name, row as { _creationTime: number; at?: unknown }, to, size)) {
+            if (owner !== undefined) await count(ctx, from, -storedBytes(row));
+            await ctx.db.delete(name, _id);
+            moved++;
+            continue;
+          }
+          const room = name === 'messages' ? await roomForMessage(ctx, to, size, new Set(), budget, undefined, onlyThread) : await roomForBody(ctx, to, size, null, budget, onlyThread);
           if (!room) {
             full = true;
             break;
           }
           if (owner !== undefined) await count(ctx, from, -storedBytes(row));
           await ctx.db.patch(_id, { runnerId: to });
-          givenNow.add(String(_id));
+          moved++;
         } else {
           if (owner !== undefined) await count(ctx, from, -storedBytes(row));
           await ctx.db.patch(_id, { runnerId: undefined });
@@ -654,7 +704,7 @@ export const rehomeRows = machines.internalMutation({
       // Again from this page, which gives only what's still S's. Only while
       // this run got somewhere (gave a row or made room): one that couldn't
       // waits for the sweep (expireMoves), rather than running for ever.
-      if (givenNow.size || budget.evicted) await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId, from, to, table, cursor });
+      if (moved || budget.evicted > evictFrom) await ctx.scheduler.runAfter(0, internal.moves.rehomeRows, { moveId: m.moveId, threadId, from, to, table, cursor });
       return null;
     }
     const next = page.isDone ? { table: table + 1, cursor: null } : { table, cursor: page.continueCursor };

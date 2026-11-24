@@ -118,9 +118,9 @@ test("the main key can't take or finish a keyed runner's commands", async () => 
   assert.equal(await s.fn(sync.takeCommand, { key: MINI_KEY, commandId, attempt: 'attempt-0002' }), true);
   assert.equal(await outcome(s.fn(sync.takeCommand, { key: OWNER, commandId, attempt: 'attempt-0002' })), 'forbidden');
   assert.equal(await outcome(s.fn(sync.finishCommand, { key: OWNER, commandId, ok: false, note: 'FORGED' })), 'forbidden');
-  assert.equal((await s.ctx.db.get(commandId)).state, 'taken');
+  assert.equal((await s.ctx.db.get(commandId))!.state, 'taken');
   await s.fn(sync.finishCommand, { key: MINI_KEY, commandId, ok: true });
-  assert.equal((await s.ctx.db.get(commandId)).state, 'done');
+  assert.equal((await s.ctx.db.get(commandId))!.state, 'done');
 });
 
 test("the main key can't record or let go of a keyed runner's schedule runs, and can still put one on it", async () => {
@@ -164,4 +164,57 @@ test("the main key still writes a runner's that has no key of its own, and a key
   assert.deepEqual(textsOf(s, 'M'), ['mini 1', 'owner 2']);
   await s.owner.remove(['M']);
   assert.equal(s.rows('threads').filter((t) => t.threadId === 'M').length, 0);
+});
+
+// Rows an old copy of the main key wrote before this (Daybreak 178's
+// remediation test 3): a head inside the runner's history's range, past rows
+// it never got to send, and a message it wrote over. A runner key's head is
+// the newest of its own rows, and what it sends takes the forged rows back
+// with its own words.
+test("a keyed runner's head is its own newest row, and its own words go over a forged one", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  for (const seq of [1, 2, 3]) await s.mini.append('M', `real ${seq}`, seq);
+  // As the old main key left them: the message at seq 2 written over, and one at 40.
+  const two = s.rows('messages').find((m) => m.threadId === 'M' && m.seq === 2)!;
+  await s.ctx.db.replace(two._id, { threadId: 'M', seq: 2, role: 'assistant', text: 'FORGED', at: 'now' });
+  await s.ctx.db.insert('messages', { threadId: 'M', seq: 40, role: 'assistant', text: 'FORGED HEAD', at: 'now' });
+  assert.deepEqual(await s.fn(sync.messageHeads, { key: MINI_KEY, runnerId: MINI }), [{ threadId: 'M', lastSeq: 3 }]);
+  // Its start sends from there, and its history again: its own words win.
+  await s.mini.append('M', 'real 2', 2);
+  await s.mini.append('M', 'real 40', 40);
+  assert.deepEqual(textsOf(s, 'M'), ['real 1', 'real 2', 'real 3', 'real 40']);
+  assert.ok(s.rows('messages').filter((m) => m.threadId === 'M').every((m) => m.runnerId === MINI), 'and counted as its own');
+  // The main Mac's own head is still its newest row, whoever's.
+  assert.deepEqual(await s.fn(sync.messageHeads, { key: OWNER, runnerId: LAPTOP }), []);
+});
+
+// Gemini's review: a picture call for the keyed runner's thread, dropped,
+// freed the file it named, which could be that runner's upload on its way.
+test("the main key can't delete a keyed runner's upload by naming it on a call for its thread", async () => {
+  const s = await setup();
+  await s.mini.upsert('M', MINI);
+  const theirs = await s.upload(MINI_KEY, 'mini-upload');
+  await s.owner.reply('M', theirs);
+  await s.owner.share('M', theirs);
+  assert.equal(s.hasFile(theirs), true);
+  // Mac mini attaches it after all.
+  await s.mini.reply('M', theirs);
+  assert.equal(s.rows('replyImages').length, 1);
+});
+
+test("an \"any\" command the main key finishes can't name a keyed runner's thread as the one it made", async () => {
+  const s = await setup();
+  const machinesModule = load('machines');
+  await s.mini.upsert('M', MINI);
+  await s.owner.upsert('L', LAPTOP);
+  for (const [made, kept] of [
+    ['M', undefined],
+    ['L', 'L'],
+  ] as const) {
+    const commandId = await machinesModule.queued(s.ctx, { runnerId: 'any', kind: 'create', args: { text: 'go', cwd: '/w' }, createdAt: Date.now() });
+    assert.equal(await s.fn(sync.takeCommand, { key: OWNER, commandId }), true);
+    await s.fn(sync.finishCommand, { key: OWNER, commandId, ok: true, resultThreadId: made });
+    assert.equal((await s.ctx.db.get(commandId))!.resultThreadId, kept);
+  }
 });

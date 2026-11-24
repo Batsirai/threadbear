@@ -266,8 +266,12 @@ export async function deleteIfUnused(ctx: MutationCtx, storageId: Id<'_storage'>
 
 // As deleteIfUnused, and for a runner key only a file it uploaded: nothing
 // naming a file never makes it anyone's to delete.
+// Nor, for the owner key, a file a runner with a live key of its own uploaded
+// (lib.ts ownerFenced): naming it on a call for that runner's thread mustn't
+// delete its upload still on its way (Gemini's review of Daybreak 178).
 async function freeStorage(ctx: MutationCtx, caller: Caller, storageId: Id<'_storage'>): Promise<void> {
-  if (!mayUseStorage(caller, await uploadedBy(ctx, storageId))) return;
+  const uploader = await uploadedBy(ctx, storageId);
+  if (!mayUseStorage(caller, uploader) || (await ownerFenced(ctx, caller, uploader))) return;
   await deleteIfUnused(ctx, storageId);
 }
 
@@ -1873,8 +1877,33 @@ export const appendMessages = mutation({
         .withIndex('by_thread_seq', (q) => q.eq('threadId', m.threadId).eq('seq', m.seq))
         .unique();
       // The thread is this runner key's (ownThread), so a row of it under
-      // another runner's id is this one's again.
-      if (existing && !caller.owner) existing = await takenBack(ctx, 'messages', existing, caller.runnerId);
+      // another runner's id is this one's again, if it has room for it
+      // (as for a new one); else it waits (skipped, sent again).
+      if (existing && !caller.owner) {
+        const theirs = existing.runnerId !== caller.runnerId;
+        const taken = await takenBack(ctx, 'messages', existing, caller.runnerId, (size) => roomForMessage(ctx, caller.runnerId, size, insertedNow, budget, undefined, caller.box?.threadId));
+        if (!taken) {
+          skipped.push(`${m.threadId}:${m.seq}`);
+          continue;
+        }
+        existing = taken;
+        // One it didn't write that says something else (a forged row, Daybreak
+        // 178; or another Mac's scrub of the same event) is written over with
+        // its own, as the owner's own message at a seq is: in its own thread,
+        // its words at that seq are the real ones. The change in size is
+        // counted, and waits when there's no room.
+        if (theirs && (existing.text !== m.text || existing.role !== m.role)) {
+          const doc = { ...m, runnerId: caller.runnerId, ...(existing.pagedAt ? { pagedAt: existing.pagedAt } : {}) };
+          const grow = docBytes(doc) - storedBytes(existing);
+          if (grow > 0 && !(await roomForMessage(ctx, caller.runnerId, grow, insertedNow, budget, existing._id, caller.box?.threadId))) {
+            skipped.push(`${m.threadId}:${m.seq}`);
+            continue;
+          }
+          if (grow < 0) await countMessageBytes(ctx, caller.runnerId, grow);
+          await ctx.db.replace('messages', existing._id, doc);
+          continue;
+        }
+      }
       if (!existing) {
         // A runner key's messages stay within CAP.messageBytes: past it, its
         // oldest anywhere go first, before this one goes in (so a new
@@ -1937,10 +1966,15 @@ export const appendMessages = mutation({
 // runner's (a move's page that ran late, say): "given" when it has gone to
 // that runner (counted against it) or to none if that's the owner's.
 // "mine", and nothing changed, while the thread is still `runnerId`'s or
-// has no row. "held", and nothing changed, when that runner has no room for
-// it now (its allowance is never passed: Daybreak 181, 24 Nov 2026): the
-// move's rehome gives it over, making room as that runner's own writes do,
-// and until then it isn't `runnerId`'s to delete either, so its write waits.
+// has no row. When that runner has no room for it now (its allowance is
+// never passed: Daybreak 181, 24 Nov 2026): "mine" still if it's older than
+// anything that runner has, which its own room-making would take first, so
+// it goes as it would there; else "held", and nothing changed: the move's
+// rehome gives it over, making room as that runner's own writes do, and
+// until then it isn't `runnerId`'s to delete either, so its write waits.
+// Two full runners moving threads to each other can't each hold the other
+// up for good: of the two rows each would wait on, the older goes (Codex's
+// review, 24 Nov 2026).
 // What a runner key's quota deletes is checked with this first, so its
 // allowance never reaches past the threads it has now (Daybreak, 15 Nov 2026).
 // `owners` keeps each thread's runner for the call, as evictions run
@@ -1954,21 +1988,34 @@ async function handedOn(ctx: MutationCtx, table: 'messages' | 'eventBodies', row
     const size = docBytes({ ...rest, runnerId: now });
     const usage = await ctx.db.query('runnerStorage').withIndex('by_runnerId', (q) => q.eq('runnerId', now)).unique();
     const used = table === 'messages' ? (usage?.messageBytes ?? 0) : (usage?.bodyBytes ?? 0);
-    if (used + size > (table === 'messages' ? CAP.messageBytes : CAP.bodyBytes)) return 'held';
+    if (used + size > (table === 'messages' ? CAP.messageBytes : CAP.bodyBytes)) {
+      // That runner's oldest, as its room-making picks it (roomForMessage, roomForBody).
+      if (table === 'messages') {
+        const oldest = await ctx.db.query('messages').withIndex('by_runnerId', (q) => q.eq('runnerId', now)).first();
+        return oldest && row._creationTime <= oldest._creationTime ? 'mine' : 'held';
+      }
+      const oldest = await ctx.db.query('eventBodies').withIndex('by_runner_at', (q) => q.eq('runnerId', now)).first();
+      return oldest && (row as Doc<'eventBodies'>).at <= oldest.at ? 'mine' : 'held';
+    }
     await ctx.db.patch(_id, { runnerId: now });
     await (table === 'messages' ? countMessageBytes : countBodyBytes)(ctx, now, size);
   } else await ctx.db.patch(_id, { runnerId: undefined });
   return 'given';
 }
 
-// A row of the caller's own thread left under another runner's id: the
-// caller's again, its bytes moved across, when the caller sends it again.
-async function takenBack<T extends Doc<'messages'> | Doc<'eventBodies'>>(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: T, runnerId: string): Promise<T> {
+// A row of the caller's own thread left under another runner's id (a moved
+// thread's, before its rehome reaches it): the caller's again, its bytes
+// moved across, when the caller sends it again. Only if `room` finds room
+// for it in the caller's allowance, which counts it (roomForMessage,
+// roomForBody), as for any row of its own; null, and nothing changed, when
+// there isn't, so sending a moved thread's history again can't take a
+// runner past its caps (Daybreak 181's verify-fix, 24 Nov 2026).
+async function takenBack<T extends Doc<'messages'> | Doc<'eventBodies'>>(ctx: MutationCtx, table: 'messages' | 'eventBodies', row: T, runnerId: string, room: (size: number) => Promise<boolean>): Promise<T | null> {
   if (row.runnerId === runnerId) return row;
+  const { _id, _creationTime, runnerId: _r, ...rest } = row;
+  if (!(await room(docBytes({ ...rest, runnerId })))) return null;
   const count = table === 'messages' ? countMessageBytes : countBodyBytes;
   if (row.runnerId !== undefined) await count(ctx, row.runnerId, -storedBytes(row));
-  const { _id, _creationTime, runnerId: _r, ...rest } = row;
-  await count(ctx, runnerId, docBytes({ ...rest, runnerId }));
   await ctx.db.patch(_id, { runnerId });
   return { ...row, runnerId };
 }
@@ -2071,7 +2118,14 @@ function keepPresses<B extends { id: string; pressedThreadId?: string; failed?: 
 }
 
 // The newest message seq per thread of a runner, so a runner starting up
-// only sends what the mirror doesn't have.
+// only sends what the mirror doesn't have. For a runner key, the newest of
+// its own rows (its runnerId on them): a row it didn't write (the owner
+// key's, a forged one from an old copy of it, Daybreak 178) says nothing
+// about what it has sent, so a forged head, in its history's range or past
+// it, can't keep anything from going up. Past HEAD_SCAN rows not its own on
+// top, no head: its start sends the whole history again, and each row it
+// sends takes back the one at its seq (appendMessages).
+const HEAD_SCAN = 20;
 export const messageHeads = query({
   args: { key: v.string(), runnerId: v.string() },
   returns: v.array(v.object({ threadId: v.string(), lastSeq: v.number() })),
@@ -2081,11 +2135,18 @@ export const messageHeads = query({
     const out = [];
     for await (const t of ctx.db.query('threads').withIndex('by_runnerId', (q) => q.eq('runnerId', runnerId))) {
       if (!ownThreadOnly(caller, t.threadId)) continue;
-      const newest = await ctx.db
+      let newest: Doc<'messages'> | undefined;
+      let seen = 0;
+      for await (const m of ctx.db
         .query('messages')
         .withIndex('by_thread_seq', (q) => q.eq('threadId', t.threadId))
-        .order('desc')
-        .first();
+        .order('desc')) {
+        if (caller.owner || m.runnerId === caller.runnerId) {
+          newest = m;
+          break;
+        }
+        if (++seen >= HEAD_SCAN) break;
+      }
       if (newest) out.push({ threadId: t.threadId, lastSeq: newest.seq });
     }
     return out;
@@ -2335,7 +2396,7 @@ async function liveTicket(ctx: QueryCtx | MutationCtx, ticket: string) {
 export const MAX_RUNNER_UPLOAD_BYTES = 10 * 1024 * 1024;
 const UPLOAD_BYTES_PER_HOUR = 200 * 1024 * 1024;
 const STORED_BYTES_PER_RUNNER = 150 * 1024 * 1024;
-const MIN_UPLOAD_CHARGE = 64 * 1024;
+export const MIN_UPLOAD_CHARGE = 64 * 1024;
 
 // Whether a runner may keep `bytes` more in file storage, within what any
 // upload of its may keep (STORED_BYTES_PER_RUNNER): a moved thread's
@@ -3400,7 +3461,8 @@ export const finishCommand = mutation({
     // A press (API 59) names the thread its button started or messaged, also the runner's own.
     if (resultThreadId && (c.kind === 'create' || c.kind === 'quickAsk' || c.kind === 'press')) {
       const t = await ctx.db.query('threads').withIndex('by_threadId', (q) => q.eq('threadId', resultThreadId)).unique();
-      if (t && ownThreadOnly(caller, t.threadId) && (c.runnerId === 'any' ? caller.owner || t.runnerId === (caller as { runnerId?: string }).runnerId : t.runnerId === c.runnerId)) made = resultThreadId;
+      // An "any" one the owner key made names a thread of a runner on the main key, never one with its own (lib.ts ownerFenced).
+      if (t && ownThreadOnly(caller, t.threadId) && (c.runnerId === 'any' ? (caller.owner && !(await ownerFenced(ctx, caller, t.runnerId))) || t.runnerId === (caller as { runnerId?: string }).runnerId : t.runnerId === c.runnerId)) made = resultThreadId;
     }
     // A note is a line for the phone: cut, so a finished command stays small (pruneOld reads them).
     const said = note ? clean(cutBytes(note, caller.owner ? NOTE_MAX : CAP.note)) : undefined;
@@ -3593,8 +3655,15 @@ export const appendBodies = mutation({
         .withIndex('by_thread_seq', (q) => q.eq('threadId', b.threadId).eq('seq', b.seq))
         .first();
       // The thread is this runner key's (ownThread): a row of it under
-      // another runner's id is this one's again.
-      if (existing && !caller.owner) existing = await takenBack(ctx, 'eventBodies', existing, caller.runnerId);
+      // another runner's id is this one's again, if it has room for it.
+      if (existing && !caller.owner) {
+        const taken = await takenBack(ctx, 'eventBodies', existing, caller.runnerId, (size) => roomForBody(ctx, caller.runnerId, size, null, budget, caller.box?.threadId));
+        if (!taken) {
+          skipped.push(`${b.threadId}:${b.seq}`);
+          continue;
+        }
+        existing = taken;
+      }
       // Sent again after a restart or a lost reply: nothing to write.
       if (existing && sameBody(existing, b)) continue;
       if (caller.owner) {
