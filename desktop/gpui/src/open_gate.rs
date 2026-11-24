@@ -1074,6 +1074,7 @@ pub(crate) fn show_media(
     let wants = match kind {
         Kind::PaneDocument => Media::Pdf,
         Kind::PaneQuickLook => Media::Office,
+        Kind::PaneAudio => Media::Audio,
         _ => Media::Video,
     };
     let name = threadbear_core::highlights::last_component(path).to_owned();
@@ -1082,6 +1083,7 @@ pub(crate) fn show_media(
             Media::Pdf => "a PDF",
             Media::Office => "an Office or iWork document",
             Media::Video => "a video",
+            Media::Audio => "a sound file",
         };
         return Err(format!(
             "{name} isn't {what}, so Threadbear didn't open it."

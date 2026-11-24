@@ -4489,6 +4489,29 @@ ${process.env.MOCK_SCRIPTED_TURNS ? '' : "<p>The mock runner's stand-in for the 
   }
 }
 
+// A second of a soft 440 Hz tone, 8 kHz mono 16-bit, as a WAV file: a sound
+// file for the pane's player (file-previews.feature).
+function toneWav() {
+  const rate = 8000;
+  const samples = rate;
+  const data = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 3000), i * 2);
+  const head = Buffer.alloc(44);
+  head.write('RIFF', 0);
+  head.writeUInt32LE(36 + data.length, 4);
+  head.write('WAVEfmt ', 8);
+  head.writeUInt32LE(16, 16);
+  head.writeUInt16LE(1, 20);
+  head.writeUInt16LE(1, 22);
+  head.writeUInt32LE(rate, 24);
+  head.writeUInt32LE(rate * 2, 28);
+  head.writeUInt16LE(2, 32);
+  head.writeUInt16LE(16, 34);
+  head.write('data', 36);
+  head.writeUInt32LE(data.length, 40);
+  return Buffer.concat([head, data]);
+}
+
 // A real PDF of one US Letter page with a line of text, made by hand so the
 // mock needs no PDF library: each object's byte offset goes in the table at
 // the end, which is what readers find the objects by. ASCII only, so a
@@ -4526,7 +4549,7 @@ function addDemoHighlights() {
     const file = (rel, text) => {
       const full = path.join(root, rel);
       fs.mkdirSync(path.dirname(full), { recursive: true });
-      if (typeof text === 'string') fs.writeFileSync(full, text); else fs.copyFileSync(text.copy, full);
+      if (typeof text === 'string' || Buffer.isBuffer(text)) fs.writeFileSync(full, text); else fs.copyFileSync(text.copy, full);
       return full;
     };
     const home = file('mockups/home.html', homeMockup());
@@ -4551,6 +4574,8 @@ The new hero is shorter, and every page now leads with what the app does.
     // the pane (features/file-previews.feature). Only listed in the folder.
     const clip = path.join(here, '../site/public/clips/inbox.mp4');
     if (fs.existsSync(clip)) file('screens/hero-walkthrough.mp4', { copy: clip });
+    // A second of a quiet tone as a WAV, for a sound file in the pane.
+    file('recordings/standup-note.wav', toneWav());
     // And a one-page PDF, for a PDF in the pane.
     file('docs/launch-brief.pdf', onePagePdf('Launch brief: the new hero ships Friday', 'https://example.com/launch-brief'));
     // A page that draws itself, for a local page in the pane with its

@@ -42,6 +42,9 @@ pub(crate) enum Kind {
     PaneDocument = 3,
     /// Read-only Quick Look thumbnail, with no links or document actions.
     PaneQuickLook = 4,
+    /// A sound file in the pane: the player's controls as a bar in the
+    /// middle, its sound on, paused at the start.
+    PaneAudio = 5,
 }
 
 /// What a view is showing, for the scripted app's dump.

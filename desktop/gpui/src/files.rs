@@ -253,7 +253,7 @@ impl LocalPage {
 }
 
 /// Which of the system's views a file in the pane shows in, by its name: a
-/// video, PDF or document thumbnail, on a Mac. None elsewhere, where they open in their app.
+/// video, sound file, PDF or document thumbnail, on a Mac. None elsewhere, where they open in their app.
 pub(crate) fn media_kind(path: &str) -> Option<crate::media_view::Kind> {
     use crate::media_view::Kind;
     use threadbear_core::open_policy::Media;
@@ -262,6 +262,7 @@ pub(crate) fn media_kind(path: &str) -> Option<crate::media_view::Kind> {
     }
     threadbear_core::open_policy::media_kind(path).map(|m| match m {
         Media::Video => Kind::PaneVideo,
+        Media::Audio => Kind::PaneAudio,
         Media::Pdf => Kind::PaneDocument,
         Media::Office => Kind::PaneQuickLook,
     })
@@ -2024,6 +2025,11 @@ impl SidePane {
                                     )),
                                 );
                             }
+                        } else if *kind == crate::media_view::Kind::PaneAudio {
+                            pane.insert("previewKind".into(), json!("audio"));
+                            if let Some(state) = crate::media_view::state_of(&key) {
+                                pane.insert("previewVideo".into(), json!({ "playing": state.playing, "muted": state.muted, "controls": state.controls }));
+                            }
                         } else {
                             pane.insert("previewKind".into(), json!("video"));
                             if let Some(state) = crate::media_view::state_of(&key) {
@@ -2094,7 +2100,14 @@ pub(crate) fn preview_command(
             .files
             .open
             .get(&thread.id)
-            .filter(|o| matches!(o.body, FileBody::Media(crate::media_view::Kind::PaneVideo)))
+            .filter(|o| {
+                matches!(
+                    o.body,
+                    FileBody::Media(
+                        crate::media_view::Kind::PaneVideo | crate::media_view::Kind::PaneAudio
+                    )
+                )
+            })
             .map(|o| media_key(&thread.id, &o.path, o.opened));
         return if key.is_some_and(|k| crate::media_view::play(&k)) {
             Ok(json!("ok playing"))
