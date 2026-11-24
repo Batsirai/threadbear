@@ -1108,7 +1108,7 @@ impl Threadbear {
                         .child("The new wording"),
                 );
         }
-        col = col.child(quote(habit.text.clone()));
+        col = col.child(quote(habit.text));
         let line = recipe.habit_line().unwrap_or_default();
         let mut foot = h_flex().items_center().gap(px(10.)).child(
             div()
@@ -1125,7 +1125,7 @@ impl Threadbear {
         );
         if stale {
             let busy = self.recipes.busy.contains(&format!("on:{id}"));
-            let take_id = id.clone();
+            let take_id = id;
             foot = foot.child(
                 div().id("recipe-habit-take").test_support().child(
                     Button::new("recipe-habit-take-button")
