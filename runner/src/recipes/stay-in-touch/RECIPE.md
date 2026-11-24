@@ -9,28 +9,45 @@ color: #d86a8c
 
 ## About
 
-Friendships mostly don't end, they fade, because nobody says hi. This makes
-saying hi easy. Once a week it picks one person from your list who's overdue,
-looks at what you've been up to since you last spoke, and drafts two or three
-short messages you could send them, ideally with a photo they'd enjoy.
+As I've got older I've found it harder to stay in touch with friends. Nobody
+falls out, it's just that months go by and nobody says hi.
 
-It never sends anything. You pick a draft, change it if you like, and send it
-from your own phone. Then tell it you did, and it remembers when you last spoke
-and what about.
-
-Mike has run it weekly since October 2026.
+This doesn't mean handing my friendships to an agent. Once a week it reminds
+me about someone I haven't spoken to in a while, catches me up on what's
+happened since we last talked, and has a few short messages ready. I pick one,
+rewrite it in my own words if I want, and send it from my phone. It never
+sends anything itself.
 
 ## Example
 
-**Sam, last spoke 9 weeks ago** (you said you'd catch up after his move)
+Title: Stay in touch
+
+**Sam, last spoke 9 weeks ago.** You said you'd catch up after his move to Bristol.
+
+Since then for you: the veggie patch got built, and the dog had his first birthday.
 
 Photos: the new veggie patch, and the dog asleep in the wheelbarrow.
 
-1. *Hey Sam! Finally built the veggie patch we talked about. How's the new place treating you?* (with the patch photo)
+1. *Hey Sam! Finally built the veggie patch we talked about. How's Bristol treating you?* (with the patch photo)
 2. *How did the move go in the end? Still drowning in boxes?*
-3. *Thought of you today. Coffee soon?*
+3. *Thought of you today mate. Call this weekend?*
 
-His number: tap to open Messages.
+[Open your chat with Sam](https://wa.me/440000000000)
+
+Card: Say hi to Sam?
+Options: Sent | Skip for now | Pick someone else
+
+## Example 2
+
+Title: Stay in touch
+
+I've logged it. You sent Sam: *"yo mate, hows Bristol? are you about over Christmas?"*
+
+- **Friends list:** Sam's last contact is now today, and I noted you asked about Christmas.
+- **Next week:** probably Jess, whose last message was in March.
+
+Card: Logged, see you next week
+Options: Thanks
 
 ## Setting it up
 

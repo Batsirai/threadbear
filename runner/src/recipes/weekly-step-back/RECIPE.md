@@ -9,38 +9,41 @@ color: #2f7d6d
 
 ## About
 
-A day is too short to see some things. The same problem gets patched in one
-thread on Monday and another on Thursday. A fix from last week quietly stops
-working. A schedule you set up a month ago still runs every morning and you
-haven't opened one of its threads in weeks.
+The Nightly retro fixes one day's problems, but some things only show up over
+a week: the same thing fixed twice, a fix that quietly stopped working, a
+schedule I set up and never read.
 
-Once a week this reads back over everything you did in Threadbear: what you
-typed, how your threads ended, what your schedules did. It looks for what only
-shows over a week or more, and brings you a short list of the few things most
-worth changing, each with what it would do about it. You pick; it does the ones
-you pick.
-
-It goes well with the Nightly retro, which handles one day's corrections. This
-one is the step back. Mike has run it on a strong model since 10 Nov 2026: its
-first look found a complaint he made about twice a day for two weeks that no
-single thread had counted.
+So on Sunday evening an agent on a stronger model looks back over my whole
+week in Threadbear and brings me a few things worth changing, and I pick which
+ones it does. The first one I ran found a complaint I'd made about twice a day
+for two weeks, which no single thread had noticed.
 
 ## Example
+
+Title: Weekly step back
 
 **Week to Sunday 22 November**
 
 Read 640 of your messages in 112 threads, and 9 schedules' runs.
 
-1. **"Where did that go?" came up 11 times**, always about a file an agent made
-   in a folder you didn't expect. The fix last Tuesday (a line asking agents to
-   pin what they make) cut it from 4 a day to 2. *Suggest:* have agents say the
-   full path in their reply too.
-2. **The Monday report schedule ran 4 times and you opened none of them.**
-   *Suggest:* pause it, or fold it into the morning brief.
-3. **Two threads built the same export button** a day apart in the shop repo.
-   *Suggest:* look for an open thread on the same repo before starting a new one.
+1. **"Where did that go?" came up 11 times**, always about a file an agent made in a folder you didn't expect. Last Tuesday's fix (agents pin what they make) cut it from 4 a day to 2. *Suggest:* have agents say the full path in their reply too.
+2. **The Monday report ran 4 times and you opened none of them.** *Suggest:* pause it, or fold it into the morning brief.
+3. **Two threads built the same export button** a day apart in the shop repo. *Suggest:* look for an open thread on the same repo before starting a new one.
 
-Nothing else worth your time this week.
+Card: 3 things worth changing this week
+Options: Do 1 and 2 | Do all three | None this week
+
+## Example 2
+
+Title: Weekly step back
+
+I checked, and one of your two picks would have duplicated another thread, so I've started only the second.
+
+- **Archiving quiet schedule runs by themselves: not built.** The "Inbox guess" check-in on Sunday already asks about this, so I added this week's numbers to it instead: you archived 48 of 93 scheduled threads without typing anything.
+- **Showing what each thread is waiting on: started** as its own thread in the app's repo. It'll show you a diagram of the states before changing anything.
+
+Card: 1 started, 1 folded into Sunday's check-in
+Options: Thanks
 
 ## Setting it up
 
