@@ -374,6 +374,8 @@ actions!(
         NextInboxThread,
         OpenAnything,
         OpenAnythingAlso,
+        OpenAnythingPalette,
+        FocusMessageBox,
         ShowInbox,
         ShowScheduled,
         ShowProjects,
@@ -385,6 +387,7 @@ actions!(
         ZoomOut,
         ActualSize,
         ToggleThreads,
+        ToggleThreadsAlso,
         TogglePanels,
         ToggleTerminal,
         ToggleTerminalAlso,
@@ -486,6 +489,17 @@ commands!(
         OpenAnythingAlso,
         Some(ShortcutCommand::OpenAnythingAlso)
     ),
+    // ⇧⌘P: the same box again, as VS Code's Command Palette, no menu item.
+    (
+        OpenAnythingPalette,
+        OpenAnythingPalette,
+        Some(ShortcutCommand::OpenAnythingPalette)
+    ),
+    (
+        FocusMessageBox,
+        FocusMessageBox,
+        Some(ShortcutCommand::FocusMessageBox)
+    ),
     (ShowInbox, ShowInbox, Some(ShortcutCommand::ShowInbox)),
     (
         ShowScheduled,
@@ -521,6 +535,12 @@ commands!(
         ToggleThreads,
         Some(ShortcutCommand::ToggleThreads)
     ),
+    // ⌘B: the Threads list from a second key, VS Code's, no menu item.
+    (
+        ToggleThreadsAlso,
+        ToggleThreadsAlso,
+        Some(ShortcutCommand::ToggleThreadsAlso)
+    ),
     (
         TogglePanels,
         TogglePanels,
@@ -531,7 +551,7 @@ commands!(
         ToggleTerminal,
         Some(ShortcutCommand::ToggleTerminal)
     ),
-    // ⌃`: the Terminal from a second key, with no menu item of its own.
+    // ⌘`: the Terminal from a second key, with no menu item of its own.
     (
         ToggleTerminalAlso,
         ToggleTerminalAlso,
@@ -1046,7 +1066,13 @@ impl Threadbear {
             Command::Back => self.go_back(window, cx),
             Command::Forward => self.go_forward(window, cx),
             Command::NextInboxThread => self.next_inbox_thread(window, cx),
-            Command::OpenAnything | Command::OpenAnythingAlso => {
+            Command::FocusMessageBox => {
+                if let Some(composer) = self.composer(cx) {
+                    composer.update(cx, |c, cx| c.focus(window, cx));
+                    crate::web_panels::keyboard_to_app(window);
+                }
+            }
+            Command::OpenAnything | Command::OpenAnythingAlso | Command::OpenAnythingPalette => {
                 self.toggle_open_anything(window, cx)
             }
             // Each brings the Threads panel back if ⌘/ folded it away.
@@ -1070,7 +1096,7 @@ impl Threadbear {
             Command::ZoomIn => self.zoom_in(window, cx),
             Command::ZoomOut => self.zoom_out(window, cx),
             Command::ActualSize => self.set_zoom(zoom::DEFAULT_PERCENT, window, cx),
-            Command::ToggleThreads => self.toggle_threads_panel(cx),
+            Command::ToggleThreads | Command::ToggleThreadsAlso => self.toggle_threads_panel(cx),
             Command::TogglePanels => self.toggle_panels(cx),
             Command::ToggleTerminal | Command::ToggleTerminalAlso => {
                 crate::terminal::toggle(self, window, cx)
@@ -1854,6 +1880,7 @@ impl Threadbear {
                     item("Next Inbox Thread", Command::NextInboxThread),
                     Separator,
                     item("Open Anything…", Command::OpenAnything),
+                    item("Go to Message Box", Command::FocusMessageBox),
                 ],
             ),
             TopMenu::new(

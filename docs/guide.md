@@ -1014,7 +1014,7 @@ started. Threadbear remembers your layout between launches.
 ### Terminal
 <!-- slug: terminal -->
 
-⌘J (or ⌃`, as in VS Code) opens a terminal under the thread, and the same key again hides it. It's a real
+⌘J (or ⌘`) opens a terminal under the thread, and the same key again hides it. It's a real
 one, with your login shell, its colours and full-screen programs like vim
 or htop, and it takes the keyboard as it opens. Each thread has a shell
 of its own, started in the thread's folder (its worktree, when it has
@@ -1910,7 +1910,8 @@ key:
 - Back: `back`, ⌘[
 - Forward: `forward`, ⌘]
 - Next Inbox Thread: `nextInboxThread`, ⌥⌘↓
-- Open Anything (the new desktop app only): `openAnything`, ⌘K, and `openAnythingAlso`, ⌘P
+- Open Anything (the new desktop app only): `openAnything`, ⌘K, `openAnythingAlso`, ⌘P, and `openAnythingPalette`, ⇧⌘P
+- Go to Message Box (the new desktop app only): `focusMessageBox`, ⌘L, puts the cursor in the open thread's message box
 - Show Inbox: `showInbox`, ⌘1
 - Show Scheduled: `showScheduled`, ⌘2
 - Show Projects: `showProjects`, ⌘3
@@ -1922,11 +1923,11 @@ key:
 - Zoom In: `zoomIn`, ⌘=
 - Zoom Out: `zoomOut`, ⌘-
 - Actual Size: `actualSize`, ⌘0
-- Show Threads: `toggleThreads`, ⌃⌘S
+- Show Threads: `toggleThreads`, ⌃⌘S, and `toggleThreadsAlso`, ⌘B (the new desktop app only)
 - Collapse Threads: `collapseThreads`, ⌘/
 - Show Sidebar Panels (the new desktop app only): `toggleSidebarPanels`, ⇧⌘B, closes Runners, Connectors, Updates, Usage and Setup and keeps the Threads list
 - Show Panels: `togglePanels`, ⌥⌘P
-- Show Terminal: `toggleTerminal`, ⌘J, and `toggleTerminalAlso`, ⌃` (the new desktop app only), as VS Code has it
+- Show Terminal: `toggleTerminal`, ⌘J, and `toggleTerminalAlso`, ⌘` (the new desktop app only; it takes ⌘` from macOS's switching between Threadbear's own windows)
 - Reset Panel Layout: `resetPanelLayout`, no key
 
 In the file, a key is its modifiers and then the key, joined with `+`: `cmd`,

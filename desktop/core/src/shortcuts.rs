@@ -185,6 +185,11 @@ pub enum ShortcutCommand {
     /// ⌘P, a second key for the same box, as code editors have it (Mike, 13
     /// Nov: "⌘P to open it as well"). Threadbear has no Print to clash with.
     OpenAnythingAlso,
+    /// ⇧⌘P, a third key for the same box: VS Code's Command Palette.
+    OpenAnythingPalette,
+    /// ⌘L puts the cursor in the message box, as Cursor's chat and a
+    /// browser's address bar have it.
+    FocusMessageBox,
     ShowInbox,
     ShowScheduled,
     ShowProjects,
@@ -197,10 +202,13 @@ pub enum ShortcutCommand {
     ToggleThreads,
     TogglePanels,
     ToggleTerminal,
-    /// ⌃`, a second key for the Terminal: VS Code's and Cursor's own (Mike,
-    /// 24 Nov: "command tilde usually opens up terminal"). Not ⌘`, which is
-    /// macOS's key for the app's next window.
+    /// ⌘`, a second key for the Terminal, the one Mike reaches for (24 Nov:
+    /// "command tilde usually opens up terminal"). It takes the key from
+    /// macOS's next-window cycling, which only matters with two Threadbear
+    /// windows open.
     ToggleTerminalAlso,
+    /// ⌘B, a second key for the Threads list: VS Code's sidebar key.
+    ToggleThreadsAlso,
     ResetPanelLayout,
     /// ⌘/ folds the Threads panel away and back, keeping its place and width.
     CollapseThreads,
@@ -218,7 +226,7 @@ pub enum ShortcutCommand {
 }
 
 impl ShortcutCommand {
-    pub const ALL: [ShortcutCommand; 28] = [
+    pub const ALL: [ShortcutCommand; 32] = [
         Self::NewThread,
         Self::Archive,
         Self::Hibernate,
@@ -229,6 +237,8 @@ impl ShortcutCommand {
         Self::NextInboxThread,
         Self::OpenAnything,
         Self::OpenAnythingAlso,
+        Self::OpenAnythingPalette,
+        Self::FocusMessageBox,
         Self::ShowInbox,
         Self::ShowScheduled,
         Self::ShowProjects,
@@ -242,6 +252,7 @@ impl ShortcutCommand {
         Self::TogglePanels,
         Self::ToggleTerminal,
         Self::ToggleTerminalAlso,
+        Self::ToggleThreadsAlso,
         Self::ResetPanelLayout,
         Self::CollapseThreads,
         Self::ToggleSidebarPanels,
@@ -262,6 +273,8 @@ impl ShortcutCommand {
             Self::NextInboxThread => "nextInboxThread",
             Self::OpenAnything => "openAnything",
             Self::OpenAnythingAlso => "openAnythingAlso",
+            Self::OpenAnythingPalette => "openAnythingPalette",
+            Self::FocusMessageBox => "focusMessageBox",
             Self::ShowInbox => "showInbox",
             Self::ShowScheduled => "showScheduled",
             Self::ShowProjects => "showProjects",
@@ -275,6 +288,7 @@ impl ShortcutCommand {
             Self::TogglePanels => "togglePanels",
             Self::ToggleTerminal => "toggleTerminal",
             Self::ToggleTerminalAlso => "toggleTerminalAlso",
+            Self::ToggleThreadsAlso => "toggleThreadsAlso",
             Self::ResetPanelLayout => "resetPanelLayout",
             Self::CollapseThreads => "collapseThreads",
             Self::ToggleSidebarPanels => "toggleSidebarPanels",
@@ -300,6 +314,8 @@ impl ShortcutCommand {
             Self::NextInboxThread => "Next Inbox Thread",
             Self::OpenAnything => "Open Anything",
             Self::OpenAnythingAlso => "Open Anything (second key)",
+            Self::OpenAnythingPalette => "Open Anything (third key)",
+            Self::FocusMessageBox => "Go to Message Box",
             Self::ShowInbox => "Show Inbox",
             Self::ShowScheduled => "Show Scheduled",
             Self::ShowProjects => "Show Projects",
@@ -313,6 +329,7 @@ impl ShortcutCommand {
             Self::TogglePanels => "Show Panels",
             Self::ToggleTerminal => "Show Terminal",
             Self::ToggleTerminalAlso => "Show Terminal (second key)",
+            Self::ToggleThreadsAlso => "Show Threads (second key)",
             Self::ResetPanelLayout => "Reset Panel Layout",
             Self::CollapseThreads => "Collapse Threads",
             Self::ToggleSidebarPanels => "Show Sidebar Panels",
@@ -334,6 +351,8 @@ impl ShortcutCommand {
             Self::NextInboxThread => Some(ShortcutKey::with("down", true, false, false)),
             Self::OpenAnything => Some(ShortcutKey::new("k")),
             Self::OpenAnythingAlso => Some(ShortcutKey::new("p")),
+            Self::OpenAnythingPalette => Some(ShortcutKey::with("p", false, false, true)),
+            Self::FocusMessageBox => Some(ShortcutKey::new("l")),
             Self::ShowInbox => Some(ShortcutKey::new("1")),
             Self::ShowScheduled => Some(ShortcutKey::new("2")),
             Self::ShowProjects => Some(ShortcutKey::new("3")),
@@ -346,13 +365,8 @@ impl ShortcutCommand {
             Self::TogglePanels => Some(ShortcutKey::with("p", true, false, false)),
             // VS Code's and T3 Code's key for their terminal.
             Self::ToggleTerminal => Some(ShortcutKey::new("j")),
-            Self::ToggleTerminalAlso => Some(ShortcutKey {
-                key: "`".into(),
-                command: false,
-                option: false,
-                control: true,
-                shift: false,
-            }),
+            Self::ToggleTerminalAlso => Some(ShortcutKey::new("`")),
+            Self::ToggleThreadsAlso => Some(ShortcutKey::new("b")),
             Self::CollapseThreads => Some(ShortcutKey::new("/")),
             Self::ToggleSidebarPanels => Some(ShortcutKey::with("b", false, false, true)),
             // A for attach; ⌘U and ⌘O stay free for formatting and opening.
@@ -544,7 +558,7 @@ mod tests {
             unique.len(),
             "two commands can't start on one key"
         );
-        assert_eq!(ShortcutCommand::ALL.len(), 28);
+        assert_eq!(ShortcutCommand::ALL.len(), 32);
         // The Swift app's names and keys, as both apps read shortcuts.json.
         assert_eq!(
             ShortcutCommand::OpenAnything.default_key(),
@@ -556,11 +570,26 @@ mod tests {
         );
         assert_eq!(
             ShortcutCommand::ToggleTerminalAlso.default_key(),
-            Some(key("ctrl+`"))
+            Some(key("cmd+`"))
         );
         assert_eq!(
-            ShortcutCommand::ToggleTerminalAlso.default_key().unwrap().chord(true),
-            "ctrl-`"
+            ShortcutCommand::ToggleTerminalAlso
+                .default_key()
+                .unwrap()
+                .chord(true),
+            "cmd-`"
+        );
+        assert_eq!(
+            ShortcutCommand::ToggleThreadsAlso.default_key(),
+            Some(key("cmd+b"))
+        );
+        assert_eq!(
+            ShortcutCommand::OpenAnythingPalette.default_key(),
+            Some(key("cmd+shift+p"))
+        );
+        assert_eq!(
+            ShortcutCommand::FocusMessageBox.default_key(),
+            Some(key("cmd+l"))
         );
         assert_eq!(
             ShortcutCommand::from_name("toggleTerminalAlso"),

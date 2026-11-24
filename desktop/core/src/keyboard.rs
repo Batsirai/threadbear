@@ -57,12 +57,12 @@ pub fn group(command: ShortcutCommand) -> Group {
     match command {
         NewThread | Archive | Hibernate | Stop | CopyTranscript | AttachFiles => Group::Threads,
         FindInThread => Group::Edit,
-        Back | Forward | NextInboxThread | OpenAnything | OpenAnythingAlso | ShowInbox
-        | ShowScheduled | ShowProjects | ShowLibrarian | ShowHibernating | ShowArchived
-        | Settings => Group::Go,
+        Back | Forward | NextInboxThread | OpenAnything | OpenAnythingAlso
+        | OpenAnythingPalette | FocusMessageBox | ShowInbox | ShowScheduled | ShowProjects
+        | ShowLibrarian | ShowHibernating | ShowArchived | Settings => Group::Go,
         ZoomIn | ZoomOut | ActualSize | ToggleThreads | TogglePanels | ToggleTerminal
-        | ToggleTerminalAlso
-        | ResetPanelLayout | CollapseThreads | ToggleSidebarPanels => Group::View,
+        | ToggleTerminalAlso | ToggleThreadsAlso | ResetPanelLayout | CollapseThreads
+        | ToggleSidebarPanels => Group::View,
     }
 }
 
