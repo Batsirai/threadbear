@@ -243,13 +243,16 @@ export const poolsPart = {
   markRanDry(this: Runner, account: Account): void {
     const now = this.clock.now();
     const until = blockedUntil(account, now);
+    // Still dry from an earlier turn: its block (which this turn's reading
+    // may show as the account's own) isn't a new reading of its room.
+    const stillDry = (this.ranDry.get(account.id) ?? 0) > now && this.dryRoom.has(account.id);
     this.ranDry.set(account.id, until);
     this.readBack.delete(account.id);
     // The room it read as when it ran dry, so only a reading with more than
     // that counts as back (recordReading): a provider can refuse (a 402)
     // while its own reading still shows room, and reading the same room
     // again shouldn't send the thread back to be refused every 10 minutes.
-    this.dryRoom.set(account.id, account.usage?.blocked ? 0 : (accountRoom(account) ?? 0));
+    if (!stillDry) this.dryRoom.set(account.id, account.usage?.blocked ? 0 : (accountRoom(account) ?? 0));
     if (account.usage?.blocked) return;
     try {
       this.usage?.record(account.id, { windows: [], blocked: true, blockedUntil: until });

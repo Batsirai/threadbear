@@ -1071,9 +1071,10 @@ export class AcpSession implements AgentSession {
     this.next();
   }
 
-  private sendResult(turn: Turn, result: TurnResult): void {
+  // queued: how many held messages still run here (none once it's exited).
+  private sendResult(turn: Turn, result: TurnResult, queued = this.held.length): void {
     const answered = [...(turn.id ? [turn.id] : []), ...turn.dropped];
-    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!turn.dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: this.held.length, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
+    this.sink.output({ kind: 'result', result: { ...result, ...(turn.id ? { answers: turn.id } : {}), answered, unreceived: [...(!turn.dispatched && turn.id ? [turn.id] : []), ...turn.dropped], queuedTurns: queued, ...(this.normalizer.costUsd !== undefined ? { totalCostUsd: this.normalizer.costUsd } : {}) } });
   }
 
   // What a failed turn says, and whether it failed because the login is out
@@ -1227,7 +1228,7 @@ export class AcpSession implements AgentSession {
     // limits: that result (a usage limit, say) is what happened, not the exit.
     const done = this.turn?.result ? this.turn : undefined;
     this.turn = undefined;
-    if (done?.result) this.sendResult(done, done.result);
+    if (done?.result) this.sendResult(done, done.result, 0);
     if (this.ownFolder) removeQuietly(this.ownFolder);
     this.resolveExit();
     this.sink.exited(error);

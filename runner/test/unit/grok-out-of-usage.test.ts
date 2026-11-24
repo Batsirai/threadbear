@@ -261,7 +261,7 @@ function grokHarness(pools: Pool[]) {
   };
   const h = makeHarness(tmpDir(), { pools }, { accounts: fake, adapters: { claude, grok: grokAdapter }, usage });
   sinks.set(h.runner, usage.record);
-  return { ...h, claude, grok: grokAdapter, records };
+  return { ...h, claude, grok: grokAdapter, records, fake };
 }
 const notesOf = (h: ReturnType<typeof grokHarness>, id: string): string[] => h.events(id).filter((e) => e.type === 'system.note').map((e) => e.text);
 
@@ -390,6 +390,27 @@ test('a 402 while Grok still reads room: reading that same room again is no reas
   assert.ok(h.runner.get(thread.id).waitingForRoom, 'still waiting');
   assert.ok(h.runner.ranDry.has('grok-main'));
   assert.equal(s.sent.length, sent, 'nothing sent');
+  // The store keeps it blocked too, so limit-recheck goes on reading it.
+  assert.equal(h.records.at(-1)?.[1].blocked, true);
+  assert.equal(h.fake.list().find((a) => a.id === 'grok-main')?.usage?.blocked, true);
+});
+
+test('a prepaid top-up on a used-up plan (read as 1%) counts as back', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  const topped = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } })!;
+  h.runner.recordReading({ record: grokSink(h) }, 'grok-main', { windows: topped.windows, blocked: topped.blocked });
+  await tick();
+  assert.equal(h.runner.get(thread.id).waitingForRoom, undefined);
+  assert.equal(h.grok.last.sent.at(-1)?.text, CARRY_ON_BACK);
 });
 
 test('a 402 from a turn still running on the old login after Mike moved the thread marks that login, and leaves the thread where he put it', async () => {

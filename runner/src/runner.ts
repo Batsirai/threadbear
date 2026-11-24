@@ -1178,10 +1178,15 @@ export class Runner {
   recordReading(usage: UsageSink, accountId: string, reading: UsageReading): void {
     const least = reading.windows.length ? Math.min(...reading.windows.map((w) => w.remainingPercent)) : undefined;
     const was = this.dryRoom.get(accountId);
-    if (reading.blocked === false && least !== undefined && least >= MIN_ROOM_PERCENT && (was === undefined || least > was + 1)) {
+    const dryUntil = this.ranDry.get(accountId);
+    if (reading.blocked === false && least !== undefined && least >= MIN_ROOM_PERCENT && (was === undefined || least > was)) {
       this.ranDry.delete(accountId);
       this.dryRoom.delete(accountId);
       this.readBack.add(accountId);
+    } else if (reading.blocked === false && dryUntil !== undefined && dryUntil > this.clock.now()) {
+      // Not enough to count as back, so the store keeps the block too: a
+      // login it showed as having room would get no more rechecks.
+      reading = { ...reading, blocked: true, blockedUntil: dryUntil };
     }
     usage.record(accountId, reading);
     // A thread waiting on that login hears now, not at the reset it named.
