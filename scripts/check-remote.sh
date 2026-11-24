@@ -1035,23 +1035,27 @@ copy_of() { grep -E '^Checking on [^ ]+ \(' "$1" | tail -n 1 | sed -n 's/^Checki
 # split_run <linux hosts> <mac hosts>: runs both halves and exits as the
 # check: failed if either failed, else no host if either couldn't run.
 split_run() {
-  local lh="$1" mh="$2" sd lpid mpid lcode mcode f a r again="" ran="" said_ran=0 lhost mhost on copy="" c code=0
+  local lh="$1" mh="$2" sd lpid mpid lcode lfirst mcode f a r again="" ran="" said_ran=0 lhost mhost on copy="" c code=0
   rm -f "$files" "$changed" "$left_out"
   sd="$(mktemp -d "${TMPDIR:-/tmp}/tb-check-split.XXXXXX")" || { echo "Couldn't make a folder for the split check's output." >&2; exit 1; }
   echo "Splitting this check: the steps that need no Mac run on $lh, the ones that need a Mac on $mh, at the same time."
-  half "no Mac" "$lh" linux "$sd/linux" &
+  # Each half gets what's left of this run's MAX_SECS, not a whole one of
+  # its own from when it starts (Codex's review).
+  c=$((DEADLINE - $(date +%s)))
+  [ "$c" -ge 1 ] || over_time busy
+  half "no Mac" "$lh" linux "$sd/linux" "$c" &
   lpid=$!
-  half "Mac" "$mh" mac "$sd/mac" &
+  half "Mac" "$mh" mac "$sd/mac" "$c" &
   mpid=$!
   wait "$lpid"
   lcode="$(cat "$sd/linux.code" 2>/dev/null)"
+  lfirst="${lcode:-1}"
   # No Linux host could take its half (gone, out of room): the Mac hosts
   # can run it too, after their own half, rather than nothing pass. Not for
   # a pair, where each step goes back only to where it ran.
-  if [ -z "$PAIR_L" ] && couldnt_run "${lcode:-1}"; then
+  c=$((DEADLINE - $(date +%s)))
+  if [ -z "$PAIR_L" ] && couldnt_run "$lfirst" && [ "$c" -ge 1 ]; then
     echo "No host of $lh could take the half that needs no Mac, so it runs on $mh as well."
-    c=$((DEADLINE - $(date +%s)))
-    [ "$c" -ge 60 ] || c=60
     half "no Mac" "$mh" linux "$sd/linux" "$c" &
     lpid=$!
   fi
@@ -1086,7 +1090,9 @@ split_run() {
   rm -rf "$sd"
   if [ "$lcode" != 0 ] && ! couldnt_run "$lcode"; then code="$lcode"
   elif [ "$mcode" != 0 ] && ! couldnt_run "$mcode"; then code="$mcode"
-  elif [ "$lcode" = 255 ] && [ "$mcode" = 255 ]; then
+  elif [ "$lcode" = 255 ] && [ "$mcode" = 255 ] && [ "$lfirst" = 255 ]; then
+    # (A Linux host that answered but couldn't take it, 69 the first time, is
+    # still there: not a reason to run it all on this Mac. Codex's review.)
     echo "None of $lh, $mh can be reached, so this check can't run on any of them now." >&2
     code=255
   elif [ "$lcode" != 0 ] || [ "$mcode" != 0 ]; then
