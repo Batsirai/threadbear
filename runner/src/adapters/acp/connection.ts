@@ -12,15 +12,64 @@ export type RequestId = number | string;
 // Numbered as ACP's errors are; -32000 is its auth_required.
 export const AUTH_REQUIRED = -32000;
 
+// JSON-RPC's own words for its error codes, which say nothing about what
+// went wrong. An agent that puts the real reason in `data` (Grok: "Internal
+// error", with data.message "API error (status 402 Payment Required): Grok
+// Build usage balance exhausted", 23 Nov 2026) is read from there instead.
+const GENERIC_RPC_MESSAGES = new Set(['internal error', 'server error', 'invalid params', 'invalid request', 'parse error', 'method not found', 'unknown error', 'error']);
+
+// The reason an error's `data` gives, when it gives one in words: a string,
+// or an object's message, error or detail.
+export function rpcDataMessage(data: unknown): string | undefined {
+  if (typeof data === 'string') return data.trim() || undefined;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+  const d = data as Record<string, unknown>;
+  for (const k of ['message', 'error', 'detail']) {
+    const v = d[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
+// The HTTP status an error's `data` names (Grok's http_status), if any.
+export function rpcDataStatus(data: unknown): number | undefined {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return undefined;
+  const d = data as Record<string, unknown>;
+  const v = d.http_status ?? d.httpStatus ?? d.status;
+  return typeof v === 'number' && Number.isInteger(v) && v >= 100 && v < 600 ? v : undefined;
+}
+
 export class AcpRpcError extends Error {
   readonly code: number;
   readonly data: unknown;
+  // What the agent itself said, before `data` was preferred over it.
+  readonly rpcMessage?: string;
+  readonly httpStatus?: number;
   constructor(method: string, body: { code?: unknown; message?: unknown; data?: unknown }) {
-    super(typeof body?.message === 'string' ? body.message : `${method} failed`);
+    const said = typeof body?.message === 'string' && body.message.trim() ? body.message.trim() : undefined;
+    const detail = rpcDataMessage(body?.data);
+    const generic = !said || GENERIC_RPC_MESSAGES.has(said.toLowerCase().replace(/[.!]+$/, ''));
+    super((generic ? detail : undefined) ?? said ?? `${method} failed`);
     this.name = 'AcpRpcError';
     this.code = typeof body?.code === 'number' ? body.code : -32603;
     this.data = body?.data;
+    if (said) this.rpcMessage = said;
+    const status = rpcDataStatus(body?.data);
+    if (status !== undefined) this.httpStatus = status;
   }
+}
+
+// An agent's words for a login that has run out of what it pays with: a
+// balance, credits, a spending cap or a usage limit (Grok 1.0.92's own
+// strings for these, and its 402). Not a rate limit, which passes by itself
+// in seconds and the agent retries.
+const OUT_OF_USAGE = /usage balance exhausted|out of credits|run out of credits|spending[- ]limit|usage limit reached|credit limit|insufficient (credits|balance)|payment required|free usage limit/i;
+
+// Whether an agent's failure says the login is out of usage, from its HTTP
+// status (402 Payment Required) or its words.
+export function outOfUsage(o: { message?: string; httpStatus?: number }): boolean {
+  if (o.httpStatus === 402) return true;
+  return !!o.message && OUT_OF_USAGE.test(o.message);
 }
 
 export class AcpExitedError extends Error {

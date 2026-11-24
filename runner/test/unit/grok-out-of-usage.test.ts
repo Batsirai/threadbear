@@ -1,0 +1,305 @@
+// A Grok login out of balance (23 Nov 2026, thread ce78609c): Grok made no
+// model call and answered the prompt with JSON-RPC's "Internal error", the
+// real reason ("API error (status 402 Payment Required): Grok Build usage
+// balance exhausted", http_status 402) only in the error's data and its own
+// retry_state and turn_completed notes. Threadbear showed "Internal error"
+// and left the thread failed on a login with nothing left.
+//
+// Now the reason is what shows, the turn counts as a usage limit (errorKind
+// usageLimit), so the login is marked out and a pool thread moves to a login
+// with room in its own pool, and Grok's _x.ai/billing gives the login a
+// reading like Claude's and Codex's (adapters/acp/grok-billing.ts).
+import { test, afterEach, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { AcpAdapter, AcpSession } from '../../src/adapters/acp/adapter.ts';
+import { ACP_AGENTS } from '../../src/adapters/acp/agents.ts';
+import { AcpRpcError, outOfUsage } from '../../src/adapters/acp/connection.ts';
+import { grokLimits } from '../../src/adapters/acp/grok-billing.ts';
+import { acpAsker } from '../../src/models/acp-oneshot.ts';
+import { dueForRecheck } from '../../src/limit-recheck.ts';
+import type { AdapterOutput, SessionSink } from '../../src/adapters/types.ts';
+import type { Account, Pool } from '../../src/protocol.ts';
+import { nullLogger } from '../../src/log.ts';
+import { ProcessRegistry } from '../../src/proc.ts';
+import { FakeAccounts, FakeAdapter, ACCOUNTS, makeHarness, tick, tmpDir } from '../helpers/fakes.ts';
+import type { UsageReading } from '../../src/usage.ts';
+import type { UsageSink } from '../../src/runner.ts';
+
+const FAKE = path.join(import.meta.dirname, '..', 'helpers', 'fake-acp-agent.mjs');
+const grok = ACP_AGENTS.grok;
+const account: Account = { id: 'grok-main', provider: 'grok', title: 'Grok', configDir: '/g' };
+const SAID = 'API error (status 402 Payment Required): Grok Build usage balance exhausted';
+// What _x.ai/billing said for that login the next morning.
+const SPENT = {
+  config: {
+    creditUsagePercent: 100,
+    currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-11-18T06:53:23.471544+00:00', end: '2026-11-25T06:53:23.471544+00:00' },
+    onDemandCap: { val: 0 },
+    onDemandUsed: { val: 0 },
+    prepaidBalance: { val: 0 },
+    isUnifiedBillingUser: true,
+    billingPeriodStart: '2026-11-18T06:53:23.471544+00:00',
+    billingPeriodEnd: '2026-11-25T06:53:23.471544+00:00',
+  },
+  subscription_tier: 'X Premium+',
+};
+
+const made: string[] = [];
+const live: AcpSession[] = [];
+const inheritedGrokHome = process.env.GROK_HOME;
+let grokHome = '';
+function tmp(): string {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tb-grok-402-')));
+  made.push(d);
+  return d;
+}
+beforeEach(() => {
+  grokHome = tmp();
+  process.env.GROK_HOME = grokHome;
+});
+afterEach(async () => {
+  if (inheritedGrokHome === undefined) delete process.env.GROK_HOME;
+  else process.env.GROK_HOME = inheritedGrokHome;
+  await Promise.all(live.splice(0).map((s) => s.end({ hard: true }).catch(() => undefined)));
+  for (const d of made.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+});
+
+function adapterFor(root: string, billing?: unknown, extraEnv: Record<string, string> = {}): AcpAdapter {
+  return new AcpAdapter({
+    agent: grok,
+    binary: () => FAKE,
+    registry: new ProcessRegistry(path.join(root, 'run'), nullLogger),
+    log: nullLogger,
+    env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome, FAKE_ACP_LOG: path.join(root, 'agent.log'), ...(billing ? { FAKE_GROK_BILLING: JSON.stringify(billing) } : {}), ...extraEnv },
+    timings: { closeWaitMs: 300 },
+    dataDir: path.join(root, 'data'),
+  });
+}
+
+// One turn on a real AcpSession against the pretend Grok; what it put out.
+async function turnOn(text: string, billing?: unknown, extraEnv: Record<string, string> = {}): Promise<{ outputs: AdapterOutput[]; log: () => Record<string, unknown>[] }> {
+  const root = tmp();
+  const cwd = path.join(root, 'work');
+  fs.mkdirSync(cwd);
+  const outputs: AdapterOutput[] = [];
+  let done!: () => void;
+  const ended = new Promise<void>((r) => (done = r));
+  const sink: SessionSink = {
+    output(o) {
+      outputs.push(o);
+      if (o.kind === 'result') done();
+    },
+    requestApproval: async () => ({ decision: 'allow' }),
+    requestQuestion: async () => ({ answers: null }),
+    exited: () => done(),
+  };
+  const s = adapterFor(root, billing, extraEnv).start({ threadId: 't1', cwd, account, permissionMode: 'full', sessionId: 'unused', resume: false, mediaDir: path.join(root, 'media'), blobsDir: path.join(root, 'blobs'), tmpDir: root }, sink) as AcpSession;
+  live.push(s);
+  s.send({ id: 'm1', text, images: [] });
+  await ended;
+  const logFile = path.join(root, 'agent.log');
+  return { outputs, log: () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) };
+}
+
+// ---- The words
+
+test("an RPC error says what its data says, not JSON-RPC's own \"Internal error\"", () => {
+  const e = new AcpRpcError('session/prompt', { code: -32603, message: 'Internal error', data: { message: SAID, http_status: 402 } });
+  assert.equal(e.message, SAID);
+  assert.equal(e.rpcMessage, 'Internal error');
+  assert.equal(e.httpStatus, 402);
+  assert.equal(e.code, -32603);
+  // An agent's own message stands; data in words with no message is read too.
+  assert.equal(new AcpRpcError('m', { code: -32602, message: 'No such model: grok-9', data: { message: 'other' } }).message, 'No such model: grok-9');
+  assert.equal(new AcpRpcError('m', { code: -32603, message: 'Internal error', data: 'disk full' }).message, 'disk full');
+  assert.equal(new AcpRpcError('m', { code: -32603, message: 'Internal error' }).message, 'Internal error');
+  assert.equal(new AcpRpcError('m', { code: -32603, data: { detail: 'boom' } }).message, 'boom');
+  assert.equal(new AcpRpcError('m', {}).message, 'm failed');
+});
+
+test('out of usage is a 402 or the words Grok uses for it, never a rate limit', () => {
+  assert.equal(outOfUsage({ httpStatus: 402 }), true);
+  for (const m of [SAID, "You've run out of credits", 'spending-limit reached', 'Usage limit reached for this plan', 'You hit your free usage limit.']) assert.equal(outOfUsage({ message: m }), true, m);
+  assert.equal(outOfUsage({ message: 'API error (status 429 Too Many Requests): slow down', httpStatus: 429 }), false);
+  assert.equal(outOfUsage({ message: 'Internal error' }), false);
+});
+
+// ---- A turn on a login out of balance
+
+test("Grok's 402 turn fails as a usage limit, saying why, with the login's reading before the result", async () => {
+  const { outputs, log } = await turnOn('broke', SPENT);
+  const result = outputs.find((o) => o.kind === 'result');
+  assert.ok(result && result.kind === 'result');
+  assert.equal(result.result.outcome, 'failed');
+  assert.equal(result.result.errorKind, 'usageLimit');
+  assert.equal(result.result.error, `grok-main is out of Grok usage, so Grok stopped before doing anything (${SAID}).`);
+  assert.doesNotMatch(result.result.error!, /Internal error/);
+  // The reading came first: the runner moves the thread on the result, and
+  // a reading after that would land on the login it moved to.
+  const at = outputs.findIndex((o) => o.kind === 'limits');
+  assert.ok(at >= 0 && at < outputs.indexOf(result), 'a reading, before the result');
+  assert.deepEqual(outputs[at], {
+    kind: 'limits',
+    windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 0, resetsAt: '2026-11-25T06:53:23.471Z' }],
+    blocked: true,
+    plan: 'X Premium+',
+  });
+  assert.equal(log().filter((l) => l.billing).length, 1);
+});
+
+test("with only Grok's notes to go on (an answer with no data), the notes' reason and 402 count", async () => {
+  const { outputs } = await turnOn('broke', SPENT, { FAKE_GROK_BARE_ERROR: '1' });
+  const result = outputs.find((o) => o.kind === 'result');
+  assert.ok(result && result.kind === 'result');
+  assert.equal(result.result.errorKind, 'usageLimit');
+  assert.equal(result.result.error, `grok-main is out of Grok usage, so Grok stopped before doing anything (${SAID}).`);
+});
+
+test('a completed turn reads the login too, at most every five minutes, and a reading with room says not blocked', async () => {
+  const { outputs, log } = await turnOn('hello');
+  const reading = outputs.find((o) => o.kind === 'limits');
+  assert.deepEqual(reading, { kind: 'limits', windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60, resetsAt: '2026-11-25T06:53:23.471Z' }], blocked: false, plan: 'X Premium+' });
+  assert.equal(outputs.find((o) => o.kind === 'result')?.kind, 'result');
+  assert.equal(log().filter((l) => l.billing).length, 1);
+});
+
+// ---- Reading a login without a turn
+
+test('readLimits asks a short-lived Grok for _x.ai/billing, opening no session', async () => {
+  const root = tmp();
+  const adapter = adapterFor(root, SPENT);
+  assert.ok(adapter.readLimits, 'Grok can say');
+  const l = await adapter.readLimits(account);
+  assert.equal(l?.blocked, true);
+  assert.equal(l?.windows[0].remainingPercent, 0);
+  const lines = fs.readFileSync(path.join(root, 'agent.log'), 'utf8').trim().split('\n').map((x) => JSON.parse(x));
+  assert.ok(lines.some((x) => x.billing));
+  assert.ok(!lines.some((x) => x.newSession), 'no session in Grok\'s own list');
+  // An agent that can't say has no readLimits, so limit-recheck passes it by.
+  assert.equal(new AcpAdapter({ agent: ACP_AGENTS.opencode, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run2'), nullLogger), log: nullLogger }).readLimits, undefined);
+});
+
+test("grokLimits: the share used, the period's end, the tier; money beyond the plan isn't a block", () => {
+  assert.deepEqual(grokLimits({ config: { creditUsagePercent: 12.5, currentPeriod: { type: 'USAGE_PERIOD_TYPE_MONTHLY', end: '2026-12-01T00:00:00Z' } } }), {
+    kind: 'limits',
+    windows: [{ kind: 'monthly', title: 'Monthly', remainingPercent: 87.5, resetsAt: '2026-12-01T00:00:00.000Z' }],
+    blocked: false,
+  });
+  const prepaid = grokLimits({ ...SPENT, config: { ...SPENT.config, prepaidBalance: { val: 500 } } });
+  assert.equal(prepaid?.blocked, false);
+  assert.equal(prepaid?.windows[0].remainingPercent, 0);
+  // A team's plan ("Usage limits are managed by your team") or another shape: no reading.
+  assert.equal(grokLimits({ config: {} }), undefined);
+  assert.equal(grokLimits(null), undefined);
+  assert.equal(grokLimits({ config: { creditUsagePercent: 5, currentPeriod: { type: 'SOMETHING_NEW' } } })?.windows[0].kind, 'other');
+});
+
+test('a login with no reading at all is read once; one with room is left alone', () => {
+  const now = Date.parse('2026-11-24T00:00:00Z');
+  assert.equal(dueForRecheck(account, true, now, undefined), true);
+  assert.equal(dueForRecheck(account, true, now, now - 60_000), false, 'once');
+  assert.equal(dueForRecheck(account, false, now, undefined), false);
+  assert.equal(dueForRecheck({ ...account, signedOut: true }, true, now, undefined), false);
+  const fine: Account = { ...account, usage: { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 60 }], readAt: new Date(now - 86_400_000).toISOString(), source: 'live' } };
+  assert.equal(dueForRecheck(fine, true, now, undefined), false);
+});
+
+test('a small job on a login out of balance counts as a limit, so the pool tries the next login', async () => {
+  const root = tmp();
+  const ask = acpAsker({ agent: grok, binary: () => FAKE, registry: new ProcessRegistry(path.join(root, 'run'), nullLogger), log: nullLogger, env: { PATH: process.env.PATH, FAKE_ACP_NAME: 'Grok', GROK_HOME: grokHome }, dataDir: path.join(root, 'data') });
+  const r = await ask({ account, user: 'broke', cwd: path.join(root, 'job'), timeoutMs: 20_000 });
+  assert.equal(r.ok, false);
+  assert.ok(!r.ok && r.limit, 'a limit');
+  assert.ok(!r.ok && r.message.includes('Grok Build usage balance exhausted'));
+});
+
+// ---- In the runner: marked out, and a pool thread moves within its pool
+
+function grokHarness(pools: Pool[]) {
+  const accounts = [...ACCOUNTS, account];
+  const claude = new FakeAdapter();
+  const grokAdapter = new FakeAdapter('grok', { settingsApplyNextTurn: true, wakesAfterTasks: false });
+  const records: [string, UsageReading][] = [];
+  const fake = new FakeAccounts(accounts);
+  // As the UsageStore would have it: the newest windows, and blocked while it says so.
+  const usage: UsageSink = {
+    record: (id, r) => {
+      records.push([id, r]);
+      fake.base = fake.base.map((a) => (a.id !== id ? a : { ...a, usage: { windows: r.windows.length ? r.windows : (a.usage?.windows ?? []), readAt: new Date(h.clock.now()).toISOString(), source: 'live', ...((r.blocked ?? a.usage?.blocked) ? { blocked: true } : {}) } }));
+    },
+  };
+  const h = makeHarness(tmpDir(), { pools }, { accounts: fake, adapters: { claude, grok: grokAdapter }, usage });
+  return { ...h, claude, grok: grokAdapter, records };
+}
+const notesOf = (h: ReturnType<typeof grokHarness>, id: string): string[] => h.events(id).filter((e) => e.type === 'system.note').map((e) => e.text);
+
+// The outputs a real AcpSession gave for the 402 turn, played through the runner.
+async function outOfBalanceOutputs(): Promise<AdapterOutput[]> {
+  const { outputs } = await turnOn('broke', SPENT);
+  return outputs.filter((o) => o.kind === 'limits' || o.kind === 'result');
+}
+
+test('in its pool, the thread moves off the Grok login that ran out and carries on, never to another pool', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main', 'claude-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-3'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'Write me a note', poolId: 'convex' });
+  assert.equal(thread.accountId, 'grok-main', "the pool's first login");
+  assert.equal(thread.poolId, 'convex');
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  // The error says why, not "Internal error".
+  const errors = h.events(thread.id).filter((e) => e.type === 'error').map((e) => e.message);
+  assert.deepEqual(errors, [`grok-main is out of Grok usage, so Grok stopped before doing anything (${SAID}).`]);
+  const failed = h.events(thread.id).find((e) => e.type === 'turn.completed');
+  assert.equal(failed.errorKind, 'usageLimit');
+  // Marked out: its reading says blocked until the week resets.
+  const mine = h.records.filter(([id]) => id === 'grok-main');
+  assert.ok(mine.some(([, r]) => r.blocked === true), 'grok-main marked out');
+  assert.equal(h.runner.usableAccounts().find((a) => a.id === 'grok-main')?.usage?.blocked, true);
+  // Moved to the other login in its own pool, and carried on.
+  const t = h.runner.get(thread.id);
+  assert.equal(t.accountId, 'claude-main');
+  assert.equal(h.claude.last.opts.account.id, 'claude-main');
+  assert.match(notesOf(h, thread.id).find((n) => n.startsWith('Moved'))!, /^Moved to main@example\.com: Grok hit its weekly limit, back at /);
+});
+
+test('with nothing else in its pool with room, it waits for room rather than going to another pool', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([
+    { id: 'convex', title: 'Convex', accountIds: ['grok-main'] },
+    { id: 'own', title: 'Own', accountIds: ['claude-main', 'claude-3'] },
+  ]);
+  const { thread } = h.runner.create({ text: 'Write me a note', poolId: 'convex' });
+  assert.equal(thread.accountId, 'grok-main');
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  const t = h.runner.get(thread.id);
+  assert.equal(t.accountId, 'grok-main');
+  assert.equal(t.waitingForRoom?.until, new Date(Date.parse('2026-11-25T06:53:23.471Z') + 60_000).toISOString());
+  assert.equal(h.claude.sessions.length, 0, 'nothing started on another pool\'s login');
+});
+
+test('a reading that says the login has room again ends the block a 402 put on it', async () => {
+  const played = await outOfBalanceOutputs();
+  const h = grokHarness([{ id: 'convex', title: 'Convex', accountIds: ['grok-main', 'claude-main'] }]);
+  const { thread } = h.runner.create({ text: 'x', poolId: 'convex' });
+  const s = h.grok.last;
+  s.init(s.opts.sessionId, 'grok-4.7');
+  for (const o of played) s.out(o);
+  await tick();
+  assert.ok(h.runner.ranDry.has('grok-main'));
+  // Topped up, and limit-recheck reads it.
+  h.runner.recordReading({ record: (id, r) => void h.records.push([id, r]) }, 'grok-main', { windows: [{ kind: 'weekly', title: 'Weekly', remainingPercent: 100 }], blocked: false });
+  assert.equal(h.runner.ranDry.has('grok-main'), false);
+  assert.ok(thread);
+});

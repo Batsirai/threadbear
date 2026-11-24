@@ -712,9 +712,26 @@ thread to another login when the one it's on runs out of room.
   reads each login whose reading says blocked or under 1% again, if that
   reading is 10 minutes old or more and its provider can read without a
   turn (Codex: `account/rateLimits/read` in a short-lived app-server;
+  Grok: `_x.ai/billing` in a short-lived `grok agent`, since 24 Nov 2026;
   `runner/src/limit-recheck.ts`). The answer goes into the usage store
-  like a turn's, so room lifts the block and threads waiting for room
-  carry on by themselves. Signed-out and plan-ended logins aren't read.
+  like a turn's, so room lifts the block (and the one a turn that ran dry
+  put on it) and threads waiting for room carry on by themselves.
+  Signed-out and plan-ended logins aren't read. A login with no reading at
+  all is read once, so a Grok login shows its room before its first turn.
+- **Grok's readings** (`runner/src/adapters/acp/grok-billing.ts`). Grok's
+  `_x.ai/billing` gives the share of the plan's period used
+  (`creditUsagePercent`) and the period (`USAGE_PERIOD_TYPE_WEEKLY`, its
+  end): one `weekly` window (`monthly`, `daily` or `other` for other
+  periods), `blocked` when it's used up and no prepaid balance or on-demand
+  room is left, and the tier as `plan`. A Grok thread reads it on its own
+  process before a turn's result when the turn ran out of usage, and at
+  most every 5 minutes after completed turns. A Grok turn that fails with
+  HTTP 402 or Grok's words for running out ("usage balance exhausted", "out
+  of credits", "spending limit", "usage limit reached") ends `failed` with
+  `errorKind: "usageLimit"`, and its `error` names the login and Grok's
+  own reason, read from the JSON-RPC error's `data.message` (or Grok's
+  `retry_state` and `turn_completed` notes) rather than its bare "Internal
+  error" (`runner/src/adapters/acp/connection.ts`, `AcpRpcError`).
 - **Carrying on by itself is Mike's to turn off**, per thread:
   `threads.update { carryOnAtReset: false }` ends any wait for room (with
   a note) and stops later limits starting one; pool moves to a login with

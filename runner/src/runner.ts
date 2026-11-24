@@ -972,7 +972,7 @@ export class Runner {
     // made outside Threadbear lifts it (limit-recheck.ts).
     if (this.usage) {
       const usage = this.usage;
-      this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => usage.record(id, r) });
+      this.limitRecheck = new LimitRecheck({ clock: this.clock, log: this.log, accounts: () => this.safeAccounts(), adapters: this.adapters, record: (id, r) => this.recordReading(usage, id, r) });
       this.limitRecheck.start();
     }
     let { records, broken } = this.store.loadAll();
@@ -1153,6 +1153,15 @@ export class Runner {
     } finally {
       this.resetting.delete(accountId);
     }
+  }
+
+  // A reading of a login's room, from a turn or limit-recheck.ts. One that
+  // says it isn't blocked also ends the block a turn that ran dry put on it
+  // (ranDry), so a top-up or reset made outside Threadbear lets the pools
+  // use it again before the time that block guessed.
+  recordReading(usage: UsageSink, accountId: string, reading: UsageReading): void {
+    if (reading.blocked === false) this.ranDry.delete(accountId);
+    usage.record(accountId, reading);
   }
 
   safeAccounts(): Account[] {
@@ -2881,7 +2890,7 @@ export class Runner {
         // The account's usage lives in D's UsageStore, which tells clients
         // through accounts.updated when it matters.
         try {
-          this.usage?.record(rec.accountId, {
+          if (this.usage) this.recordReading(this.usage, rec.accountId, {
             windows: o.windows,
             ...(o.blocked !== undefined ? { blocked: o.blocked } : {}),
             ...(o.email ? { email: o.email } : {}),

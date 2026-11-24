@@ -841,7 +841,13 @@ File references are where to look.
   copies login tokens or the Keychain. A Codex login that reads as out of
   room is asked for its limits every 10 minutes, by starting Codex's own
   `codex app-server` for a moment (`runner/src/limit-recheck.ts`); that
-  costs no tokens.
+  costs no tokens. A Grok login is asked the same way (once a minute after
+  the runner starts, then every 10 minutes while it reads as out), by
+  starting `grok agent --no-leader stdio` for a moment and sending Grok's
+  `_x.ai/billing`, which asks Grok's billing service how much of the plan
+  is used; a Grok thread asks its own process the same after a turn that
+  ran out, and at most every 5 minutes after others. No session is opened
+  and no tokens are spent (`runner/src/adapters/acp/grok-billing.ts`).
 - Whether `~/.opencode/bin/opencode`, an
   `opencode` or `cursor-agent` on your PATH, `~/.local/bin/cursor-agent` and
   `~/.local/bin/agent` exist and where they really lead, and whether

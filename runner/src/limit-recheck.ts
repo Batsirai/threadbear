@@ -30,8 +30,12 @@ export const FIRST_RECHECK_MS = 60_000;
 // without a turn, its last reading says it's out of room, and that reading
 // (and our last try) is at least RECHECK_MS old. A signed-out login or one
 // whose plan ended isn't out of room, so a read wouldn't change anything.
+// One with no reading at all is read once, so a login whose turns are few
+// (Grok, which Token Stats doesn't read) shows its room before its first
+// turn here.
 export function dueForRecheck(account: Account, canRead: boolean, now: number, lastTried: number | undefined): boolean {
-  if (!canRead || !account.usage || account.signedOut || account.planEnded) return false;
+  if (!canRead || account.signedOut || account.planEnded) return false;
+  if (!account.usage) return lastTried === undefined;
   const room = accountRoom(account);
   const out = !!account.usage.blocked || (room !== undefined && room < MIN_ROOM_PERCENT);
   if (!out) return false;
@@ -101,7 +105,7 @@ export class LimitRecheck {
             ...(l.plan ? { plan: l.plan } : {}),
             ...(l.resets ? { resets: l.resets } : {}),
           });
-          this.deps.log.info('read a login that was out of room again', { accountId: account.id, blocked: l.blocked ?? null });
+          this.deps.log.info(before === undefined ? "read a login's limits for the first time" : 'read a login that was out of room again', { accountId: account.id, blocked: l.blocked ?? null });
         } catch (e) {
           this.deps.log.warn("couldn't read a login's limits again", { accountId: account.id, error: String(e) });
         }

@@ -10,6 +10,8 @@ import type { AcpToolCall } from './normalize.ts';
 import type { InitializeResult } from './connection.ts';
 import { exeName } from '../../platform.ts';
 import { grokGuardDir, grokTrusts, guardPluginName } from './grok-guard.ts';
+import { GROK_BILLING_METHOD, grokLimits } from './grok-billing.ts';
+import type { AdapterOutput } from '../types.ts';
 
 export type AcpProvider = Extract<Provider, 'cursor' | 'opencode' | 'grok' | 'antigravity'>;
 
@@ -78,6 +80,11 @@ export type AcpAgent = {
   // trusts said when its process started, which outlasts the trust file.
   // binary: the program the thread runs, for a refusal that depends on its version.
   refuses?(o: { cwd: string; mode: PermissionMode; trusted?: boolean; binary?: string }): string | undefined;
+  // How the agent says how much of its plan a login has left without a
+  // turn: the request to send after initialize, and its answer as a
+  // reading (Grok's _x.ai/billing: grok-billing.ts). Read after turns and
+  // by limit-recheck.ts.
+  limits?: { method: string; read(result: unknown): Extract<AdapterOutput, { kind: 'limits' }> | undefined };
 };
 
 function isExecutableFile(file: string): boolean {
@@ -500,6 +507,7 @@ export const ACP_AGENTS: Record<AcpProvider, AcpAgent> = {
     // Neither can get round the hook; they're belt and braces.
     env: () => ({ GROK_FOLDER_TRUST: '1', GROK_SANDBOX_AUTO_ALLOW_BASH: 'false' }),
     identifies: (init) => Boolean(init.authMethods?.some((m) => m.id === 'grok.com')) || init._meta?.grokShell === true,
+    limits: { method: GROK_BILLING_METHOD, read: grokLimits },
     // Grok offers no session modes over ACP: the hook makes every mode ask,
     // and each request is answered from the thread's mode (AcpSession).
     modeFor: () => undefined,

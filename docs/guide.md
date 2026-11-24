@@ -1599,8 +1599,16 @@ take the folder out of Grok's trusted folders (`/hooks-untrust`) to use Ask
 or Auto. Denying a card ends Grok's turn, as it does in Grok's own app. Grok's models each list their effort levels (low to extra
 high), and the effort you pick is the one it runs at. Small jobs (titles
 and summaries) stay on Claude unless you pick a pool of only OpenCode or
-Grok logins for them in Settings. There are no usage readings, sandbox or
-going back to an earlier message for these yet, and Threadbear only updates
+Grok logins for them in Settings. Grok logins show their plan's room in
+Usage, read from Grok itself (its weekly share and when it resets, a minute
+after the runner starts and after Grok turns). When a Grok login runs out
+of balance, the thread says so in plain words ("grok-main is out of Grok
+usage...") and is treated like a Claude login at its limit: the login
+counts as out until its week resets or a recheck finds room again (every
+10 minutes, so a top-up is seen), and a pool thread moves to another login
+with room in its own pool, or waits for room. OpenCode and Cursor have no
+usage readings. None of these have a sandbox or
+going back to an earlier message yet, and Threadbear only updates
 their CLIs when you press Update in the Updates panel.
 
 Titles, the librarian and Wake when… run on a Claude login, so with only
@@ -1690,8 +1698,8 @@ resets. A sign-in that's ending or has ended shows under its row even when it's
 shut.
 
 A login with no number yet says why on its row, with a dashed ring: a
-Claude or Codex login that hasn't run a turn here yet; Grok, which shows
-its plan's limit only through its own background service; or OpenCode,
+Claude or Codex login that hasn't run a turn here yet; a Grok login
+Threadbear hasn't read yet (it reads one a minute after it starts); or OpenCode,
 whose own models spend a balance rather than a weekly limit.
 
 A Claude login with a limit of its own on Fable shows that week too,

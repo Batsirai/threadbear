@@ -15,6 +15,12 @@
 // so the real guard script is what decides. More words for it:
 //   "read <path>"          its read_file tool
 //   "mcp <server__tool>"   an MCP tool, through its use_tool
+//   "broke"                a login out of balance, as Grok 1.0.92 answered on
+//                          23 Nov 2026: no model call, a failed retry_state and
+//                          turn_completed, and "Internal error" with the real
+//                          reason in data (GROK_OUT_OF_BALANCE below)
+// and it answers _x.ai/billing with FAKE_GROK_BILLING (JSON), else a plan
+// with 40% of its week used.
 //
 // FAKE_ACP_NAME=Antigravity follows Google's antigravity-acp 1.4.5 (20 Nov
 // 2026): it writes skills/system/run-workflow/SKILL.md into the session's cwd
@@ -158,8 +164,24 @@ async function grokTool(sessionId, cwd, kind, title, toolName, input, run) {
   update(sessionId, { sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'done' } }] });
 }
 
+// Grok 1.0.92's frames for a login out of balance (thread ce78609c, 23 Nov
+// 2026), trimmed to what matters, with its own ids left out.
+const OUT_OF_BALANCE = 'API error (status 402 Payment Required): Grok Build usage balance exhausted';
+const GROK_OUT_OF_BALANCE = {
+  retry: { sessionUpdate: 'retry_state', type: 'failed', error_type: 'api', message: OUT_OF_BALANCE },
+  completed: { sessionUpdate: 'turn_completed', stop_reason: 'error', agent_result: OUT_OF_BALANCE, error: { code: -32603, message: 'Internal error', data: { message: OUT_OF_BALANCE, http_status: 402 } }, elapsed_ms: 1368 },
+  answer: { code: -32603, message: 'Internal error', data: { message: OUT_OF_BALANCE, http_status: 402 } },
+};
+
 async function grokPrompt(id, p, s, word, rest) {
   reportHooks(p.sessionId, 'user_prompt_submit', grokPlugin(s.cwd));
+  if (word === 'broke') {
+    const note = (update) => send({ method: '_x.ai/session_notification', params: { sessionId: p.sessionId, update } });
+    note(GROK_OUT_OF_BALANCE.retry);
+    note(GROK_OUT_OF_BALANCE.completed);
+    // FAKE_GROK_BARE_ERROR: an answer with no data, so only the notes say why.
+    return send({ id, error: env.FAKE_GROK_BARE_ERROR ? { code: -32603, message: 'Internal error' } : GROK_OUT_OF_BALANCE.answer });
+  }
   // A model starts with a thought, and a stopped process stops here.
   update(p.sessionId, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'hmm' } });
   await new Promise((r) => setTimeout(r, 50));
@@ -376,6 +398,19 @@ const handlers = {
     return { configOptions: configOptions() };
   },
   'session/close': () => ({}),
+  // Grok's own: how much of the plan is used (adapters/acp/grok-billing.ts).
+  ...(GROK
+    ? {
+        '_x.ai/billing': () => {
+          log({ billing: true });
+          if (env.FAKE_GROK_BILLING) return JSON.parse(env.FAKE_GROK_BILLING);
+          return {
+            config: { creditUsagePercent: 40, currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY', start: '2026-11-18T06:53:23.471544+00:00', end: '2026-11-25T06:53:23.471544+00:00' }, onDemandCap: { val: 0 }, onDemandUsed: { val: 0 }, prepaidBalance: { val: 0 }, isUnifiedBillingUser: true },
+            subscription_tier: 'X Premium+',
+          };
+        },
+      }
+    : {}),
   'session/set_config_option': (p) => {
     if (env.FAKE_ACP_NO_SET_MODE && p.configId === 'mode') throw new Error('no such mode');
     if (p.configId === 'mode' && !env.FAKE_ACP_IGNORE_MODE) mode = p.value;

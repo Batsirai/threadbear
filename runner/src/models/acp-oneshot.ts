@@ -15,7 +15,7 @@ import type { Logger } from '../log.ts';
 import type { ProcessRegistry } from '../proc.ts';
 import { cliEnv } from '../adapters/claude/adapter.ts';
 import type { AcpAgent } from '../adapters/acp/agents.ts';
-import { AcpProcess, AcpRpcError, AUTH_REQUIRED, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
+import { AcpProcess, AcpRpcError, AUTH_REQUIRED, outOfUsage, type AcpTimings, type InitializeResult } from '../adapters/acp/connection.ts';
 import { isPlainObject } from '../adapters/acp/normalize.ts';
 import { providerInfo, providerName } from '../providers.ts';
 import type { CliResponse } from './claude-pool.ts';
@@ -138,6 +138,9 @@ export function acpAsker(deps: AcpAskerDeps): Asker {
       return await Promise.race([work(), timedOut, guardGone]);
     } catch (e) {
       if (e instanceof AcpRpcError && e.code === AUTH_REQUIRED) return fail(`${name} needs a sign-in: ${providerInfo(deps.agent.provider).loginCommand}.`);
+      // Out of usage (Grok's 402): the pool marks the login out and tries
+      // the next one, as for a Claude login at its limit (models/index.ts).
+      if (e instanceof AcpRpcError && outOfUsage({ message: e.message, httpStatus: e.httpStatus })) return { ok: false, timedOut: false, limit: true, message: `${req.account.id} is out of ${name} usage (${e.message}).` };
       return fail((e as Error)?.message ?? String(e));
     } finally {
       clearTimeout(timer);

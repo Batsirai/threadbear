@@ -35,7 +35,7 @@ Feature: The Usage panel and its honey pot
     And in the "Claude" card, "alex+4@example.com"'s line starts "Used up, back"
     When a Grok login with no reading is added
     Then in the "Not in a pool" card, "Grok" has the "grok" logo and no ring
-    And in the "Not in a pool" card, "Grok" says why: "Grok reports its limit only from its background service"
+    And in the "Not in a pool" card, "Grok" says why: "Not read yet"
 
   # Option A of Mike's 20 Nov review: a card per login with its own chart
   # took a screen for two or three logins, so each is one row now, and its
