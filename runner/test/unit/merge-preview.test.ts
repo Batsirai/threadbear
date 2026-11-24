@@ -106,3 +106,76 @@ test('the merge preview points past a format commit to the real clashes', () => 
   assert.match(real, /b\.rs/);
   assert.doesNotMatch(real, /a\.rs/);
 });
+
+// Settling the clashes while the owner decides (Ville Lahdenvuo-Malta, 22
+// Nov 2026: about 5 minutes of a 35-minute bring-in was settling clashes
+// after go). --prepare writes each clashing file, with its markers, to a
+// folder outside the checkout; after go, merge-prepared.sh merges and puts
+// in the settled copies. It changes nothing while one still has markers,
+// and catches up a branch that started behind main first.
+const PREPARED = path.join(import.meta.dirname, '../../../scripts/merge-prepared.sh');
+
+test('clashes settled before go go in with the merge', () => {
+  const root = tmpDir('tb-preview-prep-');
+  const repo = path.join(root, 'r');
+  fs.mkdirSync(repo);
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'base\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-qm', 'base');
+  git(repo, 'branch', '-q', 'release');
+  git(repo, 'branch', '-q', 'thread');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'mine\n');
+  git(repo, 'commit', '-qam', 'mine');
+  git(repo, 'checkout', '-q', 'release');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'theirs\n');
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'new\n');
+  git(repo, 'add', '.');
+  git(repo, 'commit', '-qm', 'theirs');
+  const release = git(repo, 'rev-parse', 'HEAD');
+  // The thread's branch, from main before its last commit.
+  git(repo, 'checkout', '-q', 'thread');
+  const preview = (dir: string) => spawnSync(SHELL[0], [shPath(SCRIPT), '--prepare', shPath(dir), release], { cwd: repo, encoding: 'utf8', env: ENV });
+
+  const inside = preview(path.join(repo, 'prep'));
+  assert.notEqual(inside.status, 0, 'a folder inside the checkout is refused');
+  assert.ok(!fs.existsSync(path.join(repo, 'prep')), 'and not left behind');
+  const other = path.join(root, 'other');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(other, 'keep'), 'x');
+  fs.mkdirSync(path.join(other, 'files'));
+  assert.notEqual(preview(other).status, 0, 'a folder with something else in it is refused');
+  assert.ok(fs.existsSync(path.join(other, 'files')), 'and left alone');
+
+  const prep = path.join(root, 'prep');
+  const r = preview(prep);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.readFileSync(path.join(prep, 'clashes'), 'utf8'), 'a.txt\n');
+  assert.match(fs.readFileSync(path.join(prep, 'files', 'a.txt'), 'utf8'), /^<<<<<<< [\s\S]*mine[\s\S]*theirs/);
+  assert.equal(git(repo, 'status', '--porcelain'), '', 'nothing checked out or changed');
+
+  const apply = () => spawnSync(SHELL[0], [shPath(PREPARED), shPath(prep), '-m', 'Bring it in'], { cwd: repo, encoding: 'utf8', env: ENV });
+  const early = apply();
+  assert.notEqual(early.status, 0);
+  assert.match(early.stderr, /conflict markers.*a\.txt/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), git(repo, 'rev-parse', 'main^'), 'nothing changed');
+
+  fs.writeFileSync(path.join(prep, 'files', 'a.txt'), 'mine and theirs\n');
+  // Main moved on since the preview: the settled files may be stale.
+  const main = git(repo, 'rev-parse', 'main');
+  git(repo, 'update-ref', 'refs/heads/main', git(repo, 'commit-tree', '-p', main, '-m', 'later', `${main}^{tree}`));
+  const stale = apply();
+  assert.notEqual(stale.status, 0);
+  assert.match(stale.stderr, /main has moved on/);
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), git(repo, 'rev-parse', 'main~2'), 'nothing changed');
+  git(repo, 'update-ref', 'refs/heads/main', main);
+
+  const done = apply();
+  assert.equal(done.status, 0, done.stderr + done.stdout);
+  assert.equal(fs.readFileSync(path.join(repo, 'a.txt'), 'utf8'), 'mine and theirs\n');
+  assert.equal(fs.readFileSync(path.join(repo, 'b.txt'), 'utf8'), 'new\n');
+  assert.equal(git(repo, 'rev-parse', 'HEAD^1'), git(repo, 'rev-parse', 'main'));
+  assert.equal(git(repo, 'rev-parse', 'HEAD^2'), release);
+  assert.equal(git(repo, 'log', '-1', '--format=%s'), 'Bring it in');
+  assert.equal(git(repo, 'status', '--porcelain'), '');
+});
