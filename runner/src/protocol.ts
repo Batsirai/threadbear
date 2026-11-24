@@ -828,8 +828,9 @@ export type ReviewUserMarkKind = 'circle' | 'highlight' | 'pin';
 export type ReviewUserMark = { n: number; kind: ReviewUserMarkKind; optionId: string; shot: number; box: MarkBox; path?: [number, number][]; image?: ImageRef };
 
 // One picture of an option: its first, or another screen or state of it.
-// media: a video (video/mp4, video/quicktime) or page (text/html) the
-// window plays or shows in place of image, which is then its still.
+// media: a video (video/mp4, video/quicktime), sound (audio/mpeg, audio/mp4,
+// audio/aac, audio/wav) or page (text/html) the window plays or shows in
+// place of image, which is then its still (a sound's waveform).
 // marks: the agent's marks on it (the reviewCanvas experiment).
 export type ReviewShot = { title?: string; image: ImageRef; media?: ImageRef; marks?: AgentMark[] };
 

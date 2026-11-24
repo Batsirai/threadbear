@@ -381,9 +381,11 @@ impl ReviewWindow {
         }
     }
 
-    /// A clip or a page. On a Mac the clip plays on the stage in the
+    /// A clip, a sound or a page. On a Mac the clip plays on the stage in the
     /// system's player, round and round with its controls and its sound on,
-    /// as the Swift window's does: some clips are there to be heard. A page,
+    /// as the Swift window's does: some clips are there to be heard. A sound
+    /// is its waveform with the pane's play bar along the bottom, paused at
+    /// the start, so stepping through music beds doesn't start each. A page,
     /// or a clip anywhere else (or one the open gate won't play), is its
     /// still, fitted, with a button that opens it where it can, through the
     /// gate (the clip in the app this computer plays videos in, the page in
@@ -441,17 +443,71 @@ impl ReviewWindow {
                     .into_any_element();
             }
         }
+        if let Some(sound) = shot.audio().filter(|_| crate::media_view::SHOWN_HERE) {
+            let path = sound.to_owned();
+            if let Ok(view) = crate::media_view::slot(&stage_key(sound), window, |opening| {
+                crate::open_gate::show_media(
+                    &path,
+                    Origin::ThisMac,
+                    crate::media_view::Kind::PaneAudio,
+                    opening,
+                )
+            }) {
+                return div()
+                    .id("review-media")
+                    .absolute()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .relative()
+                            .flex_none()
+                            .w(pt(fit.0))
+                            .h(pt(fit.1))
+                            .child(
+                                img(crate::rows::markdown::file_picture(&shot.image.path))
+                                    .size_full()
+                                    .object_fit(ObjectFit::Fill),
+                            )
+                            // The bar sits in the middle of its slot, at most
+                            // 560 wide (native/media_views.m, layoutInSlot).
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom(px(16.))
+                                    .h(px(44.))
+                                    .child(view),
+                            ),
+                    )
+                    .into_any_element();
+            }
+        }
         let play_tip = if crate::media_view::SHOWN_HERE {
             "Play it in the app this computer plays videos in"
         } else {
             "Play it in the app this computer plays videos in: this window can't play clips yet"
         };
-        let (icon, words, tip, path) = match (shot.video(), shot.page()) {
-            (Some(video), _) => (
+        let (icon, words, tip, path) = match (shot.video().or(shot.audio()), shot.page()) {
+            (Some(video), _) if shot.video().is_some() => (
                 IconName::Play,
                 "Play the clip",
                 play_tip.to_owned(),
                 video.to_owned(),
+            ),
+            (Some(sound), _) => (
+                IconName::Music,
+                "Play the sound",
+                if crate::media_view::SHOWN_HERE {
+                    "Play it in the app this computer plays sounds in"
+                } else {
+                    "Play it in the app this computer plays sounds in: this window can't play sounds yet"
+                }
+                .to_owned(),
+                sound.to_owned(),
             ),
             // Says why it isn't here: this window does show pages, so "can't
             // show pages yet" sent Mike looking for why it was a button at
@@ -1176,10 +1232,13 @@ impl ReviewWindow {
     }
 }
 
-/// A clip's or a page's mark on its still in the grid.
+/// A clip's, a sound's or a page's mark on its still in the grid. A sound
+/// stays its waveform there: muted, as cells' clips are, it would say nothing.
 fn media_badge(shot: &ReviewShot) -> Option<AnyElement> {
     let icon = if shot.video().is_some() {
         IconName::Play
+    } else if shot.audio().is_some() {
+        IconName::Music
     } else if shot.page().is_some() {
         IconName::Globe
     } else {

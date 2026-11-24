@@ -7,7 +7,7 @@ Part of the runner protocol. [docs/protocol.md](../protocol.md) has the rules fo
 ### Design reviews
 
 `show_options` gives the calling thread a durable review of pictures,
-videos and pages. It returns
+videos, sounds and pages. It returns
 promptly, with the review's id and the `review:<id>` link that opens it
 from an ask or a message (see Needs you); the agent may finish its turn
 while Mike reviews the options.
@@ -22,7 +22,7 @@ their own (A2, A3) that couldn't be picked; Mike also picked more than one
 or none, and answered most reviews in the thread in his own words (4 Nov
 2026), hence several picks, `none` and `reply`.
 
-It's only for options that are seen: images, videos, page designs. A
+It's only for options that are seen or heard: images, videos, sounds, page designs. A
 thread put a research shortlist in one as a page of text per option, and
 Mike found comparing words there pointless (20 Nov 2026), so the tool and
 the instructions send options in words to the reply instead.
@@ -41,8 +41,10 @@ a paragraph.
 // images: pictures pasted into the reply, each placed by a [Picture N] in
 // reply, as a message's are (see Reply pictures, below).
 type ReviewDraft = { pickedId?: string, pickedIds?: string[], notes: Record<string, string>, reply?: string, images?: ImageRef[], none?: true }
-// media: a video (video/mp4, video/quicktime) or an HTML page (text/html)
-// the window plays or shows in place of image, which is then its still.
+// media: a video (video/mp4, video/quicktime), a sound (audio/mpeg,
+// audio/mp4, audio/aac, audio/wav) or an HTML page (text/html) the window
+// plays or shows in place of image, which is then its still (a sound's is
+// its waveform).
 type ReviewShot = { title?: string, image: ImageRef, media?: ImageRef }
 type DesignReview = {
   id: string
@@ -81,22 +83,28 @@ The following RPCs take full thread/review IDs. Unknown IDs are errors.
 
 Creation validates the whole request and imports supported files before
 publishing the card. A shot's `path` is a picture (PNG, JPEG, GIF, WebP), a
-video (MP4 or QuickTime, by its header) or a page (`.html`/`.htm`). Agents
-had to hand Mike stills of clips that only made sense moving (6 Nov 2026).
-A video or page is copied in as the shot's `media`, and its still, made by
-Quick Look on a Mac or ffmpeg for a video elsewhere (a plain dark card when
-neither can), is its `image`, which thumbnails and older clients show. A
+video (MP4 or QuickTime, by its header), a sound (MP3, M4A, AAC or WAV, by
+its header, or an MP4 named `.m4a`) or a page (`.html`/`.htm`). Agents
+had to hand Mike stills of clips that only made sense moving (6 Nov 2026),
+and Mike wanted to compare music beds and sounds as options (24 Nov 2026).
+A video, sound or page is copied in as the shot's `media`, and its still, made by
+Quick Look on a Mac or ffmpeg for a video elsewhere, and for a sound
+ffmpeg's waveform, light on dark (a plain dark card when
+none can), is its `image`, which thumbnails and older clients show. A
 page comes in a folder of its own with the files it names (`src`, `href`,
 `url()`, a stylesheet's own) from its folder down, at most 100 files and
 50 MB; never anything above its folder, nor other pages it links to. The
 Mac window shows the page the way the side pane does: scripts off, nothing
 loaded from outside, and Open in Browser for a page with scripts. A video
 loops. On the stage it has controls and plays with sound; side by side
-with the others in the grid it's muted. Paths can be absolute, home-relative or
+with the others in the grid it's muted. A sound shows its waveform on the
+stage with a play bar along its bottom, paused at the start, so stepping
+through music beds doesn't start each; in the grid it's its waveform with a
+music badge, never playing by itself. Paths can be absolute, home-relative or
 relative to the thread's folder. An option's shots are `path` then
 `shots`, or `shots` alone; it needs at least one. Limit: 12 options, 8
-shots each and 40 in all, each image at most 25 MB, video 200 MB and page
-5 MB (videos and pages 500 MB in all), nonempty unique option
+shots each and 40 in all, each image at most 25 MB, video 200 MB, sound
+100 MB and page 5 MB (videos, sounds and pages 500 MB in all), nonempty unique option
 IDs and titles, title/note at most 200/4000 characters, `url` http or https.
 Draft notes are at most 4000 characters per option and the reply 8000;
 unknown option IDs, picks of reference options and `none` with picks are
@@ -242,7 +250,7 @@ MCP tool definitions, bound to the calling thread. Its schema matches
 `reviews.create` without `threadId`; it returns the review ID and explains
 that the choice/notes will arrive as a later message. The existing URL
 patch panels are independent of these review windows. Reviews take
-pictures, videos and pages, with a live `url` per option opened in the
+pictures, videos, sounds and pages, with a live `url` per option opened in the
 browser; overlays are deferred.
 
 #### Reviews on the phone
@@ -279,8 +287,10 @@ comes with `preview: false`, so the phone says so rather than waiting.
 
 The phone's Reviews sheet opens from the pending-review button or a
 `review:<id>` link. It shows reference and recommended options, each shot's
-still, multiple picks, none, per-option notes and a reply. HTML and video
-originals stay on the Mac; the phone labels their stills. Loading and
+still, multiple picks, none, per-option notes and a reply. HTML, video and
+sound originals stay on the Mac; the phone labels their stills (a shot's
+`kind` is `image`, `video`, `audio` or `page`; an unknown one reads as a
+still). Loading and
 failed submissions keep the user's draft. A stale revision reloads the
 review and requires another deliberate send. Older backends keep the
 Mac-only explanation.

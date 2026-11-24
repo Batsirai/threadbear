@@ -306,7 +306,7 @@ picture. Pick any options, None of these, or write a reply, then Send
 answer. Reference options are there to compare and can't be picked. The
 thread's Mac has to be on to load the review and take the answer, and it
 sends the stills only once you open the review, so they can take a moment
-to turn up. Pages and videos show their still; open the real thing on the
+to turn up. Pages, videos and sounds show their still; open the real thing on the
 Mac. Pictures pasted into an answer on the Mac stay with it, though the
 phone doesn't show them. This needs your backend on API 86 or newer. If
 the review changes on the Mac while you're answering, your answer stays
@@ -327,10 +327,11 @@ side, with the agent's lead under them. Click a tab or one of the strip's
 small pictures to go straight to it, the first tab to see them all, and
 Open live at the end of the tabs to try one the agent has running (a web
 page only). A review from a thread on another Mac opens on that Mac. An
-agent can show a video or an HTML page in place of a picture: videos play
+agent can show a video, a sound or an HTML page in place of a picture: videos play
 quietly on a loop, side by side when they're all showing, with controls
-for sound when one is big; a page shows as it does in the side pane, with
-its scripts off. When
+for sound when one is big; a sound (MP3, M4A, AAC or WAV, say music beds to
+compare) shows its waveform, with a play bar under it when it's big; a page
+shows as it does in the side pane, with its scripts off. When
 the agent includes today's version to compare against, hold Space (or click
 its button at the end of the tabs) to flick to it and back. To look closer at a
 picture, scroll or pinch over it to zoom in where the pointer is (a long page

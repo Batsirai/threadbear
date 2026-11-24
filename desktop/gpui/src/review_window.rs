@@ -2062,10 +2062,12 @@ impl ReviewWindow {
             "editable": s.editable(),
             "minimap": self.stage.minimap_showing(),
             // What the stage draws: a clip playing in the system's player
-            // (on a Mac), or a page or a clip that can't play as its still.
+            // (on a Mac), a sound's play bar on its waveform, or a page or a
+            // clip that can't play as its still.
             "stage": match (s.mode, s.shown_shot()) {
                 (ReviewMode::All, _) => "all",
                 (_, Some(shot)) if shot.video().is_some_and(|v| crate::media_view::state_of(&stage::stage_key(v)).is_some()) => "player",
+                (_, Some(shot)) if shot.audio().is_some_and(|a| crate::media_view::state_of(&stage::stage_key(a)).is_some()) => "sound",
                 (_, Some(shot)) if shot.page().is_some_and(|p| self.stage.page.as_ref().is_some_and(|(shown, _)| shown == p)) => "page",
                 (_, Some(shot)) if shot.media.is_some() => "still",
                 _ => "picture",
