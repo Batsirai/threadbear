@@ -79,7 +79,10 @@ jobs:
     if: github.repository == 'mikecann/threadbear' || github.event_name == 'workflow_dispatch'
     name: ${{ matrix.os }}, Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # GitHub's Macs took 21 to 29 minutes on 24 Nov with 364 runner test files,
+    # steadily (check.sh's progress lines there name any file that sticks), and
+    # one run was stopped at 30 with 357 done. A hang still ends here.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
