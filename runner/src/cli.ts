@@ -20,7 +20,7 @@ import { checkoutTop, land, landTargetFromGit, realpath, type LandTarget } from 
 import { landRefusal, pushAfterLanding } from './follow-origin.ts';
 import { gateCacheDir, gh } from './land-gate.ts';
 import { sayRedOnLanding, watchRed, type FixThreads } from './red-watch.ts';
-import { detachable, landInBackground, landWorker } from './land-detach.ts';
+import { WORKER_ENV, detachable, landInBackground, landWorker } from './land-detach.ts';
 import { activityCommand } from './activity.ts';
 import { runnerKeysCommand } from './runner-keys.ts';
 import { pickRunner } from './moves.ts';
@@ -289,9 +289,14 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
   }
-  // A tb older or newer than the release this Mac runs (release.ts, staleRelease).
-  const stale = staleRelease();
-  if (stale) console.error(`tb: this is release ${stale.mine}'s tb, but the runner's current release is ${stale.current}: run ${stale.tb} instead. (A thread keeps the PATH it started with.)`);
+  // A tb older or newer than the release this Mac runs (release.ts,
+  // staleRelease). Not again from tb land's background worker, the same tb.
+  const stale = process.env[WORKER_ENV] ? undefined : staleRelease();
+  if (stale) {
+    // Quoted, as the data dir's path has a space on a Mac (Application Support).
+    const tb = process.platform === 'win32' ? `"${stale.tb}"` : `'${stale.tb.replace(/'/g, `'\\''`)}'`;
+    console.error(`tb: this is release ${stale.mine}'s tb, but the runner's current release is ${stale.current}: run ${tb} instead. (A thread keeps the PATH it started with.)`);
+  }
   let cfg: ReturnType<typeof loadConfig>;
   try {
     cfg = loadConfig();
