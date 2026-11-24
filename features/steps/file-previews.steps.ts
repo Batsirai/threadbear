@@ -117,7 +117,7 @@ When('I press play on the sound in the pane', async function (this: ThreadbearWo
 });
 
 Then('the sound in the pane is playing', async function (this: ThreadbearWorld) {
-  await this.until('the sound playing', (d) => (pane(d)?.previewVideo as { playing?: boolean } | undefined)?.playing === true);
+  await this.until('the sound playing', (d) => (pane(d) as { previewVideo?: { playing?: boolean } } | undefined)?.previewVideo?.playing === true);
 });
 
 // The Swift app says "quickLook" for whatever Quick Look draws, so it's that
