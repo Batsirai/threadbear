@@ -131,13 +131,19 @@ jobs:
       - name: Linux libraries
         if: runner.os == 'Linux'
         # xvfb, mesa and dbus are for the behaviour specs: a window with no screen.
-        # Ubuntu's mirror sometimes stalls for an hour (23 Nov), so each try gets a
-        # timeout and a stalled one is retried, and the step can't hang the run.
+        # Ubuntu's mirror sometimes stalls for an hour (23 Nov), so the network
+        # parts of each try get a timeout and a stalled one is retried. Only the
+        # download is timed: killing dpkg mid-setup (24 Nov) left it broken for
+        # every retry, so each try first finishes whatever a killed one left.
         timeout-minutes: 15
         run: |
           apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          pkgs="libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev xvfb mesa-vulkan-drivers dbus-x11"
           for try in 1 2 3; do
-            if timeout 240 sudo apt-get $apt_opts update && timeout 360 sudo apt-get $apt_opts install -y libasound2-dev libfontconfig-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libzstd-dev libvulkan-dev xvfb mesa-vulkan-drivers dbus-x11; then
+            sudo dpkg --configure -a || true
+            if timeout 240 sudo apt-get $apt_opts update \
+              && timeout 360 sudo apt-get $apt_opts install -y --download-only $pkgs \
+              && sudo apt-get $apt_opts install -y $pkgs; then
               exit 0
             fi
             echo "Installing the Linux libraries failed or stalled (try $try of 3), retrying"
